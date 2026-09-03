@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "license": "CC0-1.0",
+  "claim": "Deterministically generated signal fixtures for guard and timeline regressions; never accuracy gold.",
+  "format": {
+    "container": "wav",
+    "codec": "pcm_s16le",
+    "sample_rate": 16000,
+    "channels": 1
+  },
+  "fixtures": [
+    {
+      "id": "silence-1s",
+      "duration_samples": 16000,
+      "segments": [],
+      "expected": {"voiced_samples": 0, "must_not_emit_text": true}
+    },
+    {
+      "id": "boundary-tone-2s",
+      "duration_samples": 32000,
+      "segments": [
+        {"start_sample": 12000, "end_sample": 20000, "frequency_hz": 440, "amplitude": 0.25}
+      ],
+      "expected": {
+        "core_coverage_start_sample": 0,
+        "core_coverage_end_sample": 32000,
+        "tone_crosses_split_sample": 16000
+      }
+    },
+    {
+      "id": "speaker-window-cues-4s",
+      "duration_samples": 64000,
+      "segments": [
+        {"start_sample": 4000, "end_sample": 14000, "frequency_hz": 220, "amplitude": 0.20},
+        {"start_sample": 18000, "end_sample": 30000, "frequency_hz": 330, "amplitude": 0.20},
+        {"start_sample": 34000, "end_sample": 46000, "frequency_hz": 220, "amplitude": 0.20},
+        {"start_sample": 50000, "end_sample": 60000, "frequency_hz": 330, "amplitude": 0.20}
+      ],
+      "expected": {"ordered_bursts": 4, "speaker_pattern": ["A", "B", "A", "B"]}
+    }
+  ]
+}

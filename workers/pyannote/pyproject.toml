@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "classscribe-worker-pyannote"
+version = "0.1.0"
+description = "Pyannote diarization adapter"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "classscribe-protocol>=0.1.0",
+  "pyannote-audio>=4.0,<5",
+  "soundfile>=0.13,<1",
+]
+
+[tool.uv.sources]
+classscribe-protocol = { path = "../../protocol/python", editable = true }
+
+[tool.uv]
+package = false

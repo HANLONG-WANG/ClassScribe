@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "classroom": [
+    "moss_structure",
+    "language_specific_sentence_asr",
+    "quality_gated_review",
+    "time_aligned_consensus",
+    "deterministic_terminology",
+    "character_invariant_punctuation",
+    "quality_gated_forced_alignment",
+    "automatic_export"
+  ],
+  "ibus": [
+    "pipewire_capture",
+    "streaming_vad",
+    "resident_streaming_preedit",
+    "sample_aligned_chunking",
+    "optional_language_specific_confirmation",
+    "ibus_commit_text"
+  ],
+  "forbidden": [
+    "one_universal_model",
+    "whole_long_transcript_voting",
+    "unaligned_fixed_character_overlap_deletion",
+    "forced_alignment_without_quality_gate",
+    "runtime_implicit_network_download"
+  ],
+  "extension_contract": [
+    "worker",
+    "registry_entry",
+    "benchmark_evidence"
+  ]
+}

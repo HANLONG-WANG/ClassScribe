@@ -1,0 +1,33 @@
+repos:
+  - repo: local
+    hooks:
+      - id: architecture
+        name: architecture boundaries
+        entry: uv run python scripts/check_architecture.py
+        language: system
+        pass_filenames: false
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format check
+        entry: uv run ruff format --check
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy strict
+        entry: uv run mypy
+        language: system
+        pass_filenames: false
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        pass_filenames: false
+      - id: frontend
+        name: frontend checks
+        entry: pnpm --dir frontend check
+        language: system
+        pass_filenames: false

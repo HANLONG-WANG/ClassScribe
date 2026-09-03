@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ClassScribe
+Comment=Local classroom transcription workbench
+Exec=/usr/libexec/classscribe-launcher
+Icon=classscribe
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=transcription;classroom;dictation;
+StartupNotify=true

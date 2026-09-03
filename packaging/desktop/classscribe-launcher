@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+url=http://127.0.0.1:8765
+systemctl --user start classscribe-core.service
+attempt=0
+while [ "$attempt" -lt 50 ]; do
+    if curl --fail --silent --show-error --max-time 1 "$url/healthz" >/dev/null; then
+        exec xdg-open "$url"
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.1
+done
+printf '%s\n' 'ClassScribe core did not become healthy at 127.0.0.1:8765' >&2
+exit 1

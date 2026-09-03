@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+export PYTHONPATH=/usr/lib/classscribe
+export CLASSSCRIBE_RESOURCE_ROOT=/usr/share/classscribe
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_DATASETS_OFFLINE=1
+exec /usr/bin/python3 -m classscribe_ibus_engine.main "$@"

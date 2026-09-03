@@ -1,0 +1,157 @@
+{
+  "applications": [
+    {
+      "application": "GNOME Text Editor",
+      "id": "gnome-text-editor",
+      "installed_command": "/usr/bin/gnome-text-editor",
+      "notes": "",
+      "passed": false,
+      "preedit_attributes_expected": true,
+      "scenarios": {
+        "cancel_without_commit": "not_run",
+        "candidate_lookup": "not_run",
+        "daemon_error_key_passthrough": "not_run",
+        "interim_preedit": "not_run",
+        "single_final_commit": "not_run",
+        "unstable_tail_attribute_or_plain_fallback": "not_run"
+      },
+      "toolkit": "GTK"
+    },
+    {
+      "application": "KWrite/Kate",
+      "id": "kate",
+      "installed_command": null,
+      "notes": "",
+      "passed": false,
+      "preedit_attributes_expected": true,
+      "scenarios": {
+        "cancel_without_commit": "not_run",
+        "candidate_lookup": "not_run",
+        "daemon_error_key_passthrough": "not_run",
+        "interim_preedit": "not_run",
+        "single_final_commit": "not_run",
+        "unstable_tail_attribute_or_plain_fallback": "not_run"
+      },
+      "toolkit": "Qt"
+    },
+    {
+      "application": "Firefox",
+      "id": "firefox",
+      "installed_command": "/usr/bin/firefox",
+      "notes": "",
+      "passed": false,
+      "preedit_attributes_expected": true,
+      "scenarios": {
+        "cancel_without_commit": "not_run",
+        "candidate_lookup": "not_run",
+        "daemon_error_key_passthrough": "not_run",
+        "interim_preedit": "not_run",
+        "single_final_commit": "not_run",
+        "unstable_tail_attribute_or_plain_fallback": "not_run"
+      },
+      "toolkit": "Gecko"
+    },
+    {
+      "application": "Chromium",
+      "id": "chromium",
+      "installed_command": null,
+      "notes": "",
+      "passed": false,
+      "preedit_attributes_expected": true,
+      "scenarios": {
+        "cancel_without_commit": "not_run",
+        "candidate_lookup": "not_run",
+        "daemon_error_key_passthrough": "not_run",
+        "interim_preedit": "not_run",
+        "single_final_commit": "not_run",
+        "unstable_tail_attribute_or_plain_fallback": "not_run"
+      },
+      "toolkit": "Blink"
+    },
+    {
+      "application": "VS Code",
+      "id": "vscode",
+      "installed_command": "/usr/bin/code",
+      "notes": "",
+      "passed": false,
+      "preedit_attributes_expected": true,
+      "scenarios": {
+        "cancel_without_commit": "not_run",
+        "candidate_lookup": "not_run",
+        "daemon_error_key_passthrough": "not_run",
+        "interim_preedit": "not_run",
+        "single_final_commit": "not_run",
+        "unstable_tail_attribute_or_plain_fallback": "not_run"
+      },
+      "toolkit": "Electron"
+    },
+    {
+      "application": "GNOME Console",
+      "id": "gnome-console",
+      "installed_command": null,
+      "notes": "",
+      "passed": false,
+      "preedit_attributes_expected": false,
+      "scenarios": {
+        "cancel_without_commit": "not_run",
+        "candidate_lookup": "not_run",
+        "daemon_error_key_passthrough": "not_run",
+        "interim_preedit": "not_run",
+        "single_final_commit": "not_run",
+        "unstable_tail_attribute_or_plain_fallback": "not_run"
+      },
+      "toolkit": "VTE"
+    },
+    {
+      "application": "Konsole",
+      "id": "konsole",
+      "installed_command": null,
+      "notes": "",
+      "passed": false,
+      "preedit_attributes_expected": false,
+      "scenarios": {
+        "cancel_without_commit": "not_run",
+        "candidate_lookup": "not_run",
+        "daemon_error_key_passthrough": "not_run",
+        "interim_preedit": "not_run",
+        "single_final_commit": "not_run",
+        "unstable_tail_attribute_or_plain_fallback": "not_run"
+      },
+      "toolkit": "Qt Terminal"
+    },
+    {
+      "application": "LibreOffice Writer",
+      "id": "libreoffice-writer",
+      "installed_command": "/usr/bin/libreoffice",
+      "notes": "",
+      "passed": false,
+      "preedit_attributes_expected": false,
+      "scenarios": {
+        "cancel_without_commit": "not_run",
+        "candidate_lookup": "not_run",
+        "daemon_error_key_passthrough": "not_run",
+        "interim_preedit": "not_run",
+        "single_final_commit": "not_run",
+        "unstable_tail_attribute_or_plain_fallback": "not_run"
+      },
+      "toolkit": "LibreOffice"
+    }
+  ],
+  "claim_policy": "Only explicit supplied evidence may be marked passed.",
+  "generated_at": "2026-09-03T20:01:48.330200+00:00",
+  "host": {
+    "desktop": "GNOME",
+    "platform": "Linux-7.1.10-200.fc44.x86_64-x86_64-with-glibc2.43",
+    "session_type": "wayland",
+    "wayland_display": "wayland-0",
+    "x11_display": ":0"
+  },
+  "schema_version": 1,
+  "sessions": {
+    "wayland-gnome": "not_run",
+    "wayland-kde": "not_run",
+    "x11-gnome": "not_run",
+    "x11-kde": "not_run"
+  },
+  "status": "incomplete"
+}

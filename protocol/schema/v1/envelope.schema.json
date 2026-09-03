@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://classscribe.local/schema/v1/envelope.schema.json",
+  "title": "ClassScribe worker RPC envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "request_id", "message_type", "payload"],
+  "properties": {
+    "protocol_version": { "const": 1 },
+    "request_id": { "type": "string", "minLength": 1 },
+    "message_type": { "type": "string", "minLength": 1 },
+    "payload": { "type": "object" }
+  }
+}

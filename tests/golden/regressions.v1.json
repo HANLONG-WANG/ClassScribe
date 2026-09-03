@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "claim": "Deterministic guard regressions; these are not user gold accuracy evidence.",
+  "cases": [
+    {
+      "id": "long-output-first-block-only",
+      "historical_failure": "A long generative result retained only its first block.",
+      "invariant": "All reference sentences contribute to omission_rate; incomplete output cannot silently pass.",
+      "tests": [
+        "tests/unit/test_benchmark.py::test_fixed_historical_regressions_remain_detectable",
+        "tests/integration/test_structure_pipeline.py::test_ninety_minute_pipeline_uses_twelve_minute_windows_without_overlap_duplicates"
+      ]
+    },
+    {
+      "id": "funasr-infinite-loop",
+      "historical_failure": "A short Japanese phrase repeated indefinitely.",
+      "invariant": "Four repeated 3-10 token n-grams are rejected before consensus.",
+      "tests": [
+        "tests/unit/test_quality_gate.py::test_infinite_anata_loop_is_rejected_then_split_with_full_coverage_and_model_switch",
+        "tests/integration/test_body_asr_workers.py::test_funasr_real_wav_is_expert_gated_and_rejects_detected_generation_loop"
+      ]
+    },
+    {
+      "id": "punctuation-empty-or-question-question",
+      "historical_failure": "Output had no punctuation or only question-question artifacts.",
+      "invariant": "Punctuation precision/recall/PER report the defect separately without changing lexical text.",
+      "tests": [
+        "tests/unit/test_benchmark.py::test_fixed_historical_regressions_remain_detectable",
+        "tests/unit/test_terminology_punctuation.py::test_chinese_punctuation_never_changes_non_punctuation_characters"
+      ]
+    },
+    {
+      "id": "three-models-one-timestamp",
+      "historical_failure": "All model tokens were attached to one time point.",
+      "invariant": "Zero/overlapping token spans produce structural_errors and are ineligible for ranking.",
+      "tests": [
+        "tests/unit/test_benchmark.py::test_fixed_historical_regressions_remain_detectable",
+        "tests/unit/test_consensus.py::test_native_word_time_anchor_and_dp_untimed_candidate_make_monotonic_columns"
+      ]
+    },
+    {
+      "id": "wrong-text-forced-alignment",
+      "historical_failure": "Incorrect text was forced into an apparently precise timeline.",
+      "invariant": "Coverage/loop/language/text gates reject alignment and retain coarse timing.",
+      "tests": [
+        "tests/unit/test_alignment_exports.py::test_alignment_validation_rejects_high_cost_or_changed_text",
+        "tests/unit/test_alignment_exports.py::test_forced_alignment_gate_applies_short_text_coverage_loop_and_language_rules"
+      ]
+    },
+    {
+      "id": "vad-hard-cut-without-overlap",
+      "historical_failure": "A word crossing a hard VAD split was truncated.",
+      "invariant": "Core spans cover every sample and both sides retain bounded overlap context.",
+      "tests": [
+        "tests/unit/test_audio_vad_lid_segmentation.py::test_continuous_speech_hard_splits_keep_context_on_both_sides_without_loss",
+        "tests/unit/test_stage11_dictation.py::test_five_minute_chunk_plan_has_no_core_gap_and_time_token_merge_has_no_loss"
+      ]
+    }
+  ]
+}

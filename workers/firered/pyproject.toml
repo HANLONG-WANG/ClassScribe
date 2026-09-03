@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "classscribe-worker-firered"
+version = "0.1.0"
+description = "FireRedASR2 and punctuation adapter"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "classscribe-protocol>=0.1.0",
+  "fireredasr2s @ git+https://github.com/FireRedTeam/FireRedASR2S.git@4e7d9aaf4482a47cec1724807026b9b151926eb5",
+]
+
+[tool.uv.sources]
+classscribe-protocol = { path = "../../protocol/python", editable = true }
+
+[tool.uv]
+package = false

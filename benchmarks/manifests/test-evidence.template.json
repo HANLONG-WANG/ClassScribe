@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "unit_and_property": {
+    "status": "not_run",
+    "evidence_kind": "automated",
+    "command": "",
+    "completed_at": "",
+    "artifact_sha256": ""
+  },
+  "worker_contracts": {
+    "status": "not_run",
+    "evidence_kind": "real_model",
+    "command": "",
+    "completed_at": "",
+    "artifact_sha256": "",
+    "workers": []
+  },
+  "real_model_zh_ja_en": {
+    "status": "not_run",
+    "evidence_kind": "real_model",
+    "command": "",
+    "completed_at": "",
+    "artifact_sha256": "",
+    "languages": {}
+  },
+  "pipeline_90m": {
+    "status": "not_run",
+    "evidence_kind": "real_hardware",
+    "command": "",
+    "completed_at": "",
+    "artifact_sha256": ""
+  },
+  "ibus_5m": {
+    "status": "not_run",
+    "evidence_kind": "real_hardware",
+    "command": "",
+    "completed_at": "",
+    "artifact_sha256": ""
+  },
+  "gpu_preemption": {
+    "status": "not_run",
+    "evidence_kind": "real_hardware",
+    "command": "",
+    "completed_at": "",
+    "artifact_sha256": ""
+  },
+  "oom_recovery": {
+    "status": "not_run",
+    "evidence_kind": "real_hardware",
+    "command": "",
+    "completed_at": "",
+    "artifact_sha256": ""
+  },
+  "service_restart": {
+    "status": "not_run",
+    "evidence_kind": "automated",
+    "command": "",
+    "completed_at": "",
+    "artifact_sha256": ""
+  },
+  "invalid_input": {
+    "status": "not_run",
+    "evidence_kind": "automated",
+    "command": "",
+    "completed_at": "",
+    "artifact_sha256": ""
+  },
+  "fixed_regressions": {
+    "status": "not_run",
+    "evidence_kind": "automated",
+    "command": "",
+    "completed_at": "",
+    "artifact_sha256": ""
+  }
+}

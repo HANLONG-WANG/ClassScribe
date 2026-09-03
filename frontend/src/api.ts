@@ -1,0 +1,237 @@
+export type ApiObject = Record<string, unknown>;
+
+const tokenMeta = document.querySelector<HTMLMetaElement>(
+  'meta[name="classscribe-api-token"]',
+);
+let apiToken =
+  tokenMeta?.content ?? sessionStorage.getItem("classscribe-token") ?? "";
+
+export function setApiToken(token: string) {
+  apiToken = token;
+  sessionStorage.setItem("classscribe-token", token);
+}
+
+export function authHeaders(write = false): HeadersInit {
+  const headers: Record<string, string> = {};
+  if (apiToken) {
+    headers.Authorization = `Bearer ${apiToken}`;
+    if (write) headers["X-ClassScribe-CSRF-Token"] = apiToken;
+  }
+  return headers;
+}
+
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const method = init.method?.toUpperCase() ?? "GET";
+  const write = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
+  const headers = new Headers(authHeaders(write));
+  if (init.body !== undefined && typeof init.body === "string") {
+    headers.set("Content-Type", "application/json");
+  }
+  new Headers(init.headers).forEach((value, key) => {
+    headers.set(key, value);
+  });
+  const response = await fetch(`/api/v1${path}`, { ...init, headers });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as {
+      error?: { detail?: string };
+    };
+    throw new Error(
+      payload.error?.detail ??
+        `${String(response.status)} ${response.statusText}`,
+    );
+  }
+  return (await response.json()) as T;
+}
+
+export async function uploadRecording(
+  file: File,
+  metadata: { durationSamples: number; channels: number; sampleRate: number },
+) {
+  return api<Recording>("/recordings", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-ClassScribe-Filename": file.name,
+      "X-ClassScribe-Duration-Samples": String(metadata.durationSamples),
+      "X-ClassScribe-Channels": String(metadata.channels),
+      "X-ClassScribe-Sample-Rate": String(metadata.sampleRate),
+    },
+    body: file,
+  });
+}
+
+export interface Recording {
+  id: string;
+  source_name: string;
+  duration_samples: number;
+  sample_rate: number;
+  channels: number;
+  media_url: string;
+}
+
+export interface Job {
+  job_id: string;
+  recording_id: string;
+  status: string;
+  stage: string;
+  progress: number;
+  current_checkpoint?: string | null;
+  current_segment_id?: string | null;
+  error_code?: string | null;
+  error_detail?: string | null;
+  runtime?: {
+    model_id?: string;
+    segment_ordinal?: number;
+    realtime_factor?: number;
+    vram_mb?: number;
+  };
+  options: ApiObject;
+}
+
+export interface Token {
+  id: string;
+  start_sample: number;
+  end_sample: number;
+  text: string;
+  confidence: number | null;
+  provenance: ApiObject;
+}
+
+export interface Segment {
+  id: string;
+  job_id: string;
+  start_sample: number;
+  end_sample: number;
+  speaker_id: string | null;
+  speaker_name: string | null;
+  language: "zh" | "ja" | "en";
+  raw_text: string;
+  faithful_text: string;
+  smart_corrected_text: string;
+  user_text: string | null;
+  auto_final_text: string;
+  quality_score: number | null;
+  low_confidence: boolean;
+  review_status: string;
+  timing_quality: string;
+  version: number;
+  tokens: Token[];
+  audit?: ApiObject[];
+}
+
+export interface Transcript {
+  job_id: string;
+  timeline: string;
+  segments: Segment[];
+}
+
+export interface Candidate {
+  id: string;
+  model_id: string;
+  model_revision: string;
+  raw_text: string;
+  normalized_text: string;
+  confidence_raw: number | null;
+  confidence_calibrated: number | null;
+  quality: ApiObject;
+  warnings: ApiObject[];
+  valid: boolean;
+  adopted: boolean;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  revision: string;
+  repository: string;
+  languages: string[];
+  tasks: string[];
+  enabled: boolean;
+  experimental: boolean;
+  estimated_vram_mb: number;
+  installation: {
+    state: string;
+    sha256?: string;
+    measured_vram_mb?: number | null;
+  };
+  benchmark: ApiObject;
+}
+
+export interface GlossaryTerm {
+  id: string;
+  canonical: string;
+  reading: string;
+  aliases: string[];
+  language: string;
+  weight: number;
+  source: string;
+  confirmed: boolean;
+}
+
+export interface Glossary {
+  id: string;
+  name: string;
+  course_id: string | null;
+  version: number;
+  terms: GlossaryTerm[];
+  materials: ApiObject[];
+}
+
+export interface ExportArtifact {
+  id: string;
+  job_id: string;
+  format: string;
+  layer: string;
+  view: string;
+  file_name: string;
+  download_url: string;
+  sha256: string;
+  size_bytes: number;
+}
+
+export interface PipelineEvent {
+  sequence: number;
+  job_id: string;
+  kind: string;
+  occurred_at: string;
+  payload: ApiObject;
+}
+
+export async function streamJobEvents(
+  jobId: string,
+  onEvent: (event: PipelineEvent) => void,
+  signal: AbortSignal,
+) {
+  const response = await fetch(`/api/v1/jobs/${jobId}/events`, {
+    headers: authHeaders(),
+    signal,
+  });
+  if (!response.ok || response.body === null) {
+    throw new Error(
+      `Unable to open job event stream (${String(response.status)})`,
+    );
+  }
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let pending = "";
+  while (!signal.aborted) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    pending += value;
+    const blocks = pending.split("\n\n");
+    pending = blocks.pop() ?? "";
+    for (const block of blocks) {
+      const data = block
+        .split("\n")
+        .find((line) => line.startsWith("data: "))
+        ?.slice(6);
+      if (data !== undefined) onEvent(JSON.parse(data) as PipelineEvent);
+    }
+  }
+}
+
+export function formatSamples(samples: number) {
+  const milliseconds = Math.round((samples * 1000) / 16000);
+  const seconds = Math.floor(milliseconds / 1000);
+  const minutes = Math.floor(seconds / 60);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}.${String(milliseconds % 1000).padStart(3, "0")}`;
+}

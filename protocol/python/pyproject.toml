@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "classscribe-protocol"
+version = "0.1.0"
+description = "Versioned ClassScribe worker protocol primitives"
+requires-python = ">=3.12,<3.13"
+dependencies = ["msgspec>=0.19,<1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["classscribe_protocol"]

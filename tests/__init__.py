@@ -1,0 +1,1 @@
+"""ClassScribe test suite."""

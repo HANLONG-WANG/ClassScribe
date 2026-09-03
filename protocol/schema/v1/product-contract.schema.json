@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://classscribe.local/schema/v1/product-contract.schema.json",
+  "title": "ClassScribe Product Contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "product_surfaces",
+    "language_modes",
+    "model_selection_modes",
+    "text_layers",
+    "inaudible_markers",
+    "privacy"
+  ],
+  "properties": {
+    "contract_version": { "const": "1.0.0" },
+    "product_surfaces": {
+      "const": ["classroom_workbench", "ibus_dictation"]
+    },
+    "language_modes": {
+      "const": ["zh", "ja", "en", "auto_mixed"]
+    },
+    "model_selection_modes": {
+      "const": ["auto_best", "manual_primary", "strict_single_model"]
+    },
+    "text_layers": {
+      "const": ["faithful", "corrected", "user"]
+    },
+    "inaudible_markers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["zh", "ja", "en"],
+      "properties": {
+        "zh": { "const": "［听不清 {start}–{end}］" },
+        "ja": { "const": "［聞き取り不明 {start}–{end}］" },
+        "en": { "const": "[inaudible {start}–{end}]" }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["local_inference_only", "telemetry", "network_operations"],
+      "properties": {
+        "local_inference_only": { "const": true },
+        "telemetry": { "const": false },
+        "network_operations": {
+          "const": ["user_initiated_model_install", "user_initiated_model_update"]
+        }
+      }
+    }
+  }
+}

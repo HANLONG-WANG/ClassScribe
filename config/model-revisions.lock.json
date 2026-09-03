@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "registry_revision": 1,
+  "facts_as_of": "2026-09-03",
+  "models": [
+    {"id": "moss_td_0_9b", "repository": "OpenMOSS-Team/MOSS-Transcribe-Diarize", "revision": "704aa4a9c304e8520be88901e0d1960158ef5b15", "worker": "moss_td", "enabled": true},
+    {"id": "firered_asr2_aed", "repository": "FireRedTeam/FireRedASR2-AED", "revision": "2304afed56eacfee6256dee5937ed22ffa0b64ec", "worker": "firered", "enabled": true},
+    {"id": "firered_asr2_llm", "repository": "FireRedTeam/FireRedASR2-LLM", "revision": "2c5e0f415b9afb8f67cb8b00ea4c54959f70e824", "worker": "firered", "enabled": false},
+    {"id": "firered_vad", "repository": "FireRedTeam/FireRedVAD", "revision": "7990aaccc6b7aec1e527743bd30201f2c4a03b8c", "worker": "firered", "enabled": true},
+    {"id": "firered_lid", "repository": "FireRedTeam/FireRedLID", "revision": "1bb4d285c8456429385d9c0810300df4297bc11b", "worker": "firered", "enabled": true},
+    {"id": "firered_punc", "repository": "FireRedTeam/FireRedPunc", "revision": "e448fd967f44182a1c323cc30f5d89f2400c28da", "worker": "firered", "enabled": true},
+    {"id": "granite_speech_4_1_2b", "repository": "ibm-granite/granite-speech-4.1-2b", "revision": "de575db64086f84fdc79da4932d1076e965bc546", "worker": "granite", "enabled": true},
+    {"id": "qwen3_asr_1_7b", "repository": "Qwen/Qwen3-ASR-1.7B", "revision": "7278e1e70fe206f11671096ffdd38061171dd6e5", "worker": "qwen", "enabled": true},
+    {"id": "qwen3_asr_0_6b", "repository": "Qwen/Qwen3-ASR-0.6B", "revision": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0", "worker": "qwen", "enabled": true},
+    {"id": "qwen3_forced_aligner_0_6b", "repository": "Qwen/Qwen3-ForcedAligner-0.6B", "revision": "c7cbfc2048c462b0d63a45797104fc9db3ad62b7", "worker": "qwen", "enabled": true},
+    {"id": "ark_asr_3b", "repository": "Audio8/ARK-ASR-3B", "revision": "1e28271b79edc97635783bea65abc89195a09ed3", "worker": "ark", "enabled": true},
+    {"id": "moss_transcribe_preview_2b", "repository": "OpenMOSS-Team/MOSS-Transcribe-preview-2B", "revision": "c98175cb20e48bd9be4e95f6c85f2af18899f780", "worker": "moss_en", "enabled": true},
+    {"id": "nemotron_3_5_asr_streaming_0_6b", "repository": "nvidia/nemotron-3.5-asr-streaming-0.6b", "revision": "1c8deaecc64b91f034d73e08dd8b64625eb3395d", "worker": "nemotron", "enabled": true},
+    {"id": "nemotron_speech_streaming_en_0_6b", "repository": "nvidia/nemotron-speech-streaming-en-0.6b", "revision": "ebe59e5a817142986528bbbee5dba8db7b38ed50", "worker": "nemotron", "enabled": true},
+    {"id": "granite_speech_5_0_turboctc_470m", "repository": "ibm-granite/granite-speech-5.0-470m-turboctc", "revision": "18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0", "worker": "granite", "enabled": true},
+    {"id": "voxtral_mini_4b_realtime_2602", "repository": "mistralai/Voxtral-Mini-4B-Realtime-2602", "revision": "2769294da9567371363522aac9bbcfdd19447add", "worker": "voxtral", "enabled": false},
+    {"id": "vibevoice_asr_streaming_1_5b", "repository": "microsoft/VibeVoice-ASR-Streaming-1.5B", "revision": "4262d23d8a539a6530cf64fbd0b1751ef9a30853", "worker": "vibevoice", "enabled": false},
+    {"id": "pyannote_community_1", "repository": "pyannote/speaker-diarization-community-1", "revision": "3533c8cf8e369892e6b79ff1bf80f7b0286a54ee", "worker": "pyannote", "enabled": true},
+    {"id": "fun_asr_nano_2512", "repository": "FunAudioLLM/Fun-ASR-Nano-2512-hf", "revision": "1fd03aa58072a4c00bf0a0b149cc4cf0d36d11ed", "worker": "funasr_experimental", "enabled": false},
+    {"id": "whisper_tiny_reference", "repository": "Systran/faster-whisper-tiny", "revision": "d90ca5fe260221311c53c58e660288d3deb8d356", "worker": "moss_en", "enabled": false}
+  ]
+}

@@ -1,0 +1,85 @@
+"""Canonical stage-4 audio ingestion, analysis, routing, and slicing."""
+
+from classscribe.audio.lid import (
+    FireRedLIDAdapter,
+    LanguageRouter,
+    LanguageRoutingSpan,
+    LIDObservation,
+    sliding_lid_windows,
+)
+from classscribe.audio.media import (
+    SUPPORTED_MEDIA_SUFFIXES,
+    AudioMaster,
+    ChannelMixPolicy,
+    FFmpegMediaPipeline,
+    ImportedMedia,
+    MediaMetadata,
+)
+from classscribe.audio.persistence import AudioArtifactRepository
+from classscribe.audio.pipeline import AudioAnalysisArtifacts, AudioPreprocessor, PreparedAudio
+from classscribe.audio.qc import AudioQualityReport, ChannelQuality, PCMQualityAnalyzer
+from classscribe.audio.segmentation import (
+    BoundaryCandidate,
+    BoundaryCue,
+    BoundaryDedupPlan,
+    BoundaryKind,
+    SpeakerEmbedding,
+    SpeakerEmbeddingMatch,
+    StructureWindow,
+    TimedToken,
+    TranscriptChunk,
+    choose_structure_window_samples,
+    make_structure_windows,
+    make_transcript_chunks,
+    match_speaker_embeddings,
+    plan_boundary_dedup,
+)
+from classscribe.audio.vad import (
+    FireRedVADAdapter,
+    SileroVADAdapter,
+    SpeechRegionResult,
+    StreamingVADSession,
+    VADFrame,
+    WebRTCVADAdapter,
+)
+
+__all__ = [
+    "SUPPORTED_MEDIA_SUFFIXES",
+    "AudioAnalysisArtifacts",
+    "AudioArtifactRepository",
+    "AudioMaster",
+    "AudioPreprocessor",
+    "AudioQualityReport",
+    "BoundaryCandidate",
+    "BoundaryCue",
+    "BoundaryDedupPlan",
+    "BoundaryKind",
+    "ChannelMixPolicy",
+    "ChannelQuality",
+    "FFmpegMediaPipeline",
+    "FireRedLIDAdapter",
+    "FireRedVADAdapter",
+    "ImportedMedia",
+    "LIDObservation",
+    "LanguageRouter",
+    "LanguageRoutingSpan",
+    "MediaMetadata",
+    "PCMQualityAnalyzer",
+    "PreparedAudio",
+    "SileroVADAdapter",
+    "SpeakerEmbedding",
+    "SpeakerEmbeddingMatch",
+    "SpeechRegionResult",
+    "StreamingVADSession",
+    "StructureWindow",
+    "TimedToken",
+    "TranscriptChunk",
+    "VADFrame",
+    "WebRTCVADAdapter",
+    "choose_structure_window_samples",
+    "make_structure_windows",
+    "make_transcript_chunks",
+    "match_speaker_embeddings",
+    "plan_boundary_dedup",
+    "sliding_lid_windows",
+]

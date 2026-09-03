@@ -1,0 +1,79 @@
+# ClassScribe configuration schema v1. Copy this file to
+# ${XDG_CONFIG_HOME:-~/.config}/classscribe/config.yaml and change only the
+# values you need. Environment overrides use CLASSSCRIBE__SECTION__KEY.
+config_version: 1
+
+server:
+  # The core is loopback-only. Remote binds are outside the supported privacy contract.
+  host: 127.0.0.1
+  port: 8765
+  require_token: true
+
+privacy:
+  # runtime_offline is an invariant and therefore can only be true.
+  runtime_offline: true
+  save_dictation_audio: false
+  log_transcript_text: false
+
+hardware:
+  gpu_device: 0
+  max_vram_mb: 10500
+  # one_heavy_worker is an invariant on the target RTX 4070 profile.
+  one_heavy_worker: true
+  ibus_priority: 0
+
+classroom:
+  default_language: ja
+  default_profile: auto_best
+  structure_model: moss_td_0_9b
+  structure_window_seconds: 720
+  structure_overlap_seconds: 4
+  text_segment_target_seconds: 18
+  text_segment_max_seconds: 30
+  text_overlap_seconds: 1.0
+  # ordinary_class favors the usual one-to-two-speaker lecture; group_discussion
+  # keeps the same hard maximum but treats auto or an approximate count neutrally.
+  speaker_context: ordinary_class
+  expected_speakers: auto
+  prior_min: 1
+  prior_typical: 2
+  max_speakers: 12
+  allow_overlap: true
+  auto_export: [json, markdown, srt, vtt]
+
+quality:
+  # Bootstrap values only; local benchmark calibration supersedes them.
+  second_model_threshold: 0.82
+  third_model_threshold: 0.62
+  reject_repetition: true
+  reject_script_mismatch: true
+  require_alignment_gate: true
+  unresolved_policy: inaudible_marker
+
+ibus:
+  enabled: true
+  activation: hold
+  show_interim: true
+  default_language: ja
+  default_profile: balanced
+  stream_chunk_ms: 560
+  semantic_endpoint_silence_ms: 650
+  hard_chunk_seconds: 25
+  overlap_seconds: 2.0
+  rolling_context_segments: 3
+  stable_prefix_commit_after_seconds: 45
+
+profiles:
+  classroom:
+    zh:
+      primary: firered_asr2_aed
+      fallbacks: [ark_asr_3b, qwen3_asr_1_7b]
+      punctuation: firered_punc
+    ja:
+      primary: granite_speech_4_1_2b
+      fallbacks: [qwen3_asr_1_7b, ark_asr_3b]
+      punctuation: strict_ja_punc
+    en:
+      primary: moss_transcribe_preview_2b
+      fallbacks: [ark_asr_3b, granite_speech_4_1_2b]
+      punctuation: native_then_firered

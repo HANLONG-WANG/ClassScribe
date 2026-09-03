@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "facts_as_of": "2026-09-03",
+  "source": {
+    "spdx_expression": "NOASSERTION",
+    "status": "unresolved",
+    "redistribution_authorized": false,
+    "release_blocking": true,
+    "note": "The copyright owner must select and add the ClassScribe source license before public distribution."
+  },
+  "bundled_assets": [
+    {"path": "packaging/desktop/classscribe.svg", "license": "NOASSERTION", "release_blocking": true},
+    {"path": "tests/audio_fixtures/regression-audio.v1.json", "license": "CC0-1.0", "release_blocking": false}
+  ],
+  "model_weights": {
+    "bundled": false,
+    "policy": "Each pinned snapshot is downloaded only after an explicit user confirmation; upstream license and access conditions remain authoritative.",
+    "licenses": {
+      "OpenMOSS-Team/MOSS-Transcribe-Diarize": "Apache-2.0",
+      "FireRedTeam/FireRedASR2-AED": "Apache-2.0",
+      "FireRedTeam/FireRedASR2-LLM": "Apache-2.0",
+      "FireRedTeam/FireRedVAD": "Apache-2.0",
+      "FireRedTeam/FireRedLID": "Apache-2.0",
+      "FireRedTeam/FireRedPunc": "Apache-2.0",
+      "ibm-granite/granite-speech-4.1-2b": "Apache-2.0",
+      "Qwen/Qwen3-ASR-1.7B": "Apache-2.0",
+      "Qwen/Qwen3-ASR-0.6B": "Apache-2.0",
+      "Qwen/Qwen3-ForcedAligner-0.6B": "Apache-2.0",
+      "Audio8/ARK-ASR-3B": "Apache-2.0",
+      "OpenMOSS-Team/MOSS-Transcribe-preview-2B": "Apache-2.0",
+      "nvidia/nemotron-3.5-asr-streaming-0.6b": "LicenseRef-OpenMDW-1.1",
+      "nvidia/nemotron-speech-streaming-en-0.6b": "LicenseRef-NVIDIA-Open-Model-License",
+      "ibm-granite/granite-speech-5.0-470m-turboctc": "Apache-2.0",
+      "mistralai/Voxtral-Mini-4B-Realtime-2602": "Apache-2.0",
+      "microsoft/VibeVoice-ASR-Streaming-1.5B": "MIT",
+      "pyannote/speaker-diarization-community-1": "CC-BY-4.0",
+      "FunAudioLLM/Fun-ASR-Nano-2512-hf": "Apache-2.0",
+      "Systran/faster-whisper-tiny": "MIT"
+    }
+  },
+  "dependencies": {
+    "python": "Resolved by uv.lock and every workers/*/uv.lock; generate the per-package NOTICE/SBOM on the release build host.",
+    "javascript": "Resolved by pnpm-lock.yaml; generate the per-package NOTICE/SBOM on the release build host.",
+    "system": "Resolved by the Fedora RPM dependency solver and RPM license metadata."
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://classscribe.local/protocol/v1/resident-workers.schema.json",
+  "title": "ClassScribe resident worker handoff v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "protocol_version",
+    "ready",
+    "default_model_id",
+    "routes",
+    "profile_routes",
+    "vad_socket",
+    "lid_socket",
+    "accuracy_socket",
+    "accuracy_routes",
+    "errors",
+    "generated_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "protocol_version": { "const": 1 },
+    "ready": { "type": "boolean" },
+    "default_model_id": { "type": ["string", "null"] },
+    "routes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["model_id", "model_revision", "socket_path"],
+        "properties": {
+          "model_id": { "type": "string", "minLength": 1 },
+          "model_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "socket_path": { "type": "string", "pattern": "^/" }
+        }
+      }
+    },
+    "profile_routes": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "vad_socket": { "type": ["string", "null"] },
+    "lid_socket": { "type": ["string", "null"] },
+    "accuracy_socket": { "type": ["string", "null"] },
+    "accuracy_routes": {
+      "type": "object",
+      "propertyNames": { "enum": ["zh", "ja", "en", "auto"] },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["model_id", "model_revision", "socket_path", "expected_load_ms"],
+        "properties": {
+          "model_id": { "type": "string", "minLength": 1 },
+          "model_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "socket_path": { "type": ["string", "null"] },
+          "expected_load_ms": { "type": ["number", "null"], "exclusiveMinimum": 0 }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "socket_path": { "type": "string", "pattern": "^/" },
+              "expected_load_ms": { "type": "null" }
+            }
+          },
+          {
+            "properties": {
+              "socket_path": { "type": "null" },
+              "expected_load_ms": { "type": "number", "exclusiveMinimum": 0 }
+            }
+          }
+        ]
+      }
+    },
+    "errors": { "type": "array", "items": { "type": "string" } },
+    "generated_at": { "type": "string", "minLength": 1 }
+  }
+}

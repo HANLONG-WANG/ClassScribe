@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+export PYTHONPATH=/usr/lib/classscribe
+export CLASSSCRIBE_RESOURCE_ROOT=/usr/share/classscribe
+exec /usr/bin/python3 -m classscribe.doctor "$@"

@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://classscribe.local/config/schema/v1/config.schema.json",
+  "title": "ClassScribe configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["config_version", "server", "privacy", "hardware", "classroom", "quality", "ibus", "profiles"],
+  "properties": {
+    "config_version": { "const": 1 },
+    "server": { "$ref": "#/$defs/server" },
+    "privacy": { "$ref": "#/$defs/privacy" },
+    "hardware": { "$ref": "#/$defs/hardware" },
+    "classroom": { "$ref": "#/$defs/classroom" },
+    "quality": { "$ref": "#/$defs/quality" },
+    "ibus": { "$ref": "#/$defs/ibus" },
+    "profiles": { "$ref": "#/$defs/profiles" }
+  },
+  "$defs": {
+    "language": { "enum": ["zh", "ja", "en", "auto_mixed"] },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "port", "require_token"],
+      "properties": {
+        "host": { "enum": ["127.0.0.1", "::1", "localhost"] },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "require_token": { "const": true }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runtime_offline", "save_dictation_audio", "log_transcript_text"],
+      "properties": {
+        "runtime_offline": { "const": true },
+        "save_dictation_audio": { "type": "boolean" },
+        "log_transcript_text": { "type": "boolean" }
+      }
+    },
+    "hardware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gpu_device", "max_vram_mb", "one_heavy_worker", "ibus_priority"],
+      "properties": {
+        "gpu_device": { "type": "integer", "minimum": 0 },
+        "max_vram_mb": { "type": "integer", "minimum": 1 },
+        "one_heavy_worker": { "const": true },
+        "ibus_priority": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "classroom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default_language", "default_profile", "structure_model", "structure_window_seconds", "structure_overlap_seconds", "text_segment_target_seconds", "text_segment_max_seconds", "text_overlap_seconds", "speaker_context", "expected_speakers", "prior_min", "prior_typical", "max_speakers", "allow_overlap", "auto_export"],
+      "properties": {
+        "default_language": { "$ref": "#/$defs/language" },
+        "default_profile": { "type": "string", "minLength": 1 },
+        "structure_model": { "type": "string", "minLength": 1 },
+        "structure_window_seconds": { "type": "integer", "minimum": 240, "maximum": 5400 },
+        "structure_overlap_seconds": { "type": "integer", "minimum": 1 },
+        "text_segment_target_seconds": { "type": "integer", "minimum": 1 },
+        "text_segment_max_seconds": { "type": "integer", "minimum": 1 },
+        "text_overlap_seconds": { "type": "number", "minimum": 0 },
+        "speaker_context": { "enum": ["ordinary_class", "group_discussion"] },
+        "expected_speakers": { "oneOf": [{ "const": "auto" }, { "type": "integer", "minimum": 1, "maximum": 12 }] },
+        "prior_min": { "type": "integer", "minimum": 1, "maximum": 12 },
+        "prior_typical": { "type": "integer", "minimum": 1, "maximum": 12 },
+        "max_speakers": { "type": "integer", "minimum": 1, "maximum": 12 },
+        "allow_overlap": { "type": "boolean" },
+        "auto_export": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["json", "markdown", "srt", "vtt"] }
+        }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["second_model_threshold", "third_model_threshold", "reject_repetition", "reject_script_mismatch", "require_alignment_gate", "unresolved_policy"],
+      "properties": {
+        "second_model_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+        "third_model_threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+        "reject_repetition": { "const": true },
+        "reject_script_mismatch": { "const": true },
+        "require_alignment_gate": { "const": true },
+        "unresolved_policy": { "const": "inaudible_marker" }
+      }
+    },
+    "ibus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "activation", "show_interim", "default_language", "default_profile", "stream_chunk_ms", "semantic_endpoint_silence_ms", "hard_chunk_seconds", "overlap_seconds", "rolling_context_segments", "stable_prefix_commit_after_seconds"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "activation": { "enum": ["hold", "toggle"] },
+        "show_interim": { "type": "boolean" },
+        "default_language": { "$ref": "#/$defs/language" },
+        "default_profile": { "type": "string", "minLength": 1 },
+        "stream_chunk_ms": { "enum": [80, 160, 320, 560, 1120] },
+        "semantic_endpoint_silence_ms": { "type": "integer", "minimum": 300, "maximum": 2000 },
+        "hard_chunk_seconds": { "type": "integer", "minimum": 20, "maximum": 30 },
+        "overlap_seconds": { "type": "number", "minimum": 1.5, "maximum": 2.5 },
+        "rolling_context_segments": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "stable_prefix_commit_after_seconds": { "type": "integer", "minimum": 1, "maximum": 60 }
+      }
+    },
+    "language_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary", "fallbacks", "punctuation"],
+      "properties": {
+        "primary": { "type": "string", "minLength": 1 },
+        "fallbacks": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "punctuation": { "type": "string", "minLength": 1 }
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["classroom"],
+      "properties": {
+        "classroom": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["zh", "ja", "en"],
+          "properties": {
+            "zh": { "$ref": "#/$defs/language_profile" },
+            "ja": { "$ref": "#/$defs/language_profile" },
+            "en": { "$ref": "#/$defs/language_profile" }
+          }
+        }
+      }
+    }
+  }
+}

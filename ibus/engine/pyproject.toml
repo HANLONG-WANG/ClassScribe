@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "classscribe-ibus-engine"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = ["classscribe-protocol>=0.1.0"]
+
+[project.scripts]
+classscribe-ibus-engine = "classscribe_ibus_engine.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["classscribe_ibus_engine"]
+
+[tool.uv.sources]
+classscribe-protocol = { path = "../../protocol/python", editable = true }

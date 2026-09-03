@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "workers": [
+    "moss_td",
+    "firered",
+    "granite",
+    "qwen",
+    "ark",
+    "moss_en",
+    "nemotron",
+    "pyannote",
+    "funasr_experimental",
+    "voxtral",
+    "vibevoice"
+  ],
+  "cases": [
+    "capability_schema",
+    "cancellation",
+    "deadline",
+    "empty_audio",
+    "silence",
+    "extremely_short_audio",
+    "invalid_language",
+    "overlong_audio",
+    "unicode_special_punctuation",
+    "gpu_release_after_exit"
+  ],
+  "gpu_release_tolerance_mb": 128,
+  "claim_policy": "Every case must run against one installed pinned revision for every worker; protocol-only fixtures are not real-model evidence."
+}

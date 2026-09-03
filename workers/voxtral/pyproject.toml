@@ -1,0 +1,16 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "classscribe-worker-voxtral"
+version = "0.1.0"
+description = "Experimental Voxtral Realtime adapter"
+requires-python = ">=3.12,<3.13"
+dependencies = ["classscribe-protocol>=0.1.0"]
+
+[tool.uv.sources]
+classscribe-protocol = { path = "../../protocol/python", editable = true }
+
+[tool.uv]
+package = false

@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "body": ["raw_cer", "normalized_cer", "raw_wer", "normalized_wer"],
+  "terminology_and_entities": ["term_precision", "term_recall", "term_f1", "number_accuracy", "unit_accuracy", "negation_accuracy", "name_accuracy"],
+  "format": ["punctuation_precision", "punctuation_recall", "punctuation_f1", "per", "capitalization_f1", "paired_quote_bracket_errors"],
+  "safety": ["omission_rate", "silence_hallucinations_per_hour", "loop_triggers_per_hour", "voiced_coverage", "invalid_character_rate"],
+  "timeline_and_speaker": ["structural_errors", "word_boundary_mae_ms", "sentence_boundary_f1_250ms", "sentence_boundary_f1_500ms", "der", "jer", "speaker_attributed_error_rate", "cross_window_speaker_switches"],
+  "performance": ["rtf", "projected_90m_seconds", "peak_vram_mb", "peak_ram_mb", "interim_latency_p50_ms", "interim_latency_p95_ms", "commit_latency_p50_ms", "commit_latency_p95_ms", "model_load_seconds", "preemption_resume_p50_ms", "preemption_resume_p95_ms"]
+}

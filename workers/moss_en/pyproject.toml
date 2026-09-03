@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "classscribe-worker-moss-en"
+version = "0.1.0"
+description = "MOSS English transcription adapter"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "classscribe-protocol>=0.1.0",
+  "faster-whisper>=1.2,<2",
+  "librosa>=0.11,<0.12",
+  "torch>=2.7,<3",
+  "transformers==4.57.6",
+]
+
+[tool.uv.sources]
+classscribe-protocol = { path = "../../protocol/python", editable = true }
+
+[tool.uv]
+package = false

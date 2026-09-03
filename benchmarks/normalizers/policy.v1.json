@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "zh": {
+    "raw": "exact non-space Unicode code points including punctuation",
+    "normalized": "NFKC, casefold embedded Latin, remove spacing and Unicode punctuation, preserve digits"
+  },
+  "ja": {
+    "raw": "exact non-space Unicode code points including punctuation",
+    "normalized": "NFKC, casefold embedded Latin, remove spacing and Unicode punctuation, preserve digits"
+  },
+  "en": {
+    "raw": "NFKC readable words with case preserved",
+    "normalized": "NFKC lowercase words with punctuation removed; normalize curly apostrophe"
+  },
+  "comparison_rule": "Never compare metrics produced under different named policies."
+}

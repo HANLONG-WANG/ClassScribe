@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "classscribe-worker-funasr-experimental"
+version = "0.1.0"
+description = "Experimental FunASR adapter"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "classscribe-protocol>=0.1.0",
+  "librosa>=0.11,<0.12",
+  "soundfile>=0.13,<0.14",
+  "torch>=2.7,<3",
+  "transformers @ git+https://github.com/huggingface/transformers.git@aa0a25a4c55a70cff996267bcd7e96317fe4031c",
+]
+
+[tool.uv.sources]
+classscribe-protocol = { path = "../../protocol/python", editable = true }
+
+[tool.uv]
+package = false

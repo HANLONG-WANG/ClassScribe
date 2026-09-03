@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "status": "incomplete",
+  "generated_at": "2026-09-04T00:00:00+09:00",
+  "claim_policy": "No missing private data, model execution, GPU measurement, or desktop interaction is inferred as passed.",
+  "checks": {
+    "production_gold_coverage": false,
+    "real_90m_classroom": false,
+    "real_5m_ibus": false,
+    "speaker_counts_1_2_5plus": false,
+    "language_noise_interruption_tags": false,
+    "benchmark_completed": false,
+    "manifest_hash_matches": false,
+    "all_product_language_rankings": false,
+    "real_model_execution": false,
+    "zero_structural_loop_hallucination_and_full_provenance": false,
+    "desktop_matrix": false,
+    "all_test_evidence": false
+  },
+  "missing_evidence": [
+    "Private human-corrected zh/ja/en classroom and IBus gold manifest/audio",
+    "Installed pinned production model snapshots",
+    "A working NVIDIA driver/userspace pair for measured CUDA runs",
+    "Real 90-minute classroom, 5-minute IBus, OOM, preemption, and restart artifacts",
+    "Wayland GNOME/KDE and X11 GNOME/KDE interaction evidence for all required clients"
+  ]
+}

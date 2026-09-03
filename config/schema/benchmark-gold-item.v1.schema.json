@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://classscribe.local/schema/benchmark-gold-item.v1.schema.json",
+  "title": "ClassScribe private gold JSONL item",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "item_id",
+    "audio",
+    "scenario",
+    "split",
+    "language",
+    "start_sample",
+    "end_sample",
+    "text"
+  ],
+  "properties": {
+    "item_id": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "audio": { "type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$" },
+    "scenario": { "enum": ["classroom", "ibus"] },
+    "split": { "enum": ["train", "validation", "test"] },
+    "language": { "enum": ["zh", "ja", "en"] },
+    "start_sample": { "type": "integer", "minimum": 0 },
+    "end_sample": { "type": "integer", "minimum": 1 },
+    "text": { "type": "string" },
+    "speaker": { "type": ["string", "null"] },
+    "terms": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "term_vocabulary": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "entities": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 }
+      }
+    },
+    "words": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/word" }
+    },
+    "sentence_boundaries": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 }
+    },
+    "speaker_spans": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/speakerSpan" }
+    },
+    "voiced_spans": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/sampleSpan" }
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "clear_lecture",
+          "far_field",
+          "student_question",
+          "terminology",
+          "numbers",
+          "proper_names",
+          "code_switch",
+          "overlap",
+          "silence",
+          "background_music",
+          "interrupted",
+          "continuous_over_60s"
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "sampleSpan": {
+      "type": "array",
+      "prefixItems": [
+        { "type": "integer", "minimum": 0 },
+        { "type": "integer", "minimum": 1 }
+      ],
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "word": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "start_sample", "end_sample"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 },
+        "start_sample": { "type": "integer", "minimum": 0 },
+        "end_sample": { "type": "integer", "minimum": 1 },
+        "speaker": { "type": ["string", "null"] }
+      }
+    },
+    "speakerSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["speaker", "start_sample", "end_sample"],
+      "properties": {
+        "speaker": { "type": "string", "minLength": 1 },
+        "start_sample": { "type": "integer", "minimum": 0 },
+        "end_sample": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

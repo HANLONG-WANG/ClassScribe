@@ -1,0 +1,598 @@
+schema_version: 1
+registry_revision: 1
+facts_as_of: '2026-09-03'
+sources:
+  - https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize
+  - https://huggingface.co/FireRedTeam/FireRedASR2-AED
+  - https://huggingface.co/ibm-granite/granite-speech-4.1-2b
+  - https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B
+  - https://huggingface.co/Audio8/ARK-ASR-3B
+  - https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b
+  - https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc
+  - https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602
+  - https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-1.5B
+  - https://huggingface.co/pyannote/speaker-diarization-community-1
+  - https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512-hf
+  - https://huggingface.co/Systran/faster-whisper-tiny
+models:
+  - id: moss_td_0_9b
+    display_name: MOSS Transcribe-Diarize 0.9B
+    provider: OpenMOSS Team
+    repository: OpenMOSS-Team/MOSS-Transcribe-Diarize
+    revision: 704aa4a9c304e8520be88901e0d1960158ef5b15
+    worker: moss_td
+    languages: [zh, ja, en, auto]
+    tasks: [asr, timestamps, diarization, hotwords, events]
+    modes: [batch]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: transformers_custom_code
+    dtype: bfloat16
+    trust_remote_code: true
+    safe_operating_window_seconds: 720
+    vendor_claimed_max_seconds: 5400
+    responses: {segment_timestamps: true, word_timestamps: false, confidence: false, logprobs: false, punctuation: true, speakers: true, hotwords: true}
+    resources: {vram_class: medium, estimated_vram_mb: 5600, measured_vram_mb: null, safety_margin_mb: 1536}
+    dependency_lock: workers/moss_td/uv.lock
+    dependency_lock_sha256: cc71971228c3c3976622bd84fd273d6ab065c3873ea8800b06e79af137ef73a2
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [Adaptive windows remain mandatory despite the vendor 90-minute claim.]
+    disable_reason: null
+
+  - id: firered_asr2_aed
+    display_name: FireRedASR2-AED
+    provider: FireRed Team
+    repository: FireRedTeam/FireRedASR2-AED
+    revision: 2304afed56eacfee6256dee5937ed22ffa0b64ec
+    worker: firered
+    languages: [zh, en, zh_en]
+    tasks: [asr, word_timestamps, confidence]
+    modes: [batch, final_decode]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: fireredasr2s_torch
+    dtype: float16
+    trust_remote_code: false
+    safe_operating_window_seconds: 30
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: false, word_timestamps: true, confidence: true, logprobs: false, punctuation: false, speakers: false, hotwords: false}
+    resources: {vram_class: medium, estimated_vram_mb: 5200, measured_vram_mb: null, safety_margin_mb: 1536}
+    dependency_lock: workers/firered/uv.lock
+    dependency_lock_sha256: 665c38b91fa6ada3e7bbe469c242dff5d4e011d3cb96c41f8bea21f1cf804e93
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [No Japanese ASR support; confidence is model-local raw data.]
+    disable_reason: null
+
+  - id: firered_asr2_llm
+    display_name: FireRedASR2-LLM
+    provider: FireRed Team
+    repository: FireRedTeam/FireRedASR2-LLM
+    revision: 2c5e0f415b9afb8f67cb8b00ea4c54959f70e824
+    worker: firered
+    languages: [zh, en, zh_en]
+    tasks: [asr]
+    modes: [batch]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: fireredasr2s_vllm
+    dtype: bfloat16
+    trust_remote_code: false
+    safe_operating_window_seconds: 40
+    vendor_claimed_max_seconds: 40
+    responses: {segment_timestamps: false, word_timestamps: false, confidence: false, logprobs: false, punctuation: false, speakers: false, hotwords: false}
+    resources: {vram_class: too_large, estimated_vram_mb: 18000, measured_vram_mb: null, safety_margin_mb: 2048}
+    dependency_lock: workers/firered/uv.lock
+    dependency_lock_sha256: 665c38b91fa6ada3e7bbe469c242dff5d4e011d3cb96c41f8bea21f1cf804e93
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: false
+    experimental: true
+    known_defects: [The 8B-plus model is not a stable 12 GB default and supplies no primary timeline.]
+    disable_reason: Requires a separately verified low-memory or quantized runtime on 12 GB GPUs.
+
+  - id: firered_vad
+    display_name: FireRedVAD
+    provider: FireRed Team
+    repository: FireRedTeam/FireRedVAD
+    revision: 7990aaccc6b7aec1e527743bd30201f2c4a03b8c
+    worker: firered
+    languages: [zh, ja, en, auto]
+    tasks: [vad, events, streaming]
+    modes: [batch, streaming]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: fireredasr2s_torch
+    dtype: float32
+    trust_remote_code: false
+    safe_operating_window_seconds: 5400
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: true, word_timestamps: false, confidence: true, logprobs: false, punctuation: false, speakers: false, hotwords: false}
+    resources: {vram_class: tiny, estimated_vram_mb: 512, measured_vram_mb: null, safety_margin_mb: 1024}
+    dependency_lock: workers/firered/uv.lock
+    dependency_lock_sha256: 665c38b91fa6ada3e7bbe469c242dff5d4e011d3cb96c41f8bea21f1cf804e93
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [Thresholds require local classroom calibration.]
+    disable_reason: null
+
+  - id: firered_lid
+    display_name: FireRedLID
+    provider: FireRed Team
+    repository: FireRedTeam/FireRedLID
+    revision: 1bb4d285c8456429385d9c0810300df4297bc11b
+    worker: firered
+    languages: [zh, ja, en, auto]
+    tasks: [lid]
+    modes: [batch]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: fireredasr2s_torch
+    dtype: float32
+    trust_remote_code: false
+    safe_operating_window_seconds: 5
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: false, word_timestamps: false, confidence: true, logprobs: false, punctuation: false, speakers: false, hotwords: false}
+    resources: {vram_class: tiny, estimated_vram_mb: 768, measured_vram_mb: null, safety_margin_mb: 1024}
+    dependency_lock: workers/firered/uv.lock
+    dependency_lock_sha256: 665c38b91fa6ada3e7bbe469c242dff5d4e011d3cb96c41f8bea21f1cf804e93
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [Raw language probabilities require hysteresis and may not be compared with ASR confidence.]
+    disable_reason: null
+
+  - id: firered_punc
+    display_name: FireRedPunc
+    provider: FireRed Team
+    repository: FireRedTeam/FireRedPunc
+    revision: e448fd967f44182a1c323cc30f5d89f2400c28da
+    worker: firered
+    languages: [zh, en, zh_en]
+    tasks: [punctuation]
+    modes: [batch]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: fireredasr2s_torch
+    dtype: float32
+    trust_remote_code: false
+    safe_operating_window_seconds: 300
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: false, word_timestamps: false, confidence: false, logprobs: false, punctuation: true, speakers: false, hotwords: false}
+    resources: {vram_class: tiny, estimated_vram_mb: 1024, measured_vram_mb: null, safety_margin_mb: 1024}
+    dependency_lock: workers/firered/uv.lock
+    dependency_lock_sha256: 665c38b91fa6ada3e7bbe469c242dff5d4e011d3cb96c41f8bea21f1cf804e93
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [Chinese and English only; the punctuation layer must not change lexical tokens.]
+    disable_reason: null
+
+  - id: granite_speech_4_1_2b
+    display_name: Granite Speech 4.1 2B
+    provider: IBM Granite
+    repository: ibm-granite/granite-speech-4.1-2b
+    revision: de575db64086f84fdc79da4932d1076e965bc546
+    worker: granite
+    languages: [ja, en]
+    tasks: [asr, punctuation, truecasing, hotwords]
+    modes: [batch, final_decode]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: transformers
+    dtype: bfloat16
+    trust_remote_code: false
+    safe_operating_window_seconds: 30
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: false, word_timestamps: false, confidence: false, logprobs: false, punctuation: true, speakers: false, hotwords: true}
+    resources: {vram_class: medium, estimated_vram_mb: 7200, measured_vram_mb: null, safety_margin_mb: 1536}
+    dependency_lock: workers/granite/uv.lock
+    dependency_lock_sha256: 47bbe1eebda76d4a7e58656be6a5bd018e71e79691406121fde579881c6b0b45
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [Does not provide the canonical classroom timeline.]
+    disable_reason: null
+
+  - id: qwen3_asr_1_7b
+    display_name: Qwen3-ASR 1.7B
+    provider: Qwen
+    repository: Qwen/Qwen3-ASR-1.7B
+    revision: 7278e1e70fe206f11671096ffdd38061171dd6e5
+    worker: qwen
+    languages: [zh, ja, en, auto]
+    tasks: [asr, lid, context, streaming]
+    modes: [batch, streaming, final_decode]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: qwen_asr_vllm
+    dtype: bfloat16
+    trust_remote_code: false
+    safe_operating_window_seconds: 120
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: false, word_timestamps: false, confidence: false, logprobs: true, punctuation: true, speakers: false, hotwords: true}
+    resources: {vram_class: medium, estimated_vram_mb: 6800, measured_vram_mb: null, safety_margin_mb: 1536}
+    dependency_lock: workers/qwen/uv.lock
+    dependency_lock_sha256: ef7d017bad97b5f521a4c137d7fec50bfc8dfdcc454a11a6699a111ba29809ce
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [Streaming output has no native timestamps; force the requested language after stable LID.]
+    disable_reason: null
+
+  - id: qwen3_asr_0_6b
+    display_name: Qwen3-ASR 0.6B
+    provider: Qwen
+    repository: Qwen/Qwen3-ASR-0.6B
+    revision: 5eb144179a02acc5e5ba31e748d22b0cf3e303b0
+    worker: qwen
+    languages: [zh, ja, en, auto]
+    tasks: [asr, lid, context, streaming]
+    modes: [batch, streaming, final_decode]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: qwen_asr_vllm
+    dtype: bfloat16
+    trust_remote_code: false
+    safe_operating_window_seconds: 120
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: false, word_timestamps: false, confidence: false, logprobs: true, punctuation: true, speakers: false, hotwords: true}
+    resources: {vram_class: small, estimated_vram_mb: 3400, measured_vram_mb: null, safety_margin_mb: 1536}
+    dependency_lock: workers/qwen/uv.lock
+    dependency_lock_sha256: ef7d017bad97b5f521a4c137d7fec50bfc8dfdcc454a11a6699a111ba29809ce
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [Streaming output has no native timestamps and trades accuracy for latency.]
+    disable_reason: null
+
+  - id: qwen3_forced_aligner_0_6b
+    display_name: Qwen3 ForcedAligner 0.6B
+    provider: Qwen
+    repository: Qwen/Qwen3-ForcedAligner-0.6B
+    revision: c7cbfc2048c462b0d63a45797104fc9db3ad62b7
+    worker: qwen
+    languages: [zh, ja, en]
+    tasks: [alignment, word_timestamps]
+    modes: [batch]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: qwen_asr
+    dtype: bfloat16
+    trust_remote_code: false
+    safe_operating_window_seconds: 300
+    vendor_claimed_max_seconds: 300
+    responses: {segment_timestamps: true, word_timestamps: true, confidence: false, logprobs: false, punctuation: false, speakers: false, hotwords: false}
+    resources: {vram_class: small, estimated_vram_mb: 3600, measured_vram_mb: null, safety_margin_mb: 1536}
+    dependency_lock: workers/qwen/uv.lock
+    dependency_lock_sha256: ef7d017bad97b5f521a4c137d7fec50bfc8dfdcc454a11a6699a111ba29809ce
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [Alignment is allowed only after transcript quality gating and on short segments.]
+    disable_reason: null
+
+  - id: ark_asr_3b
+    display_name: ARK-ASR-3B
+    provider: Audio8
+    repository: Audio8/ARK-ASR-3B
+    revision: 1e28271b79edc97635783bea65abc89195a09ed3
+    worker: ark
+    languages: [zh, ja, en]
+    tasks: [asr]
+    modes: [batch, final_decode]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: transformers_custom_code
+    dtype: bfloat16
+    trust_remote_code: true
+    safe_operating_window_seconds: 30
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: false, word_timestamps: false, confidence: false, logprobs: true, punctuation: true, speakers: false, hotwords: false}
+    resources: {vram_class: large, estimated_vram_mb: 9800, measured_vram_mb: null, safety_margin_mb: 1536}
+    dependency_lock: workers/ark/uv.lock
+    dependency_lock_sha256: 2eb496262c521c235b6fb303097c03b595313198ac026b163d976b82afd6afea
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [May translate non-English input instead of transcribing; script QA is mandatory.]
+    disable_reason: null
+
+  - id: moss_transcribe_preview_2b
+    display_name: MOSS Transcribe Preview 2B
+    provider: OpenMOSS Team
+    repository: OpenMOSS-Team/MOSS-Transcribe-preview-2B
+    revision: c98175cb20e48bd9be4e95f6c85f2af18899f780
+    worker: moss_en
+    languages: [en]
+    tasks: [asr]
+    modes: [batch, final_decode]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: transformers_custom_code
+    dtype: bfloat16
+    trust_remote_code: true
+    safe_operating_window_seconds: 120
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: false, word_timestamps: false, confidence: false, logprobs: true, punctuation: false, speakers: false, hotwords: false}
+    resources: {vram_class: medium, estimated_vram_mb: 7200, measured_vram_mb: null, safety_margin_mb: 1536}
+    dependency_lock: workers/moss_en/uv.lock
+    dependency_lock_sha256: ac392045030024e28a7ec9103fce0a73f96021d4880324d8e770a2fd6e17890c
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [English only; external alignment and punctuation checks are required.]
+    disable_reason: null
+
+  - id: nemotron_3_5_asr_streaming_0_6b
+    display_name: Nemotron 3.5 ASR Streaming 0.6B
+    provider: NVIDIA
+    repository: nvidia/nemotron-3.5-asr-streaming-0.6b
+    revision: 1c8deaecc64b91f034d73e08dd8b64625eb3395d
+    worker: nemotron
+    languages: [zh, ja, en, auto]
+    tasks: [asr, lid, punctuation, truecasing, streaming]
+    modes: [batch, streaming, final_decode]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: nemo_or_transformers_rnnt
+    dtype: float16
+    trust_remote_code: false
+    safe_operating_window_seconds: 30
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: false, word_timestamps: false, confidence: true, logprobs: false, punctuation: true, speakers: false, hotwords: false}
+    resources: {vram_class: small, estimated_vram_mb: 3600, measured_vram_mb: null, safety_margin_mb: 1536}
+    dependency_lock: workers/nemotron/uv.lock
+    dependency_lock_sha256: 5206e4929d63bcfb0daa330ad24234375da7c09019e356976fe6e53baf9a1a39
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [Locale prompting must be explicit after stable LID; not a classroom timeline source.]
+    disable_reason: null
+
+  - id: nemotron_speech_streaming_en_0_6b
+    display_name: Nemotron Speech Streaming EN 0.6B
+    provider: NVIDIA
+    repository: nvidia/nemotron-speech-streaming-en-0.6b
+    revision: ebe59e5a817142986528bbbee5dba8db7b38ed50
+    worker: nemotron
+    languages: [en]
+    tasks: [asr, punctuation, truecasing, streaming]
+    modes: [batch, streaming, final_decode]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: nemo
+    dtype: float16
+    trust_remote_code: false
+    safe_operating_window_seconds: 30
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: false, word_timestamps: false, confidence: true, logprobs: false, punctuation: true, speakers: false, hotwords: false}
+    resources: {vram_class: small, estimated_vram_mb: 3400, measured_vram_mb: null, safety_margin_mb: 1536}
+    dependency_lock: workers/nemotron/uv.lock
+    dependency_lock_sha256: 5206e4929d63bcfb0daa330ad24234375da7c09019e356976fe6e53baf9a1a39
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [English only and not a classroom timeline source.]
+    disable_reason: null
+
+  - id: granite_speech_5_0_turboctc_470m
+    display_name: Granite Speech 5.0 TurboCTC 470M
+    provider: IBM Granite
+    repository: ibm-granite/granite-speech-5.0-470m-turboctc
+    revision: 18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0
+    worker: granite
+    languages: [en]
+    tasks: [asr, alignment, streaming]
+    modes: [batch, streaming]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: transformers_ctc
+    dtype: float16
+    trust_remote_code: false
+    safe_operating_window_seconds: 30
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: false, word_timestamps: false, confidence: true, logprobs: true, punctuation: false, speakers: false, hotwords: false}
+    resources: {vram_class: small, estimated_vram_mb: 2400, measured_vram_mb: null, safety_margin_mb: 1024}
+    dependency_lock: workers/granite/uv.lock
+    dependency_lock_sha256: 47bbe1eebda76d4a7e58656be6a5bd018e71e79691406121fde579881c6b0b45
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [English only; CTC output requires separate punctuation validation.]
+    disable_reason: null
+
+  - id: voxtral_mini_4b_realtime_2602
+    display_name: Voxtral Mini 4B Realtime 2602
+    provider: Mistral AI
+    repository: mistralai/Voxtral-Mini-4B-Realtime-2602
+    revision: 2769294da9567371363522aac9bbcfdd19447add
+    worker: voxtral
+    languages: [zh, ja, en, auto]
+    tasks: [asr, punctuation, streaming]
+    modes: [streaming]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: vllm
+    dtype: bfloat16
+    trust_remote_code: false
+    safe_operating_window_seconds: 30
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: false, word_timestamps: false, confidence: false, logprobs: true, punctuation: true, speakers: false, hotwords: false}
+    resources: {vram_class: too_large, estimated_vram_mb: 16000, measured_vram_mb: null, safety_margin_mb: 2048}
+    dependency_lock: workers/voxtral/uv.lock
+    dependency_lock_sha256: 004a9fda261ba0fe36afe6028304edc367dc752d3888d644b07583399f6b67b2
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: false
+    experimental: true
+    known_defects: [The official BF16 serving requirement exceeds 12 GB; it cannot supply classroom structure.]
+    disable_reason: Disabled on the target GPU until an explicitly verified quantized build passes.
+
+  - id: vibevoice_asr_streaming_1_5b
+    display_name: VibeVoice ASR Streaming 1.5B
+    provider: Microsoft
+    repository: microsoft/VibeVoice-ASR-Streaming-1.5B
+    revision: 4262d23d8a539a6530cf64fbd0b1751ef9a30853
+    worker: vibevoice
+    languages: [zh, ja, en, auto]
+    tasks: [asr, diarization, hotwords, streaming]
+    modes: [streaming]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: transformers
+    dtype: bfloat16
+    trust_remote_code: false
+    safe_operating_window_seconds: 30
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: true, word_timestamps: false, confidence: false, logprobs: false, punctuation: true, speakers: true, hotwords: true}
+    resources: {vram_class: large, estimated_vram_mb: 10000, measured_vram_mb: null, safety_margin_mb: 1536}
+    dependency_lock: workers/vibevoice/uv.lock
+    dependency_lock_sha256: d6b0385c972a91643f8fc22d8dc517db3fb9c028af83c5335343a2045039aa03
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: false
+    experimental: true
+    known_defects: [The model card says 1.5B while published weight metadata reports about 3B; release is extremely recent.]
+    disable_reason: Disabled pending local stability, repetition, VRAM, and speaker-attribution evaluation.
+
+  - id: pyannote_community_1
+    display_name: pyannote Community-1
+    provider: pyannote
+    repository: pyannote/speaker-diarization-community-1
+    revision: 3533c8cf8e369892e6b79ff1bf80f7b0286a54ee
+    worker: pyannote
+    languages: [zh, ja, en, auto]
+    tasks: [diarization, overlap, exclusive_diarization, speaker_embeddings]
+    modes: [batch]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: pyannote_audio
+    dtype: float32
+    trust_remote_code: false
+    safe_operating_window_seconds: 5400
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: true, word_timestamps: false, confidence: false, logprobs: false, punctuation: false, speakers: true, hotwords: false}
+    resources: {vram_class: small, estimated_vram_mb: 3600, measured_vram_mb: null, safety_margin_mb: 1536}
+    dependency_lock: workers/pyannote/uv.lock
+    dependency_lock_sha256: 247aee7cadcee6d0643fa741bc25bee23807b24c0c032fed11b12e7b33d5ba03
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: true
+    experimental: false
+    known_defects: [Installation is gated and requires explicit user acceptance; never use its cloud variant.]
+    disable_reason: null
+
+  - id: fun_asr_nano_2512
+    display_name: Fun-ASR-Nano 2512 HF
+    provider: FunAudioLLM
+    repository: FunAudioLLM/Fun-ASR-Nano-2512-hf
+    revision: 1fd03aa58072a4c00bf0a0b149cc4cf0d36d11ed
+    worker: funasr_experimental
+    languages: [zh, ja, en, auto]
+    tasks: [asr, hotwords]
+    modes: [batch]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: transformers
+    dtype: bfloat16
+    trust_remote_code: false
+    safe_operating_window_seconds: 30
+    vendor_claimed_max_seconds: null
+    responses: {segment_timestamps: false, word_timestamps: false, confidence: false, logprobs: true, punctuation: true, speakers: false, hotwords: true}
+    resources: {vram_class: medium, estimated_vram_mb: 4800, measured_vram_mb: null, safety_margin_mb: 1536}
+    dependency_lock: workers/funasr_experimental/uv.lock
+    dependency_lock_sha256: 380f4c6bf0a9cc07d82a4bf7331f462fd19b4f1414458db00e27c7d9182130a9
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: false
+    experimental: true
+    known_defects: [Looped output has been observed and must be rejected by repetition QA.]
+    disable_reason: Expert-only candidate until local loop and Japanese punctuation tests pass.
+
+  - id: whisper_tiny_reference
+    display_name: Whisper Tiny CTranslate2 Reference
+    provider: OpenAI / SYSTRAN conversion
+    repository: Systran/faster-whisper-tiny
+    revision: d90ca5fe260221311c53c58e660288d3deb8d356
+    worker: moss_en
+    languages: [zh, ja, en, auto]
+    tasks: [asr, word_timestamps]
+    modes: [batch]
+    input_sample_rate: 16000
+    input_channels: 1
+    input_dtype: pcm_s16le
+    runtime_backend: faster_whisper_cpu_int8
+    dtype: int8
+    trust_remote_code: false
+    safe_operating_window_seconds: 30
+    vendor_claimed_max_seconds: 30
+    responses: {segment_timestamps: true, word_timestamps: true, confidence: true, logprobs: true, punctuation: true, speakers: false, hotwords: true}
+    resources: {vram_class: tiny, estimated_vram_mb: 0, measured_vram_mb: null, safety_margin_mb: 512}
+    dependency_lock: workers/moss_en/uv.lock
+    dependency_lock_sha256: ac392045030024e28a7ec9103fce0a73f96021d4880324d8e770a2fd6e17890c
+    installation: {state: not_installed, artifact_sha256: null, local_revision: null}
+    benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
+    enabled: false
+    experimental: true
+    known_defects: [Small reference checkpoint used only to verify the real worker lifecycle; never an auto-best candidate.]
+    disable_reason: Contract smoke model only; production selection uses the prescribed candidate pool.
+
+rankings:
+  classroom.structure: [moss_td_0_9b, firered_vad, pyannote_community_1]
+  classroom.alignment: [qwen3_forced_aligner_0_6b]
+  classroom.zh: [firered_asr2_aed, ark_asr_3b, qwen3_asr_1_7b, moss_td_0_9b]
+  classroom.ja: [granite_speech_4_1_2b, qwen3_asr_1_7b, ark_asr_3b, moss_td_0_9b, fun_asr_nano_2512]
+  classroom.en: [moss_transcribe_preview_2b, ark_asr_3b, granite_speech_4_1_2b, qwen3_asr_1_7b]
+  classroom.auto: [qwen3_asr_1_7b, ark_asr_3b, moss_td_0_9b]
+  punctuation.zh_en: [firered_punc]
+  ibus.zh.fast: [nemotron_3_5_asr_streaming_0_6b, qwen3_asr_0_6b]
+  ibus.zh.balanced: [qwen3_asr_1_7b]
+  ibus.zh.accuracy: [firered_asr2_aed, qwen3_asr_1_7b]
+  ibus.ja.fast: [nemotron_3_5_asr_streaming_0_6b]
+  ibus.ja.balanced: [qwen3_asr_1_7b]
+  ibus.ja.accuracy: [granite_speech_4_1_2b, qwen3_asr_1_7b]
+  ibus.en.fast: [nemotron_speech_streaming_en_0_6b]
+  ibus.en.balanced: [nemotron_speech_streaming_en_0_6b, qwen3_asr_1_7b]
+  ibus.en.accuracy: [moss_transcribe_preview_2b, ark_asr_3b]
+  ibus.auto.fast: [nemotron_3_5_asr_streaming_0_6b]
+  ibus.auto.balanced: [qwen3_asr_1_7b]
+  ibus.auto.accuracy: [qwen3_asr_1_7b, firered_asr2_aed, granite_speech_4_1_2b, moss_transcribe_preview_2b]
+history: []

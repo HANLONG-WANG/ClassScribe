@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "classscribe-worker-nemotron"
+version = "0.1.0"
+description = "Nemotron speech adapter"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "classscribe-protocol>=0.1.0",
+  "nemo-toolkit[asr]>=2.4,<3",
+  "torch>=2.7,<3",
+]
+
+[tool.uv.sources]
+classscribe-protocol = { path = "../../protocol/python", editable = true }
+
+[tool.uv]
+package = false

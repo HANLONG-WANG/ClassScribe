@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "protocol": "IBus 1.0",
+  "fallback": "plain_preedit_then_commit",
+  "required_scenarios": [
+    "interim_preedit",
+    "unstable_tail_attribute_or_plain_fallback",
+    "candidate_lookup",
+    "single_final_commit",
+    "cancel_without_commit",
+    "daemon_error_key_passthrough"
+  ],
+  "automated_contract": {
+    "status": "passed",
+    "test": "tests/unit/test_stage11_dictation.py::test_compatibility_matrix_covers_required_application_families"
+  },
+  "native_desktop_evidence": {
+    "status": "requires_installed-host-run",
+    "runner": "scripts/validate_ibus_desktop.py",
+    "report": "benchmarks/results/ibus-desktop-compatibility.json"
+  },
+  "applications": [
+    {
+      "id": "gnome-text-editor",
+      "toolkit": "GTK",
+      "application": "GNOME Text Editor",
+      "command_candidates": ["gnome-text-editor"],
+      "preedit_attributes": true
+    },
+    {
+      "id": "kate",
+      "toolkit": "Qt",
+      "application": "KWrite/Kate",
+      "command_candidates": ["kwrite", "kate"],
+      "preedit_attributes": true
+    },
+    {
+      "id": "firefox",
+      "toolkit": "Gecko",
+      "application": "Firefox",
+      "command_candidates": ["firefox"],
+      "preedit_attributes": true
+    },
+    {
+      "id": "chromium",
+      "toolkit": "Blink",
+      "application": "Chromium",
+      "command_candidates": ["chromium", "chromium-browser"],
+      "preedit_attributes": true
+    },
+    {
+      "id": "vscode",
+      "toolkit": "Electron",
+      "application": "VS Code",
+      "command_candidates": ["code"],
+      "preedit_attributes": true
+    },
+    {
+      "id": "gnome-console",
+      "toolkit": "VTE",
+      "application": "GNOME Console",
+      "command_candidates": ["kgx", "gnome-console"],
+      "preedit_attributes": false
+    },
+    {
+      "id": "konsole",
+      "toolkit": "Qt Terminal",
+      "application": "Konsole",
+      "command_candidates": ["konsole"],
+      "preedit_attributes": false
+    },
+    {
+      "id": "libreoffice-writer",
+      "toolkit": "LibreOffice",
+      "application": "LibreOffice Writer",
+      "command_candidates": ["libreoffice"],
+      "preedit_attributes": false
+    }
+  ]
+}

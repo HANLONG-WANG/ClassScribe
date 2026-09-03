@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "facts_as_of": "2026-09-03",
+  "models": [
+    {"repository":"OpenMOSS-Team/MOSS-Transcribe-Diarize","license_id":"Apache-2.0","license_url":"https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"FireRedTeam/FireRedASR2-AED","license_id":"Apache-2.0","license_url":"https://huggingface.co/FireRedTeam/FireRedASR2-AED","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"FireRedTeam/FireRedASR2-LLM","license_id":"Apache-2.0","license_url":"https://huggingface.co/FireRedTeam/FireRedASR2-LLM","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"FireRedTeam/FireRedVAD","license_id":"Apache-2.0","license_url":"https://huggingface.co/FireRedTeam/FireRedVAD","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"FireRedTeam/FireRedLID","license_id":"Apache-2.0","license_url":"https://huggingface.co/FireRedTeam/FireRedLID","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"FireRedTeam/FireRedPunc","license_id":"Apache-2.0","license_url":"https://huggingface.co/FireRedTeam/FireRedPunc","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"ibm-granite/granite-speech-4.1-2b","license_id":"Apache-2.0","license_url":"https://huggingface.co/ibm-granite/granite-speech-4.1-2b","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"Qwen/Qwen3-ASR-1.7B","license_id":"Apache-2.0","license_url":"https://huggingface.co/Qwen/Qwen3-ASR-1.7B","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"Qwen/Qwen3-ASR-0.6B","license_id":"Apache-2.0","license_url":"https://huggingface.co/Qwen/Qwen3-ASR-0.6B","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"Qwen/Qwen3-ForcedAligner-0.6B","license_id":"Apache-2.0","license_url":"https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"Audio8/ARK-ASR-3B","license_id":"Apache-2.0","license_url":"https://huggingface.co/Audio8/ARK-ASR-3B","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"OpenMOSS-Team/MOSS-Transcribe-preview-2B","license_id":"Apache-2.0","license_url":"https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-preview-2B","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"nvidia/nemotron-3.5-asr-streaming-0.6b","license_id":"LicenseRef-OpenMDW-1.1","license_url":"https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"nvidia/nemotron-speech-streaming-en-0.6b","license_id":"LicenseRef-NVIDIA-Open-Model-License","license_url":"https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"ibm-granite/granite-speech-5.0-470m-turboctc","license_id":"Apache-2.0","license_url":"https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"mistralai/Voxtral-Mini-4B-Realtime-2602","license_id":"Apache-2.0","license_url":"https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"microsoft/VibeVoice-ASR-Streaming-1.5B","license_id":"MIT","license_url":"https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-1.5B","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"pyannote/speaker-diarization-community-1","license_id":"CC-BY-4.0","license_url":"https://huggingface.co/pyannote/speaker-diarization-community-1","requires_terms_acceptance":true,"verified_as_of":"2026-09-03"},
+    {"repository":"FunAudioLLM/Fun-ASR-Nano-2512-hf","license_id":"Apache-2.0","license_url":"https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512-hf","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
+    {"repository":"Systran/faster-whisper-tiny","license_id":"MIT","license_url":"https://huggingface.co/Systran/faster-whisper-tiny","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"}
+  ]
+}

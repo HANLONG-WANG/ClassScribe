@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://classscribe.local/schema/v1/worker-response.schema.json",
+  "title": "ClassScribe worker RPC response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "request_id", "job_id", "ok", "model_id", "model_revision", "raw_text", "normalized_text", "segments", "metrics", "warnings", "result"],
+  "properties": {
+    "protocol_version": {"const": 1},
+    "request_id": {"type": "string", "minLength": 1},
+    "job_id": {"type": "string", "minLength": 1},
+    "ok": {"type": "boolean"},
+    "model_id": {"type": "string", "minLength": 1},
+    "model_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "raw_text": {"type": "string"},
+    "normalized_text": {"type": "string"},
+    "language": {"type": ["string", "null"]},
+    "segments": {"type": "array", "items": {"$ref": "#/$defs/segment"}},
+    "metrics": {"type": "object", "not": {"required": ["quality_probability"]}},
+    "warnings": {"type": "array", "items": {"type": "string"}},
+    "result": {
+      "type": "object",
+      "not": {"required": ["quality_probability"]},
+      "properties": {
+        "text_role": {"type": "string", "minLength": 1},
+        "adopted_as_final": {"type": "boolean"},
+        "exclusive_segments": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/segment"}
+        },
+        "embeddings": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/speaker_embedding"}
+        },
+        "decode": {"$ref": "#/$defs/body_asr_decode"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "text_role": {
+                "const": "coarse_timeline_consensus_candidate_boundary_reference"
+              }
+            },
+            "required": ["text_role"]
+          },
+          "then": {
+            "properties": {"adopted_as_final": {"const": false}},
+            "required": ["adopted_as_final"]
+          }
+        }
+      ]
+    },
+    "error_code": {"type": ["string", "null"]},
+    "error_detail": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "segment": {
+      "type": "object",
+      "required": ["start_sample", "end_sample"],
+      "properties": {
+        "start_sample": {"type": "integer", "minimum": 0},
+        "end_sample": {"type": "integer", "minimum": 1},
+        "speaker_local": {"type": ["string", "null"]},
+        "text": {"type": "string"},
+        "acoustic_events": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {"type": "string", "minLength": 1},
+              {
+                "type": "object",
+                "required": ["label"],
+                "properties": {"label": {"type": "string", "minLength": 1}}
+              }
+            ]
+          }
+        },
+        "overlap": {"type": "boolean"},
+        "confidence_raw": {"type": ["number", "null"]},
+        "timing_kind": {"enum": ["native", "request_span_not_model_native", "qwen_forced_alignment"]},
+        "words": {"type": "array", "items": {"$ref": "#/$defs/word"}}
+      },
+      "not": {"required": ["quality_probability"]}
+    },
+    "word": {
+      "type": "object",
+      "required": ["start_sample", "end_sample", "text"],
+      "properties": {
+        "start_sample": {"type": "integer", "minimum": 0},
+        "end_sample": {"type": "integer", "minimum": 1},
+        "text": {"type": "string", "minLength": 1},
+        "confidence_raw": {"type": ["number", "null"]}
+      },
+      "not": {"required": ["quality_probability"]}
+    },
+    "body_asr_decode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "temperature",
+        "do_sample",
+        "seed",
+        "batch_size",
+        "mixed_length_batch",
+        "max_new_tokens",
+        "max_output_characters"
+      ],
+      "properties": {
+        "temperature": {"const": 0.0},
+        "do_sample": {"const": false},
+        "seed": {"type": "integer", "minimum": 0},
+        "batch_size": {"const": 1},
+        "mixed_length_batch": {"const": false},
+        "max_new_tokens": {"type": "integer", "minimum": 1},
+        "max_output_characters": {"type": "integer", "minimum": 1}
+      }
+    },
+    "speaker_embedding": {
+      "allOf": [
+        {"$ref": "#/$defs/segment"},
+        {
+          "type": "object",
+          "required": ["speaker_local", "vector", "signal_quality"],
+          "properties": {
+            "speaker_local": {"type": "string", "minLength": 1},
+            "vector": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"type": "number"}
+            },
+            "signal_quality": {"type": "number", "minimum": 0, "maximum": 1},
+            "support_count": {"type": "integer", "minimum": 1},
+            "overlap": {"const": false}
+          }
+        }
+      ]
+    }
+  }
+}

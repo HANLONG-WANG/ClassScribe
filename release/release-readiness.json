@@ -1,0 +1,29 @@
+{
+  "checks": {
+    "artifact_inventory": true,
+    "dependency_lock_hashes": true,
+    "desktop_matrix": false,
+    "final_architecture": true,
+    "model_license_inventory": true,
+    "model_revision_lock": true,
+    "phase12_acceptance": false,
+    "production_runtime_binding": true,
+    "source_license": false
+  },
+  "details": {
+    "desktop_status": "incomplete",
+    "facts_cutoff": "2026-09-03",
+    "model_count": 20,
+    "phase12_status": "incomplete",
+    "registry_revision": 1,
+    "version": "0.1.0"
+  },
+  "reasons": [
+    "ClassScribe source license is not finalized",
+    "ClassScribe source redistribution is not authorized",
+    "one or more bundled assets have unresolved licensing",
+    "Phase 12 real-model acceptance is not passed",
+    "IBus desktop compatibility matrix is not passed"
+  ],
+  "status": "blocked"
+}

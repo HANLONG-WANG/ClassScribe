@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://classscribe.local/schema/v1/worker-request.schema.json",
+  "title": "ClassScribe worker RPC request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "request_id", "job_id", "deadline_ms", "priority", "method", "params"],
+  "properties": {
+    "protocol_version": {"const": 1},
+    "request_id": {"type": "string", "minLength": 1},
+    "job_id": {"type": "string", "minLength": 1},
+    "deadline_ms": {"type": "integer", "minimum": 1, "maximum": 86400000},
+    "priority": {"enum": [0, 10, 20, 30, 40]},
+    "method": {
+      "enum": ["health", "capabilities", "load", "unload", "transcribe_batch", "transcribe_pcm", "stream_open", "stream_push", "stream_flush", "stream_close", "align", "punctuate", "vad", "lid", "lid_pcm", "diarize", "cancel"]
+    },
+    "params": {
+      "type": "object",
+      "not": {"required": ["quality_probability"]},
+      "allOf": [
+        {
+          "if": {
+            "properties": {"request_contract": {"const": "body-asr-v1"}},
+            "required": ["request_contract"]
+          },
+          "then": {
+            "required": [
+              "audio_path",
+              "start_sample",
+              "end_sample",
+              "core_start_sample",
+              "core_end_sample",
+              "sample_rate",
+              "language",
+              "manual_language",
+              "candidate_role",
+              "experimental_enabled",
+              "hints",
+              "decode",
+              "batch_items"
+            ],
+            "properties": {
+              "audio_path": {"type": "string", "pattern": "^/"},
+              "start_sample": {"type": "integer", "minimum": 0},
+              "end_sample": {"type": "integer", "minimum": 1},
+              "core_start_sample": {"type": "integer", "minimum": 0},
+              "core_end_sample": {"type": "integer", "minimum": 1},
+              "sample_rate": {"const": 16000},
+              "language": {"enum": ["zh", "ja", "en"]},
+              "manual_language": {"const": true},
+              "candidate_role": {
+                "enum": [
+                  "primary",
+                  "secondary_review",
+                  "tertiary_review",
+                  "moss_structure_candidate",
+                  "experimental",
+                  "course_expert"
+                ]
+              },
+              "experimental_enabled": {"type": "boolean"},
+              "request_contract": {"const": "body-asr-v1"},
+              "hints": {"type": "array", "items": {"$ref": "#/$defs/body_asr_hint"}},
+              "decode": {"$ref": "#/$defs/body_asr_decode"},
+              "batch_items": {"const": 1}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"punctuation_contract": {"const": "strict-punctuation-v1"}},
+            "required": ["punctuation_contract"]
+          },
+          "then": {
+            "required": ["text", "language", "manual_language", "punctuation_contract"],
+            "properties": {
+              "text": {"type": "string", "minLength": 1},
+              "language": {"enum": ["zh", "en"]},
+              "manual_language": {"const": true},
+              "punctuation_contract": {"const": "strict-punctuation-v1"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"alignment_contract": {"const": "final-align-v1"}},
+            "required": ["alignment_contract"]
+          },
+          "then": {
+            "required": ["audio_path", "start_sample", "end_sample", "sample_rate", "text", "language", "manual_language", "quality_gate", "alignment_contract"],
+            "properties": {
+              "audio_path": {"type": "string", "pattern": "^/"},
+              "start_sample": {"type": "integer", "minimum": 0},
+              "end_sample": {"type": "integer", "minimum": 1},
+              "sample_rate": {"const": 16000},
+              "text": {"type": "string", "minLength": 1},
+              "language": {"enum": ["zh", "ja", "en"]},
+              "manual_language": {"const": true},
+              "alignment_contract": {"const": "final-align-v1"},
+              "safe_max_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 30},
+              "quality_gate": {
+                "type": "object",
+                "required": ["no_decode_loop", "no_missing_text", "normal_character_rate", "language_matches", "coverage_ratio", "voiced_seconds"],
+                "properties": {
+                  "no_decode_loop": {"const": true},
+                  "no_missing_text": {"const": true},
+                  "normal_character_rate": {"const": true},
+                  "language_matches": {"const": true},
+                  "coverage_ratio": {"type": "number", "minimum": 0.5, "maximum": 1},
+                  "voiced_seconds": {"type": "number", "exclusiveMinimum": 0}
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"method": {"const": "transcribe_pcm"}}},
+      "then": {
+        "properties": {
+          "params": {
+            "required": ["pcm_s16le", "absolute_start_sample", "core_start_sample", "end_sample", "sample_rate", "channels", "language", "rolling_context"],
+            "properties": {
+              "absolute_start_sample": {"type": "integer", "minimum": 0},
+              "core_start_sample": {"type": "integer", "minimum": 0},
+              "end_sample": {"type": "integer", "minimum": 1},
+              "sample_rate": {"const": 16000},
+              "channels": {"const": 1},
+              "language": {"enum": ["zh", "ja", "en"]},
+              "rolling_context": {
+                "type": "array",
+                "maxItems": 3,
+                "items": {"type": "string", "minLength": 1}
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "body_asr_hint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["canonical", "reading", "category"],
+      "properties": {
+        "canonical": {"type": "string", "minLength": 1},
+        "reading": {"type": "string", "minLength": 1},
+        "category": {
+          "enum": [
+            "course_term",
+            "person",
+            "place",
+            "organization",
+            "plant",
+            "drug",
+            "formula_reading"
+          ]
+        },
+        "language": {"enum": ["zh", "ja", "en"]}
+      }
+    },
+    "body_asr_decode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "temperature",
+        "do_sample",
+        "seed",
+        "batch_size",
+        "mixed_length_batch",
+        "max_new_tokens",
+        "max_output_characters"
+      ],
+      "properties": {
+        "temperature": {"const": 0.0},
+        "do_sample": {"const": false},
+        "seed": {"type": "integer", "minimum": 0},
+        "batch_size": {"const": 1},
+        "mixed_length_batch": {"const": false},
+        "max_new_tokens": {"type": "integer", "minimum": 1},
+        "max_output_characters": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

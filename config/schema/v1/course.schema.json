@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://classscribe.local/schema/v1/course.schema.json",
+  "title": "ClassScribe course configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["course_id", "language", "name", "terms"],
+  "properties": {
+    "course_id": {"type": "string", "minLength": 1},
+    "language": {"enum": ["zh", "ja", "en"]},
+    "name": {"type": "string", "minLength": 1},
+    "chapter": {"type": "string", "minLength": 1},
+    "version": {"type": "integer", "minimum": 1, "default": 1},
+    "instructors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["canonical", "reading"],
+        "properties": {
+          "canonical": {"type": "string", "minLength": 1},
+          "reading": {"type": "string", "minLength": 1}
+        }
+      },
+      "default": []
+    },
+    "terms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["canonical", "reading"],
+        "properties": {
+          "canonical": {"type": "string", "minLength": 1},
+          "reading": {"type": "string", "minLength": 1},
+          "aliases": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true, "default": []},
+          "weight": {"type": "number", "minimum": 0, "maximum": 1, "default": 1},
+          "source": {"enum": ["manual", "txt", "markdown", "csv", "pptx", "pdf", "handout", "textbook", "historical_confirmed", "automatic_suggestion"], "default": "manual"},
+          "confirmation": {"enum": ["confirmed", "suggested"], "default": "confirmed"},
+          "language": {"enum": ["zh", "ja", "en"]},
+          "chapter": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

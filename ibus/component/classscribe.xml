@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component>
+  <name>org.freedesktop.IBus.ClassScribe</name>
+  <description>ClassScribe Voice</description>
+  <exec>/usr/libexec/ibus-engine-classscribe</exec>
+  <version>0.1.0</version>
+  <license>LicenseRef-ClassScribe-Personal</license>
+  <author>ClassScribe</author>
+  <homepage>https://classscribe.local/</homepage>
+  <textdomain>classscribe</textdomain>
+  <engines>
+    <engine>
+      <name>classscribe-voice</name>
+      <longname>ClassScribe Voice</longname>
+      <description>Local Chinese, Japanese, English, and mixed-language voice input</description>
+      <language>zh,ja,en</language>
+      <license>LicenseRef-ClassScribe-Personal</license>
+      <author>ClassScribe</author>
+      <icon>classscribe</icon>
+      <layout>default</layout>
+      <symbol>CS</symbol>
+      <setup>/usr/libexec/classscribe-launcher</setup>
+    </engine>
+  </engines>
+</component>
