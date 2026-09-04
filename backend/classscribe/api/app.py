@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import os
 import stat
@@ -18,7 +19,7 @@ from classscribe_protocol import (
     default_dictation_socket,
 )
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from classscribe.api.routes import create_api_router
@@ -35,6 +36,8 @@ from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.paths import AppPaths
 from classscribe.scheduler import GPULeaseIPCServer, GPULeaseManager
 from classscribe.version import __version__
+
+WEBUI_TOKEN_PLACEHOLDER = "__CLASSSCRIBE_API_TOKEN__"
 
 
 def health_status() -> dict[str, str | int]:
@@ -150,8 +153,24 @@ def create_app(
 
     application.include_router(create_api_router(api_service))  # type: ignore[arg-type]
     if static_directory is not None:
-        if static_directory.is_symlink() or not (static_directory / "index.html").is_file():
+        index_path = static_directory / "index.html"
+        if static_directory.is_symlink() or not index_path.is_file() or index_path.is_symlink():
             raise ValueError("WebUI directory must contain a non-symlink index.html")
+        if api_token is None:
+            raise ValueError("WebUI requires an API token")
+        index_template = index_path.read_text(encoding="utf-8")
+        if index_template.count(WEBUI_TOKEN_PLACEHOLDER) != 1:
+            raise ValueError("WebUI index.html must contain exactly one API token placeholder")
+        rendered_index = index_template.replace(
+            WEBUI_TOKEN_PLACEHOLDER,
+            html.escape(api_token, quote=True),
+        )
+
+        @application.get("/", include_in_schema=False)
+        @application.get("/index.html", include_in_schema=False)
+        async def webui_index() -> HTMLResponse:
+            return HTMLResponse(rendered_index)
+
         application.mount("/", StaticFiles(directory=static_directory, html=True), name="webui")
 
     return application

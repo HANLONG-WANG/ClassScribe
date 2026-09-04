@@ -28,7 +28,8 @@ FastAPI 的版本化接口位于 `/api/v1`，OpenAPI 由同一路由直接生成
 API 只接受 UUID 资源 ID。上传的显示文件名不能包含路径，下载路径只由数据库记录和 XDG
 受限根反查；任何任意系统路径、symlink 或根外解析都会被拒绝。错误使用稳定的机器码响应，
 不会回传物理文件路径。所有 `/api/` 请求要求 bearer，所有 POST/PUT/PATCH/DELETE 还要求与
-token 常量时间匹配的 `X-ClassScribe-CSRF`。导出先在同目录原子写入，再登记 artifact。
+token 常量时间匹配的 `X-ClassScribe-CSRF-Token`。WebUI 首页只在运行时响应中注入 bearer，
+不会把它写入 URL 或静态构建产物。导出先在同目录原子写入，再登记 artifact。
 
 ## Web 工作台
 

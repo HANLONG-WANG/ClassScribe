@@ -3,8 +3,12 @@ export type ApiObject = Record<string, unknown>;
 const tokenMeta = document.querySelector<HTMLMetaElement>(
   'meta[name="classscribe-api-token"]',
 );
+const injectedToken = tokenMeta?.content.trim();
 let apiToken =
-  tokenMeta?.content ?? sessionStorage.getItem("classscribe-token") ?? "";
+  (injectedToken === "__CLASSSCRIBE_API_TOKEN__" ? "" : injectedToken) ||
+  sessionStorage.getItem("classscribe-token")?.trim() ||
+  "";
+tokenMeta?.remove();
 
 export function setApiToken(token: string) {
   apiToken = token;

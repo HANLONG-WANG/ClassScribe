@@ -24,6 +24,7 @@ from classscribe.db.models import (
     TranscriptSegment,
 )
 from classscribe.diagnostics import DiagnosticSnapshot
+from classscribe.errors import ErrorCode
 from classscribe.models import (
     DownloadReceipt,
     HealthCheckOutcome,
@@ -57,6 +58,7 @@ async def request(
 ) -> Response:
     parsed = urlsplit(path)
     query_string = urlencode(query or {}).encode("ascii")
+    request_headers = {"Host": "127.0.0.1:8765", **(headers or {})}
     scope = cast(
         Scope,
         {
@@ -71,7 +73,7 @@ async def request(
             "root_path": "",
             "headers": [
                 (name.lower().encode("ascii"), value.encode("utf-8"))
-                for name, value in (headers or {}).items()
+                for name, value in request_headers.items()
             ],
             "client": ("127.0.0.1", 50_000),
             "server": ("127.0.0.1", 8765),
@@ -313,9 +315,14 @@ def test_built_webui_is_served_without_shadowing_versioned_api(tmp_path: Path) -
     service, _ = service_fixture(tmp_path)
     web = tmp_path / "web"
     web.mkdir()
-    (web / "index.html").write_text("<h1>ClassScribe workbench</h1>", encoding="utf-8")
+    token = "t" * 43
+    (web / "index.html").write_text(
+        '<meta name="classscribe-api-token" content="__CLASSSCRIBE_API_TOKEN__">'
+        "<h1>ClassScribe workbench</h1>",
+        encoding="utf-8",
+    )
     app = create_app(
-        api_token="t" * 43,
+        api_token=token,
         csrf_token="c" * 43,
         service=service,
         static_directory=web,
@@ -325,13 +332,30 @@ def test_built_webui_is_served_without_shadowing_versioned_api(tmp_path: Path) -
         root = await request(app, "GET", "/")
         assert root.status == 200
         assert "ClassScribe workbench" in root.content.decode("utf-8")
+        assert f'content="{token}"' in root.content.decode("utf-8")
+        assert "__CLASSSCRIBE_API_TOKEN__" not in root.content.decode("utf-8")
+        assert root.headers["cache-control"] == "no-store"
+        explicit_index = await request(app, "GET", "/index.html")
+        assert explicit_index.status == 200
+        assert explicit_index.content == root.content
         models = await request(
             app,
             "GET",
             "/api/v1/models",
-            headers=auth("t" * 43, "c" * 43),
+            headers=auth(token, "c" * 43),
         )
         assert models.status == 200
+        glossaries = await request(
+            app,
+            "GET",
+            "/api/v1/glossaries",
+            headers=auth(token, "c" * 43),
+        )
+        assert glossaries.status == 200
+
+        rejected_host = await request(app, "GET", "/", headers={"Host": "attacker.example"})
+        assert rejected_host.status == 403
+        assert rejected_host.json()["error"]["code"] == ErrorCode.NON_LOOPBACK_CLIENT.value
 
     asyncio.run(scenario())
 

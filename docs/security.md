@@ -3,13 +3,15 @@
 ## API
 
 - core 的配置只允许 `127.0.0.1`、`::1` 或 `localhost`，运行时中间件再次拒绝非
-  loopback 客户端。
+  loopback 客户端，并拒绝非 loopback 的 HTTP `Host`，防止通过 DNS rebinding 绕过来源边界。
 - 首次启动以 CSPRNG 生成 32 bytes（256-bit）url-safe bearer token，保存在
   `${XDG_CONFIG_HOME}/classscribe/api-token`。目录为 `0700`，文件必须是当前用户拥有的
   普通文件、非 symlink、权限严格 `0600`。
 - `/api/` 下所有读写路由都要求 `Authorization: Bearer ...`，使用常量时间比较；不使用
   Cookie，因此不建立可被跨站请求自动携带的认证状态。
-- POST/PUT/PATCH/DELETE 还必须提交 `X-ClassScribe-CSRF`，其值与 bearer token 常量时间
+- WebUI 首页只在运行时响应中注入 bearer token；token 不进入静态构建产物、URL 或日志，
+  浏览器读取后立即从 DOM 移除。
+- POST/PUT/PATCH/DELETE 还必须提交 `X-ClassScribe-CSRF-Token`，其值与 bearer token 常量时间
   比较；缺失或错误均在进入业务层前拒绝。
 - 所有响应添加 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff` 和
   `Referrer-Policy: no-referrer`。

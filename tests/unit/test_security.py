@@ -39,6 +39,7 @@ async def asgi_request(
     headers: dict[str, str] | None = None,
     client_host: str = "127.0.0.1",
 ) -> ASGIResponse:
+    request_headers = {"Host": "127.0.0.1:8765", **(headers or {})}
     scope = cast(
         Scope,
         {
@@ -53,7 +54,7 @@ async def asgi_request(
             "root_path": "",
             "headers": [
                 (name.lower().encode("ascii"), value.encode("ascii"))
-                for name, value in (headers or {}).items()
+                for name, value in request_headers.items()
             ],
             "client": (client_host, 50_000),
             "server": ("127.0.0.1", 8765),
@@ -173,6 +174,22 @@ def test_non_loopback_client_is_rejected_even_for_health() -> None:
 
     async def scenario() -> None:
         response = await asgi_request(app, "GET", "/healthz", client_host="192.0.2.1")
+        assert response.status == 403
+        assert response.body["error"]["code"] == ErrorCode.NON_LOOPBACK_CLIENT.value
+
+    asyncio.run(scenario())
+
+
+def test_non_loopback_host_header_is_rejected() -> None:
+    app = create_app(api_token="s" * 43, diagnostic_provider=diagnostic_fixture)
+
+    async def scenario() -> None:
+        response = await asgi_request(
+            app,
+            "GET",
+            "/healthz",
+            headers={"Host": "attacker.example"},
+        )
         assert response.status == 403
         assert response.body["error"]["code"] == ErrorCode.NON_LOOPBACK_CLIENT.value
 

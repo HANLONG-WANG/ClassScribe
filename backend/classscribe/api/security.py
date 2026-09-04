@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from fastapi import status
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.responses import JSONResponse
@@ -9,6 +11,21 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from classscribe.errors import ErrorCode
 from classscribe.security import TokenStore, is_loopback_host
+
+
+def _is_allowed_host_header(value: str) -> bool:
+    """Reject non-loopback and malformed Host values, including DNS rebinding hosts."""
+
+    if not value or value.endswith(":") or any(character.isspace() for character in value):
+        return False
+    if any(character in value for character in "/?#@"):
+        return False
+    try:
+        parsed = urlsplit(f"//{value}")
+        _ = parsed.port  # Validate a supplied port without requiring the configured port here.
+    except ValueError:
+        return False
+    return parsed.hostname in {"127.0.0.1", "localhost", "::1"}
 
 
 class LocalSecurityMiddleware:
@@ -34,8 +51,16 @@ class LocalSecurityMiddleware:
                 "ClassScribe accepts loopback clients only",
             )(scope, receive, send)
             return
+        headers = Headers(scope=scope)
+        if not _is_allowed_host_header(headers.get("host", "")):
+            await self._error(
+                status.HTTP_403_FORBIDDEN,
+                ErrorCode.NON_LOOPBACK_CLIENT,
+                "ClassScribe accepts loopback Host headers only",
+            )(scope, receive, send)
+            return
         if scope["path"].startswith("/api/"):
-            authorization = Headers(scope=scope).get("authorization", "")
+            authorization = headers.get("authorization", "")
             scheme, _, supplied = authorization.partition(" ")
             if scheme.lower() != "bearer" or not supplied:
                 await self._error(
@@ -52,7 +77,7 @@ class LocalSecurityMiddleware:
                 )(scope, receive, send)
                 return
             if scope["method"] in {"POST", "PUT", "PATCH", "DELETE"}:
-                csrf = Headers(scope=scope).get("x-classscribe-csrf-token", "")
+                csrf = headers.get("x-classscribe-csrf-token", "")
                 if self.csrf_token is None or not TokenStore.verify(self.csrf_token, csrf):
                     await self._error(
                         status.HTTP_403_FORBIDDEN,

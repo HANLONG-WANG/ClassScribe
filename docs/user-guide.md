@@ -12,7 +12,8 @@ curl --fail http://127.0.0.1:8765/healthz
 
 桌面菜单中的 **ClassScribe** 会启动用户级 core 服务，健康后打开
 `http://127.0.0.1:8765/`。API 只监听 loopback；bearer token 和 CSRF token 位于用户的
-0700 runtime/config 目录，不要复制到截图、日志或工单。
+0700 runtime/config 目录。WebUI 首页会在运行时为当前页面注入 token，浏览器不会把它写入
+URL；不要把 token 复制到截图、日志或工单。
 
 若 `classscribe-release-check` 返回非零，先阅读输出中的 `reasons`。它表示当前树不能签名
 发布，不表示已有本地数据损坏。

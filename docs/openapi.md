@@ -3,7 +3,7 @@
 运行 core 后，交互式文档位于 `http://127.0.0.1:8765/docs`，机器合同位于
 `http://127.0.0.1:8765/openapi.json`。两者只在 loopback 提供。`/healthz` 无需认证；其他 API
 使用 `/api/v1` 前缀并要求 `Authorization: Bearer <token>`。POST/PUT/PATCH/DELETE 还要求
-`X-CSRF-Token`，不接受 query/cookie 代替。
+`X-ClassScribe-CSRF-Token`，不接受 query/cookie 代替。
 
 ## 资源组
 
