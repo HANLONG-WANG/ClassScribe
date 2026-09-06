@@ -22,9 +22,25 @@ manifest、普通 YAML、日志、诊断和供应链记录均不得写入 token�
 - 安装后的每个文件相对路径、精确 byte size、SHA-256 和类型；
 - `trust_remote_code` 标志。
 
-若 `trust_remote_code=true`，至少一个逐文件哈希的代码快照必须位于 revision 下的
-`code/`；反之 manifest 不得偷偷携带 remote-code 文件。绝对路径、`..`、重复路径、
-symlink、未列出的文件和缺失文件全部拒绝。
+`ManifestFile.path` 同时是上游 repository 路径和安装 revision 内路径，下载与安装必须原样
+保留布局，不重写、搬移或复制。若 `trust_remote_code=true`，至少一个文件必须显式分类为
+`remote_code`；该文件可以位于任意安全的根级或嵌套上游路径。反之 manifest 不得偷偷携带
+remote-code 文件。remote code 的信任边界由显式 kind、逐文件 SHA-256、bundle 记录的
+manifest SHA-256、`supply-chain.json` 审计和无网络 Bubblewrap 隔离共同建立。绝对路径、
+`..`、重复路径、symlink、未列出的文件和缺失文件全部拒绝。
+
+生产清单位于只读的 `config/model-manifests/v1/`：`bundle.v1.json` 索引注册表全部 20 个模型，
+并以 SHA-256 绑定同目录的 20 个单模型 manifest。core 只从该索引加载清单并核对 registry、
+revision lock、许可证 inventory、worker lock 和实际 lock bytes；release checker 另行核对人工
+selection 与 release inventory。缺件、额外成员、任一 byte 漂移或合同不一致都会使整个 bundle
+失败。普通 API 不接受客户端 manifest；公开的只读 manifest 接口仅用于展示发布方已经冻结的
+内容与 SHA。
+
+bundle 生成器属于单独冻结依赖的发布期工具，只能由明确的发布操作联网访问固定 Hugging Face
+repository/commit/文件集合；gated repository 还必须显式传入已接受条款的 repository ID。生成器
+凭证只进入请求 header，双 clean generation 和独立离线 verifier 通过后才允许覆盖 production JSON。
+该工具及其联网权限不进入 core 的运行期解析、推理或任务恢复路径。用户确认的模型安装是另一条、
+逐模型的一次性联网授权，不能复用发布期生成授权，也不能由 runtime 自动触发。
 
 ## 安装事务
 
@@ -42,8 +58,9 @@ symlink、未列出的文件和缺失文件全部拒绝。
 7. 健康后记录 `model_installations`，再原子写 `active.json`。任一环节失败会清理新 revision
    并保持／恢复旧 active revision。
 
-HTTP 流程固定为两步：`POST /api/v1/models/{model_id}/install` 只校验 manifest、冻结许可证披露、
-空间和环境并返回确认 token；`POST /api/v1/models/{model_id}/install/confirm` 必须再次提交 token、
+HTTP 流程固定为两步：`POST /api/v1/models/{model_id}/install` 接收空 JSON 对象，按 model ID 从
+内置 bundle 取 manifest，校验冻结许可证披露、空间和环境并返回确认 token；
+`POST /api/v1/models/{model_id}/install/confirm` 必须再次提交 token、
 健康检查录音 UUID、语言、可选参考文本和 `terms_accepted`。需要 gated 条款却未明确接受、token
 对应其他模型，或 manifest 许可证与 `config/model-licenses.v1.json` 不一致时，在联网前拒绝。
 

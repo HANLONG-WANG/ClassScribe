@@ -78,6 +78,29 @@ def test_downloader_rejects_oversize_and_unsafe_repository(tmp_path: Path) -> No
         )
 
 
+def test_downloader_rejects_symlinked_manifest_parent(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    destination = tmp_path / "payload"
+    destination.mkdir()
+    (destination / "weights").symlink_to(outside, target_is_directory=True)
+    downloader = HuggingFaceDownloader(timeout_seconds=3)
+    opener = Opener([b"model"])
+    downloader._opener = opener  # type: ignore[assignment]
+
+    with pytest.raises(ClassScribeError) as raised:
+        downloader.download(
+            repository="Owner/Model",
+            revision="b" * 40,
+            destination=destination,
+            files=(manifest_file("weights/model.bin", b"model"),),
+        )
+
+    assert raised.value.code is ErrorCode.MODEL_INTEGRITY_FAILED
+    assert not opener.requests
+    assert not list(outside.iterdir())
+
+
 def test_redirect_handler_rejects_off_provider_and_strips_cross_host_auth() -> None:
     handler = _PinnedRedirectHandler()
     request = Request("https://huggingface.co/Owner/Model/resolve/revision/model.bin")

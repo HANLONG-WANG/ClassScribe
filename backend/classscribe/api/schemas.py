@@ -140,7 +140,7 @@ class ApplyRanking(APIModel):
 
 
 class ModelInstallRequest(APIModel):
-    manifest: dict[str, Any]
+    pass
 
 
 class ModelInstallConfirmation(APIModel):

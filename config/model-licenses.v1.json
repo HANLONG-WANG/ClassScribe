@@ -20,6 +20,7 @@
     {"repository":"mistralai/Voxtral-Mini-4B-Realtime-2602","license_id":"Apache-2.0","license_url":"https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
     {"repository":"microsoft/VibeVoice-ASR-Streaming-1.5B","license_id":"MIT","license_url":"https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-1.5B","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
     {"repository":"pyannote/speaker-diarization-community-1","license_id":"CC-BY-4.0","license_url":"https://huggingface.co/pyannote/speaker-diarization-community-1","requires_terms_acceptance":true,"verified_as_of":"2026-09-03"},
+    {"repository":"pyannote/wespeaker-voxceleb-resnet34-LM","license_id":"CC-BY-4.0","license_url":"https://huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
     {"repository":"FunAudioLLM/Fun-ASR-Nano-2512-hf","license_id":"Apache-2.0","license_url":"https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512-hf","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"},
     {"repository":"Systran/faster-whisper-tiny","license_id":"MIT","license_url":"https://huggingface.co/Systran/faster-whisper-tiny","requires_terms_acceptance":false,"verified_as_of":"2026-09-03"}
   ]

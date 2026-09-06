@@ -1,0 +1,70 @@
+{
+  "environment": {
+    "dtype": "float16",
+    "python": "3.12",
+    "runtime_backend": "transformers_ctc",
+    "worker_lock": "workers/granite/uv.lock",
+    "worker_lock_sha256": "6851d5ef4d39956290e5207530db80e9390e68bf1ed1c5d17dcb80b37f4483af"
+  },
+  "estimated_download_bytes": 947332980,
+  "files": [
+    {
+      "kind": "config",
+      "path": "config.json",
+      "sha256": "41b72a7596bebe5106573f9e0f64c6b0acdac145373386946e7d1ef277fe0c9f",
+      "size_bytes": 926
+    },
+    {
+      "kind": "config",
+      "path": "generation_config.json",
+      "sha256": "e9eef52b79e24b329889157f75e02aea236c429552a4a986dd5fffb349809208",
+      "size_bytes": 158
+    },
+    {
+      "kind": "model",
+      "path": "model.safetensors",
+      "sha256": "8b98a8c34fd5fcb081caef719638eded31bb6d197d62053eefc5c1703aaf1ad4",
+      "size_bytes": 946180704
+    },
+    {
+      "kind": "config",
+      "path": "preprocessor_config.json",
+      "sha256": "4ff826570a74cd33092d467b16eb1c5c22c46c6f1b78a35aed1decdf90f4a3fe",
+      "size_bytes": 327
+    },
+    {
+      "kind": "remote_code",
+      "path": "processing_ctc_conformer.py",
+      "sha256": "da09d4a01ff761ed653f1aefe195518c7345177504da9754a2ab62712d6124f7",
+      "size_bytes": 12721
+    },
+    {
+      "kind": "config",
+      "path": "processor_config.json",
+      "sha256": "3d7c14d3ed7a5218b2fd6797eaa5b3aa615c681938bd1734a510d7a6f8c1b9fb",
+      "size_bytes": 430
+    },
+    {
+      "kind": "tokenizer",
+      "path": "tokenizer.json",
+      "sha256": "3ee80b02f0119a040a70eb909c20fac8271c173d7e71d195a3b35f77780061e6",
+      "size_bytes": 1137492
+    },
+    {
+      "kind": "tokenizer",
+      "path": "tokenizer_config.json",
+      "sha256": "5c7ddc8d2a6b0f6b009e0a7629af67f5d29a98d5e722fe435cf1be2da84c778f",
+      "size_bytes": 222
+    }
+  ],
+  "installed_size_bytes": 947332980,
+  "license_id": "Apache-2.0",
+  "license_url": "https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc",
+  "manifest_version": 1,
+  "model_id": "granite_speech_5_0_turboctc_470m",
+  "repository": "ibm-granite/granite-speech-5.0-470m-turboctc",
+  "requires_terms_acceptance": false,
+  "revision": "18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0",
+  "trust_remote_code": true,
+  "worker": "granite"
+}

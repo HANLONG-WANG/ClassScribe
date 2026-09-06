@@ -1,0 +1,25 @@
+{
+  "acknowledgements": {
+    "does_not_claim_desktop_compatibility": true,
+    "does_not_claim_phase12_acceptance": true,
+    "does_not_grant_redistribution_rights": true,
+    "raw_checks_remain_failed": true
+  },
+  "authorization": {
+    "authorized_on": "2026-09-06",
+    "basis": "explicit_release_owner_instruction",
+    "scope": "automated_release_blocking_only"
+  },
+  "release": {
+    "facts_cutoff": "2026-09-03",
+    "registry_revision": 1,
+    "version": "0.1.0"
+  },
+  "schema_version": 1,
+  "waived_gates": [
+    "source_license",
+    "phase12_acceptance",
+    "desktop_matrix"
+  ],
+  "waiver_id": "classscribe-0.1.0-release-blocking-2026-09-06"
+}

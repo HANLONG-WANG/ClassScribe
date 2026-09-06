@@ -112,15 +112,17 @@ def test_qwen_forced_aligner_uses_canonical_crop_and_absolute_samples(
             captured["load"] = kwargs
             return cls()
 
-        def align(self, **kwargs: object) -> list[list[SimpleNamespace]]:
+        def align(self, **kwargs: object) -> list[SimpleNamespace]:
             captured["align"] = kwargs
             with wave.open(str(kwargs["audio"]), "rb") as reader:
                 captured["samples"] = reader.getnframes()
             return [
-                [
-                    SimpleNamespace(text="one", start_time=0.0, end_time=1.0),
-                    SimpleNamespace(text="two", start_time=1.0, end_time=2.0),
-                ]
+                SimpleNamespace(
+                    items=[
+                        SimpleNamespace(text="one", start_time=0.0, end_time=1.0),
+                        SimpleNamespace(text="two", start_time=1.0, end_time=2.0),
+                    ]
+                )
             ]
 
     qwen.__dict__["Qwen3ForcedAligner"] = Model

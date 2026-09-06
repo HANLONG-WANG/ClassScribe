@@ -24,6 +24,15 @@ export function authHeaders(write = false): HeadersInit {
   return headers;
 }
 
+function publicErrorDetail(detail: string) {
+  return detail
+    .replace(/\bauthorization\s*[:=]\s*bearer\s+\S+/giu, "[REDACTED]")
+    .replace(/\bbearer\s+\S+/giu, "[REDACTED]")
+    .replace(/\bhf_[a-z0-9]{8,}\b/giu, "[REDACTED]")
+    .replace(/(^|[\s="'(])\/(?:[^/\s]+\/)+[^/\s]*/gu, "$1[LOCAL_PATH]")
+    .replace(/\b[A-Z]:\\(?:[^\\\s]+\\)+[^\\\s]*/giu, "[LOCAL_PATH]");
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = init.method?.toUpperCase() ?? "GET";
   const write = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
@@ -40,8 +49,9 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       error?: { detail?: string };
     };
     throw new Error(
-      payload.error?.detail ??
-        `${String(response.status)} ${response.statusText}`,
+      payload.error?.detail
+        ? publicErrorDetail(payload.error.detail)
+        : `${String(response.status)} ${response.statusText}`,
     );
   }
   return (await response.json()) as T;
@@ -70,6 +80,7 @@ export interface Recording {
   duration_samples: number;
   sample_rate: number;
   channels: number;
+  audio_qc: ApiObject;
   media_url: string;
 }
 
@@ -143,6 +154,23 @@ export interface Candidate {
   adopted: boolean;
 }
 
+export interface ModelComponentSourceFile {
+  installed_path: string;
+  source_path: string;
+  source_sha256: string;
+  source_size_bytes: number;
+}
+
+export interface ModelComponentSource {
+  repository: string;
+  revision: string;
+  relationship: "copied" | "derived";
+  license_id: string;
+  license_url: string;
+  requires_terms_acceptance: boolean;
+  files: ModelComponentSourceFile[];
+}
+
 export interface ModelInfo {
   id: string;
   name: string;
@@ -152,6 +180,16 @@ export interface ModelInfo {
   tasks: string[];
   enabled: boolean;
   experimental: boolean;
+  manifest_available: boolean;
+  manifest_sha256: string | null;
+  estimated_download_bytes: number | null;
+  installed_size_bytes: number | null;
+  remote_code_file_count: number | null;
+  component_source_count: number | null;
+  component_sources: ModelComponentSource[] | null;
+  worker_implemented: boolean;
+  installable: boolean;
+  install_block_reason: string | null;
   estimated_vram_mb: number;
   installation: {
     state: string;

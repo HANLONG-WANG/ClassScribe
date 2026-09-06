@@ -4,6 +4,16 @@
   "title": "ClassScribe pinned offline model manifest",
   "type": "object",
   "additionalProperties": false,
+  "$defs": {
+    "safe_relative_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*\\\\)(?!.*[\\u0000-\\u001f\\u007f])[^/]+(?:/[^/]+)*$",
+      "not": { "const": "supply-chain.json" }
+    },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
   "required": [
     "manifest_version",
     "model_id",
@@ -31,6 +41,57 @@
     "trust_remote_code": { "type": "boolean" },
     "estimated_download_bytes": { "type": "integer", "minimum": 0 },
     "installed_size_bytes": { "type": "integer", "minimum": 0 },
+    "component_sources": {
+      "type": "array",
+      "uniqueItems": true,
+      "description": "Optional, repository-sorted provenance for installed files copied or derived from fixed component repositories distinct from the payload repository.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "repository",
+          "revision",
+          "relationship",
+          "license_id",
+          "license_url",
+          "requires_terms_acceptance",
+          "files"
+        ],
+        "properties": {
+          "repository": { "type": "string", "pattern": "^[^\\s/]+/[^\\s/]+$" },
+          "revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "relationship": { "enum": ["copied", "derived"] },
+          "license_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9.+-]{0,127}$"
+          },
+          "license_url": { "type": "string", "format": "uri", "pattern": "^https://" },
+          "requires_terms_acceptance": { "type": "boolean" },
+          "files": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "description": "Files sorted by installed_path; copied entries must also match the installed file SHA and size.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "installed_path",
+                "source_path",
+                "source_sha256",
+                "source_size_bytes"
+              ],
+              "properties": {
+                "installed_path": { "$ref": "#/$defs/safe_relative_path" },
+                "source_path": { "$ref": "#/$defs/safe_relative_path" },
+                "source_sha256": { "$ref": "#/$defs/sha256" },
+                "source_size_bytes": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        }
+      }
+    },
     "environment": {
       "type": "object",
       "additionalProperties": { "type": "string" }
@@ -38,12 +99,21 @@
     "files": {
       "type": "array",
       "minItems": 1,
+      "uniqueItems": true,
+      "description": "Files sorted by path in Unicode code-point order with no duplicate paths.",
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["path", "sha256", "size_bytes", "kind"],
         "properties": {
-          "path": { "type": "string", "minLength": 1 },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024,
+            "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)(?!.*\\\\)(?!.*[\\u0000-\\u001f\\u007f])[^/]+(?:/[^/]+)*$",
+            "not": { "const": "supply-chain.json" },
+            "description": "Safe relative path preserved exactly from the upstream repository and used unchanged inside the installed revision; remote_code files may be at any safe root or nested path."
+          },
           "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
           "size_bytes": { "type": "integer", "minimum": 0 },
           "kind": {
@@ -52,5 +122,37 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "trust_remote_code": { "const": true } },
+        "required": ["trust_remote_code"]
+      },
+      "then": {
+        "properties": {
+          "files": {
+            "contains": {
+              "type": "object",
+              "properties": { "kind": { "const": "remote_code" } },
+              "required": ["kind"]
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "files": {
+            "not": {
+              "contains": {
+                "type": "object",
+                "properties": { "kind": { "const": "remote_code" } },
+                "required": ["kind"]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

@@ -63,7 +63,7 @@ models:
     responses: {segment_timestamps: false, word_timestamps: true, confidence: true, logprobs: false, punctuation: false, speakers: false, hotwords: false}
     resources: {vram_class: medium, estimated_vram_mb: 5200, measured_vram_mb: null, safety_margin_mb: 1536}
     dependency_lock: workers/firered/uv.lock
-    dependency_lock_sha256: 665c38b91fa6ada3e7bbe469c242dff5d4e011d3cb96c41f8bea21f1cf804e93
+    dependency_lock_sha256: 14543cb7df6705b7ec82ef75e4a265bf2edf9e7f8b4e9465560ac4114b26f445
     installation: {state: not_installed, artifact_sha256: null, local_revision: null}
     benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
     enabled: true
@@ -91,7 +91,7 @@ models:
     responses: {segment_timestamps: false, word_timestamps: false, confidence: false, logprobs: false, punctuation: false, speakers: false, hotwords: false}
     resources: {vram_class: too_large, estimated_vram_mb: 18000, measured_vram_mb: null, safety_margin_mb: 2048}
     dependency_lock: workers/firered/uv.lock
-    dependency_lock_sha256: 665c38b91fa6ada3e7bbe469c242dff5d4e011d3cb96c41f8bea21f1cf804e93
+    dependency_lock_sha256: 14543cb7df6705b7ec82ef75e4a265bf2edf9e7f8b4e9465560ac4114b26f445
     installation: {state: not_installed, artifact_sha256: null, local_revision: null}
     benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
     enabled: false
@@ -119,7 +119,7 @@ models:
     responses: {segment_timestamps: true, word_timestamps: false, confidence: true, logprobs: false, punctuation: false, speakers: false, hotwords: false}
     resources: {vram_class: tiny, estimated_vram_mb: 512, measured_vram_mb: null, safety_margin_mb: 1024}
     dependency_lock: workers/firered/uv.lock
-    dependency_lock_sha256: 665c38b91fa6ada3e7bbe469c242dff5d4e011d3cb96c41f8bea21f1cf804e93
+    dependency_lock_sha256: 14543cb7df6705b7ec82ef75e4a265bf2edf9e7f8b4e9465560ac4114b26f445
     installation: {state: not_installed, artifact_sha256: null, local_revision: null}
     benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
     enabled: true
@@ -147,7 +147,7 @@ models:
     responses: {segment_timestamps: false, word_timestamps: false, confidence: true, logprobs: false, punctuation: false, speakers: false, hotwords: false}
     resources: {vram_class: tiny, estimated_vram_mb: 768, measured_vram_mb: null, safety_margin_mb: 1024}
     dependency_lock: workers/firered/uv.lock
-    dependency_lock_sha256: 665c38b91fa6ada3e7bbe469c242dff5d4e011d3cb96c41f8bea21f1cf804e93
+    dependency_lock_sha256: 14543cb7df6705b7ec82ef75e4a265bf2edf9e7f8b4e9465560ac4114b26f445
     installation: {state: not_installed, artifact_sha256: null, local_revision: null}
     benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
     enabled: true
@@ -175,7 +175,7 @@ models:
     responses: {segment_timestamps: false, word_timestamps: false, confidence: false, logprobs: false, punctuation: true, speakers: false, hotwords: false}
     resources: {vram_class: tiny, estimated_vram_mb: 1024, measured_vram_mb: null, safety_margin_mb: 1024}
     dependency_lock: workers/firered/uv.lock
-    dependency_lock_sha256: 665c38b91fa6ada3e7bbe469c242dff5d4e011d3cb96c41f8bea21f1cf804e93
+    dependency_lock_sha256: 14543cb7df6705b7ec82ef75e4a265bf2edf9e7f8b4e9465560ac4114b26f445
     installation: {state: not_installed, artifact_sha256: null, local_revision: null}
     benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
     enabled: true
@@ -203,7 +203,7 @@ models:
     responses: {segment_timestamps: false, word_timestamps: false, confidence: false, logprobs: false, punctuation: true, speakers: false, hotwords: true}
     resources: {vram_class: medium, estimated_vram_mb: 7200, measured_vram_mb: null, safety_margin_mb: 1536}
     dependency_lock: workers/granite/uv.lock
-    dependency_lock_sha256: 47bbe1eebda76d4a7e58656be6a5bd018e71e79691406121fde579881c6b0b45
+    dependency_lock_sha256: 6851d5ef4d39956290e5207530db80e9390e68bf1ed1c5d17dcb80b37f4483af
     installation: {state: not_installed, artifact_sha256: null, local_revision: null}
     benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
     enabled: true
@@ -223,7 +223,7 @@ models:
     input_sample_rate: 16000
     input_channels: 1
     input_dtype: pcm_s16le
-    runtime_backend: qwen_asr_vllm
+    runtime_backend: qwen_asr_transformers
     dtype: bfloat16
     trust_remote_code: false
     safe_operating_window_seconds: 120
@@ -251,7 +251,7 @@ models:
     input_sample_rate: 16000
     input_channels: 1
     input_dtype: pcm_s16le
-    runtime_backend: qwen_asr_vllm
+    runtime_backend: qwen_asr_transformers
     dtype: bfloat16
     trust_remote_code: false
     safe_operating_window_seconds: 120
@@ -371,7 +371,7 @@ models:
     responses: {segment_timestamps: false, word_timestamps: false, confidence: true, logprobs: false, punctuation: true, speakers: false, hotwords: false}
     resources: {vram_class: small, estimated_vram_mb: 3600, measured_vram_mb: null, safety_margin_mb: 1536}
     dependency_lock: workers/nemotron/uv.lock
-    dependency_lock_sha256: 5206e4929d63bcfb0daa330ad24234375da7c09019e356976fe6e53baf9a1a39
+    dependency_lock_sha256: b2f372c42831303a4decd4c6f358191b3373c7206acc5a23478280e651610505
     installation: {state: not_installed, artifact_sha256: null, local_revision: null}
     benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
     enabled: true
@@ -399,7 +399,7 @@ models:
     responses: {segment_timestamps: false, word_timestamps: false, confidence: true, logprobs: false, punctuation: true, speakers: false, hotwords: false}
     resources: {vram_class: small, estimated_vram_mb: 3400, measured_vram_mb: null, safety_margin_mb: 1536}
     dependency_lock: workers/nemotron/uv.lock
-    dependency_lock_sha256: 5206e4929d63bcfb0daa330ad24234375da7c09019e356976fe6e53baf9a1a39
+    dependency_lock_sha256: b2f372c42831303a4decd4c6f358191b3373c7206acc5a23478280e651610505
     installation: {state: not_installed, artifact_sha256: null, local_revision: null}
     benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
     enabled: true
@@ -421,13 +421,13 @@ models:
     input_dtype: pcm_s16le
     runtime_backend: transformers_ctc
     dtype: float16
-    trust_remote_code: false
+    trust_remote_code: true
     safe_operating_window_seconds: 30
     vendor_claimed_max_seconds: null
     responses: {segment_timestamps: false, word_timestamps: false, confidence: true, logprobs: true, punctuation: false, speakers: false, hotwords: false}
     resources: {vram_class: small, estimated_vram_mb: 2400, measured_vram_mb: null, safety_margin_mb: 1024}
     dependency_lock: workers/granite/uv.lock
-    dependency_lock_sha256: 47bbe1eebda76d4a7e58656be6a5bd018e71e79691406121fde579881c6b0b45
+    dependency_lock_sha256: 6851d5ef4d39956290e5207530db80e9390e68bf1ed1c5d17dcb80b37f4483af
     installation: {state: not_installed, artifact_sha256: null, local_revision: null}
     benchmark: {latest_run_id: null, results: {}, source: bootstrap_public_facts}
     enabled: true

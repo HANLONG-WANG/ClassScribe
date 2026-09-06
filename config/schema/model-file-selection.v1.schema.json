@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://classscribe.local/schema/model-file-selection.v1.schema.json",
+  "title": "ClassScribe Model File Selection v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "models"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "models": {
+      "type": "object",
+      "description": "Model IDs must be Unicode-sorted. Empty until fixed-revision discovery has been reviewed; every populated model uses exact paths only.",
+      "propertyNames": { "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$" },
+      "additionalProperties": { "$ref": "#/$defs/model_selection" }
+    }
+  },
+  "$defs": {
+    "safe_exact_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*(?:^|/)\\.(?:/|$))(?!.*//)(?!.*\\\\)(?!.*[*?\\[\\]])[^\\u0000-\\u001F\\u007F]+$",
+      "not": { "const": "supply-chain.json" }
+    },
+    "model_selection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["include", "kinds", "exclude"],
+      "properties": {
+        "include": {
+          "type": "array",
+          "description": "Non-empty, unique, Unicode-sorted exact upstream paths; patterns are forbidden.",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safe_exact_path" }
+        },
+        "kinds": {
+          "type": "object",
+          "description": "The loader requires keys to equal include exactly and normalizes them to include order.",
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/safe_exact_path" },
+          "additionalProperties": {
+            "enum": ["model", "tokenizer", "config", "remote_code", "other"]
+          }
+        },
+        "exclude": {
+          "type": "array",
+          "description": "Unique, Unicode-sorted exact paths intentionally excluded after discovery; patterns are forbidden and entries cannot overlap include.",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/safe_exact_path" }
+        }
+      }
+    }
+  }
+}

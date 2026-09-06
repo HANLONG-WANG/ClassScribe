@@ -1,0 +1,52 @@
+{
+  "environment": {
+    "dtype": "bfloat16",
+    "python": "3.12",
+    "runtime_backend": "vllm",
+    "worker_lock": "workers/voxtral/uv.lock",
+    "worker_lock_sha256": "004a9fda261ba0fe36afe6028304edc367dc752d3888d644b07583399f6b67b2"
+  },
+  "estimated_download_bytes": 8874359343,
+  "files": [
+    {
+      "kind": "config",
+      "path": "config.json",
+      "sha256": "96582f5809ad179531d47f9f89d76c696058fbdeff608d6611dcb7e076ea7e93",
+      "size_bytes": 1572
+    },
+    {
+      "kind": "config",
+      "path": "generation_config.json",
+      "sha256": "1fabdbadf2e0ea9e2c36e2a8460a53caa694c1324136e4158032b0a32ff6beec",
+      "size_bytes": 191
+    },
+    {
+      "kind": "model",
+      "path": "model.safetensors",
+      "sha256": "e745e4902df6a4c48f29f2f8dc1f6d0fb4cc73c7156bc45923451a5bcdfcd1d6",
+      "size_bytes": 8859446848
+    },
+    {
+      "kind": "config",
+      "path": "processor_config.json",
+      "sha256": "5fbc4247e0b3b72c1b501b872c4fd6432b1f0fcc1939dcdf1fa5142c6d2ce070",
+      "size_bytes": 384
+    },
+    {
+      "kind": "tokenizer",
+      "path": "tekken.json",
+      "sha256": "8434af1d39eba99f0ef46cf1450bf1a63fa941a26933a1ef5dbbf4adf0d00e44",
+      "size_bytes": 14910348
+    }
+  ],
+  "installed_size_bytes": 8874359343,
+  "license_id": "Apache-2.0",
+  "license_url": "https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602",
+  "manifest_version": 1,
+  "model_id": "voxtral_mini_4b_realtime_2602",
+  "repository": "mistralai/Voxtral-Mini-4B-Realtime-2602",
+  "requires_terms_acceptance": false,
+  "revision": "2769294da9567371363522aac9bbcfdd19447add",
+  "trust_remote_code": false,
+  "worker": "voxtral"
+}

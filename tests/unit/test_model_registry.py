@@ -33,6 +33,10 @@ def test_bootstrap_registry_is_complete_pinned_and_lock_verified() -> None:
         "vibevoice",
         "voxtral",
     }
+    assert {
+        registry.model(model_id).runtime_backend
+        for model_id in ("qwen3_asr_0_6b", "qwen3_asr_1_7b")
+    } == {"qwen_asr_transformers"}
     for entry in registry.models:
         lock = ROOT / entry.dependency_lock
         assert hashlib.sha256(lock.read_bytes()).hexdigest() == entry.dependency_lock_sha256

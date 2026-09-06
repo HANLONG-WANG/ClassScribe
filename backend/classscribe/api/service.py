@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import wave
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from io import BytesIO
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -55,6 +57,8 @@ from classscribe.jobs.audit import ActorType, AuditService, EditableLayer
 from classscribe.models import (
     DictationWorkerSupervisor,
     HealthCheckOutcome,
+    LoadedManifestBundle,
+    ManifestComponentSource,
     ModelEntry,
     ModelLicense,
     ModelManager,
@@ -62,9 +66,11 @@ from classscribe.models import (
     ModelRegistry,
 )
 from classscribe.models.manager import ModelDownloader
+from classscribe.models.support import model_installability, worker_implemented
 from classscribe.paths import AppPaths
 from classscribe.punctuation.guard import strip_punctuation_and_spacing
 from classscribe.recovery import atomic_write_bytes, atomic_write_text
+from classscribe.resources import resource_root
 from classscribe.security import UploadLimits, parse_uuid
 from classscribe.terminology import (
     ConfirmationStatus,
@@ -111,6 +117,7 @@ class ClassScribeService:
         model_downloader: ModelDownloader | None = None,
         model_health_check: ModelHealthCheck | None = None,
         model_licenses: Mapping[str, ModelLicense] | None = None,
+        manifest_bundle: LoadedManifestBundle | None = None,
         resident_workers: DictationWorkerSupervisor | None = None,
         allow_pending_jobs_without_pipeline: bool = True,
         upload_limits: UploadLimits | None = None,
@@ -123,6 +130,7 @@ class ClassScribeService:
         self.model_downloader = model_downloader
         self.model_health_check = model_health_check
         self.model_licenses = dict(model_licenses or {})
+        self.manifest_bundle = manifest_bundle
         self.resident_workers = resident_workers
         self.allow_pending_jobs_without_pipeline = allow_pending_jobs_without_pipeline
         self.upload_limits = upload_limits or UploadLimits()
@@ -161,7 +169,16 @@ class ClassScribeService:
                 duration_samples=duration_samples,
                 sample_rate=sample_rate,
                 channels=channels,
-                audio_qc_json={"upload_validated": True, "source_bytes": len(content)},
+                audio_qc_json={
+                    "upload_validated": True,
+                    "source_bytes": len(content),
+                    **_health_wav_qc(
+                        content,
+                        duration_samples=duration_samples,
+                        channels=channels,
+                        sample_rate=sample_rate,
+                    ),
+                },
             )
             session.add(recording)
         return self.recording(recording_id)
@@ -172,17 +189,14 @@ class ClassScribeService:
             item = session.get(Recording, identifier)
             if item is None:
                 raise _not_found("recording")
-            return {
-                "id": item.id,
-                "source_name": item.source_name,
-                "sha256": item.source_sha256,
-                "duration_samples": item.duration_samples,
-                "sample_rate": item.sample_rate,
-                "channels": item.channels,
-                "audio_qc": item.audio_qc_json,
-                "created_at": item.created_at.isoformat(),
-                "media_url": f"/api/v1/recordings/{item.id}/media",
-            }
+            return _recording_payload(item)
+
+    def recordings(self) -> list[dict[str, Any]]:
+        with self.sessions() as session:
+            items = session.scalars(
+                select(Recording).order_by(Recording.created_at.desc(), Recording.id.desc())
+            )
+            return [_recording_payload(item) for item in items]
 
     def recording_file(self, recording_id: str) -> tuple[Path, str]:
         identifier = _id(recording_id, "recording_id")
@@ -544,40 +558,131 @@ class ClassScribeService:
         return {"segment_id": merged_id, "superseded_segment_ids": list(identifiers)}
 
     def models(self) -> list[dict[str, Any]]:
+        immutable_resources = resource_root()
         with self.sessions() as session:
             installations = {
                 (item.model_id, item.revision): item
                 for item in session.scalars(select(ModelInstallation))
             }
-            return [
-                {
-                    "id": entry.id,
-                    "name": entry.display_name,
-                    "revision": entry.revision,
-                    "repository": entry.repository,
-                    "license": (
-                        self.model_licenses[entry.repository].model_dump(mode="json")
-                        if entry.repository in self.model_licenses
-                        else None
-                    ),
-                    "languages": list(entry.languages),
-                    "tasks": list(entry.tasks),
-                    "enabled": entry.enabled,
-                    "experimental": entry.experimental,
-                    "estimated_vram_mb": entry.resources.estimated_vram_mb,
-                    "installed_size_bytes": None,
-                    "installation": _installation_payload(
-                        installations.get((entry.id, entry.revision))
-                    ),
-                    "benchmark": entry.benchmark.model_dump(mode="json"),
-                }
-                for entry in self.registry.models
-            ]
+            result: list[dict[str, Any]] = []
+            for entry in self.registry.models:
+                manifest_metadata = self._manifest_metadata(entry.id)
+                manifest = manifest_metadata[0] if manifest_metadata is not None else None
+                worker_is_implemented = worker_implemented(entry, immutable_resources)
+                installable, install_block_reason = model_installability(
+                    entry,
+                    immutable_resources,
+                    manifest_available=manifest_metadata is not None,
+                )
+                result.append(
+                    {
+                        "id": entry.id,
+                        "name": entry.display_name,
+                        "revision": entry.revision,
+                        "repository": entry.repository,
+                        "license": (
+                            self.model_licenses[entry.repository].model_dump(mode="json")
+                            if entry.repository in self.model_licenses
+                            else None
+                        ),
+                        "languages": list(entry.languages),
+                        "tasks": list(entry.tasks),
+                        "enabled": entry.enabled,
+                        "experimental": entry.experimental,
+                        "manifest_available": manifest_metadata is not None,
+                        "manifest_sha256": (
+                            manifest_metadata[1] if manifest_metadata is not None else None
+                        ),
+                        "worker_implemented": worker_is_implemented,
+                        "installable": installable,
+                        "install_block_reason": install_block_reason,
+                        "estimated_download_bytes": (
+                            manifest.estimated_download_bytes if manifest is not None else None
+                        ),
+                        "installed_size_bytes": (
+                            manifest.installed_size_bytes if manifest is not None else None
+                        ),
+                        "remote_code_file_count": (
+                            sum(item.kind == "remote_code" for item in manifest.files)
+                            if manifest is not None
+                            else None
+                        ),
+                        "component_source_count": (
+                            len(manifest.component_sources) if manifest is not None else None
+                        ),
+                        "component_sources": (
+                            _component_source_payload(manifest.component_sources)
+                            if manifest is not None
+                            else None
+                        ),
+                        "estimated_vram_mb": entry.resources.estimated_vram_mb,
+                        "installation": _installation_payload(
+                            installations.get((entry.id, entry.revision))
+                        ),
+                        "benchmark": entry.benchmark.model_dump(mode="json"),
+                    }
+                )
+            return result
 
-    def request_model_install(self, model_id: str, manifest: Mapping[str, Any]) -> dict[str, Any]:
+    def _manifest_metadata(self, model_id: str) -> tuple[ModelManifest, str] | None:
+        bundle = self.manifest_bundle
+        if bundle is None:
+            return None
+        try:
+            return bundle.manifest(model_id), bundle.manifest_sha256(model_id)
+        except KeyError:
+            return None
+
+    def request_bundled_model_install(self, model_id: str) -> dict[str, Any]:
         entry = self._registry_model(model_id)
+        manifest_metadata = self._manifest_metadata(model_id)
+        installable, install_block_reason = model_installability(
+            entry,
+            resource_root(),
+            manifest_available=manifest_metadata is not None,
+        )
+        if not installable:
+            raise ClassScribeError(
+                ErrorCode.MODEL_INSTALL_BLOCKED,
+                f"model is not ordinarily installable: {install_block_reason}",
+            )
+        if manifest_metadata is None:  # pragma: no cover - guarded by installability
+            raise AssertionError("installable model must have manifest metadata")
+        model_manifest, manifest_sha256 = manifest_metadata
+        result = self._request_model_install(entry, model_manifest)
+        result["manifest_sha256"] = manifest_sha256
+        return result
+
+    def model_manifest(self, model_id: str) -> dict[str, Any]:
+        _entry, model_manifest, manifest_sha256 = self._bundled_manifest(model_id)
+        return {
+            "model_id": model_manifest.model_id,
+            "sha256": manifest_sha256,
+            "manifest": model_manifest.as_dict(),
+        }
+
+    def _bundled_manifest(self, model_id: str) -> tuple[ModelEntry, ModelManifest, str]:
+        entry = self._registry_model(model_id)
+        bundle = self.manifest_bundle
+        if bundle is None:
+            raise ClassScribeError(
+                ErrorCode.MODEL_INTEGRITY_FAILED,
+                "the built-in model manifest bundle is unavailable",
+            )
+        try:
+            model_manifest = bundle.manifest(model_id)
+            manifest_sha256 = bundle.manifest_sha256(model_id)
+        except KeyError as error:
+            raise ClassScribeError(
+                ErrorCode.MODEL_INTEGRITY_FAILED,
+                f"the built-in manifest is unavailable for model: {model_id}",
+            ) from error
+        return entry, model_manifest, manifest_sha256
+
+    def _request_model_install(
+        self, entry: ModelEntry, model_manifest: ModelManifest
+    ) -> dict[str, Any]:
         manager = self._model_manager()
-        model_manifest = ModelManifest.from_dict(manifest)
         license_record = self.model_licenses.get(entry.repository)
         if (
             model_manifest.model_id != entry.id
@@ -600,7 +705,22 @@ class ClassScribeService:
                 ErrorCode.MODEL_INTEGRITY_FAILED,
                 "manifest license disclosure differs from the frozen upstream inventory",
             )
+        for source in model_manifest.component_sources:
+            source_license = self.model_licenses.get(source.repository)
+            if source_license is None or (
+                source.license_id != source_license.license_id
+                or source.license_url != source_license.license_url
+                or source.requires_terms_acceptance
+                is not source_license.requires_terms_acceptance
+            ):
+                raise ClassScribeError(
+                    ErrorCode.MODEL_INTEGRITY_FAILED,
+                    "manifest component license differs from the frozen upstream inventory",
+                )
         plan = manager.request_user_install(model_manifest)
+        remote_code_files = [
+            item.path for item in model_manifest.files if item.kind == "remote_code"
+        ]
         return {
             "confirmation_token": plan.confirmation_token,
             "model_id": plan.model_id,
@@ -608,11 +728,14 @@ class ClassScribeService:
             "license_id": plan.license_id,
             "license_url": plan.license_url,
             "requires_terms_acceptance": plan.requires_terms_acceptance,
+            "component_sources": _component_source_payload(plan.component_sources),
             "estimated_download_bytes": plan.estimated_download_bytes,
             "installed_size_bytes": plan.installed_size_bytes,
             "required_free_bytes": plan.required_free_bytes,
             "available_bytes": plan.available_bytes,
             "environment": plan.environment,
+            "remote_code_file_count": len(remote_code_files),
+            "remote_code_files": remote_code_files,
             "expires_at": plan.expires_at.isoformat(),
         }
 
@@ -628,10 +751,23 @@ class ClassScribeService:
     ) -> dict[str, Any]:
         entry = self._registry_model(model_id)
         manager = self._model_manager()
+        if "alignment" in entry.tasks and not (health_transcript and health_transcript.strip()):
+            raise ClassScribeError(
+                ErrorCode.MODEL_HEALTH_CHECK_FAILED,
+                "an exact transcript is required to confirm an aligner installation",
+            )
         if self.model_downloader is None or self.model_health_check is None:
             raise ClassScribeError(
                 ErrorCode.MODEL_HEALTH_CHECK_FAILED,
                 "the production downloader and inference health checker are unavailable",
+            )
+        health_recording = self.recording(health_recording_id)
+        audio_qc = health_recording.get("audio_qc")
+        if not isinstance(audio_qc, dict) or audio_qc.get("health_wav_eligible") is not True:
+            raise ClassScribeError(
+                ErrorCode.MODEL_HEALTH_CHECK_FAILED,
+                "health recording must be a non-empty 16 kHz mono 16-bit PCM WAV "
+                "of at most 15 seconds",
             )
         health_audio, _source_name = self.recording_file(health_recording_id)
 
@@ -1459,6 +1595,61 @@ def _optional_id(value: str | None, field: str) -> str | None:
     return None if value is None else _id(value, field)
 
 
+def _recording_payload(item: Recording) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "source_name": item.source_name,
+        "sha256": item.source_sha256,
+        "duration_samples": item.duration_samples,
+        "sample_rate": item.sample_rate,
+        "channels": item.channels,
+        "audio_qc": item.audio_qc_json,
+        "created_at": item.created_at.isoformat(),
+        "media_url": f"/api/v1/recordings/{item.id}/media",
+    }
+
+
+def _health_wav_qc(
+    content: bytes,
+    *,
+    duration_samples: int,
+    channels: int,
+    sample_rate: int,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {"health_wav_eligible": False}
+    try:
+        with wave.open(BytesIO(content), "rb") as recording:
+            frames = recording.getnframes()
+            actual_rate = recording.getframerate()
+            actual_channels = recording.getnchannels()
+            sample_width = recording.getsampwidth()
+            compression = recording.getcomptype()
+    except (EOFError, wave.Error):
+        return result
+    result.update(
+        {
+            "container": "wav",
+            "compression": compression,
+            "duration_samples": frames,
+            "sample_rate": actual_rate,
+            "channels": actual_channels,
+            "sample_width_bytes": sample_width,
+        }
+    )
+    result["health_wav_eligible"] = (
+        frames > 0
+        and frames <= 15 * 16_000
+        and actual_rate == 16_000
+        and actual_channels == 1
+        and sample_width == 2
+        and compression == "NONE"
+        and duration_samples == frames
+        and sample_rate == actual_rate
+        and channels == actual_channels
+    )
+    return result
+
+
 def _not_found(label: str) -> ClassScribeError:
     return ClassScribeError(ErrorCode.INVALID_FILE_ID, f"{label} not found")
 
@@ -1487,6 +1678,31 @@ def _decision_payload(event: DecisionEvent) -> dict[str, Any]:
         "rule_version": event.rule_version,
         "created_at": event.created_at.isoformat(),
     }
+
+
+def _component_source_payload(
+    sources: tuple[ManifestComponentSource, ...],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "repository": source.repository,
+            "revision": source.revision,
+            "relationship": source.relationship,
+            "license_id": source.license_id,
+            "license_url": source.license_url,
+            "requires_terms_acceptance": source.requires_terms_acceptance,
+            "files": [
+                {
+                    "installed_path": item.installed_path,
+                    "source_path": item.source_path,
+                    "source_sha256": item.source_sha256,
+                    "source_size_bytes": item.source_size_bytes,
+                }
+                for item in source.files
+            ],
+        }
+        for source in sources
+    ]
 
 
 def _installation_payload(item: ModelInstallation | None) -> dict[str, Any]:

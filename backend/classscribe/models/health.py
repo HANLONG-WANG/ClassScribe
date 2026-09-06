@@ -61,7 +61,7 @@ class InstalledModelHealthChecker:
         worker_command = provisioned_worker_command(project)
         self.runtime_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.runtime_directory.chmod(0o700)
-        identity = f"health-{entry.id}-{uuid4().hex}"
+        identity = f"h-{uuid4().hex[:16]}"
         socket_path = self.runtime_directory / f"{identity}.sock"
         output_directory = self.runtime_directory / f"{identity}-output"
         output_directory.mkdir(mode=0o700)
@@ -109,6 +109,7 @@ class InstalledModelHealthChecker:
     ) -> HealthCheckOutcome:
         process: WorkerClient = WorkerProcess(spec)
         await process.start(timeout_seconds=120)
+        loaded = False
         try:
             load = await process.call(
                 RPCRequest(
@@ -127,6 +128,7 @@ class InstalledModelHealthChecker:
             )
             if not load.ok:
                 return _failure(load, entry, "model load failed")
+            loaded = True
             response = await _run_inference(
                 process,
                 entry,
@@ -164,7 +166,24 @@ class InstalledModelHealthChecker:
                 },
             )
         finally:
-            await process.stop()
+            try:
+                if loaded:
+                    unload = await process.call(
+                        RPCRequest(
+                            request_id=f"health-unload-{uuid4().hex}",
+                            job_id="model-install-health",
+                            deadline_ms=10_000,
+                            priority=Priority.INTERACTIVE,
+                            method="unload",
+                            params={},
+                        )
+                    )
+                    if not unload.ok:
+                        raise RuntimeError(
+                            f"model unload failed: {unload.error_code}: {unload.error_detail}"
+                        )
+            finally:
+                await process.stop()
 
 
 def _inference_request(

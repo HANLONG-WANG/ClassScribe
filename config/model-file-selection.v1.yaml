@@ -1,0 +1,539 @@
+schema_version: 1
+# Entries are added only after fixed-revision discovery and human review in stages C and E.
+models:
+  ark_asr_3b:
+    include:
+      - added_tokens.json
+      - chat_template.jinja
+      - config.json
+      - configuration_arkasr.py
+      - generation_config.json
+      - merges.txt
+      - model-00001-of-00002.safetensors
+      - model-00002-of-00002.safetensors
+      - model.safetensors.index.json
+      - modeling_arkasr.py
+      - modeling_audio.py
+      - preprocessor_config.json
+      - processing_arkasr.py
+      - processor_config.json
+      - special_tokens_map.json
+      - tokenizer.json
+      - tokenizer_config.json
+      - vocab.json
+    kinds:
+      added_tokens.json: tokenizer
+      chat_template.jinja: remote_code
+      config.json: config
+      configuration_arkasr.py: remote_code
+      generation_config.json: config
+      merges.txt: tokenizer
+      model-00001-of-00002.safetensors: model
+      model-00002-of-00002.safetensors: model
+      model.safetensors.index.json: model
+      modeling_arkasr.py: remote_code
+      modeling_audio.py: remote_code
+      preprocessor_config.json: config
+      processing_arkasr.py: remote_code
+      processor_config.json: config
+      special_tokens_map.json: tokenizer
+      tokenizer.json: tokenizer
+      tokenizer_config.json: tokenizer
+      vocab.json: tokenizer
+    exclude:
+      - .eval_results/open_asr_leaderboard.yaml
+      - .gitattributes
+      - README.md
+      - figures/ark_asr_architecture.png
+  firered_asr2_aed:
+    include:
+      - cmvn.ark
+      - dict.txt
+      - model.pth.tar
+      - train_bpe1000.model
+    kinds:
+      cmvn.ark: config
+      dict.txt: tokenizer
+      model.pth.tar: model
+      train_bpe1000.model: tokenizer
+    exclude:
+      - .gitattributes
+      - README.md
+      - config.yaml
+  firered_asr2_llm:
+    include:
+      - Qwen2-7B-Instruct/config.json
+      - Qwen2-7B-Instruct/generation_config.json
+      - Qwen2-7B-Instruct/merges.txt
+      - Qwen2-7B-Instruct/model-00001-of-00004.safetensors
+      - Qwen2-7B-Instruct/model-00002-of-00004.safetensors
+      - Qwen2-7B-Instruct/model-00003-of-00004.safetensors
+      - Qwen2-7B-Instruct/model-00004-of-00004.safetensors
+      - Qwen2-7B-Instruct/model.safetensors.index.json
+      - Qwen2-7B-Instruct/tokenizer.json
+      - Qwen2-7B-Instruct/tokenizer_config.json
+      - Qwen2-7B-Instruct/vocab.json
+      - asr_encoder.pth.tar
+      - cmvn.ark
+      - dict.txt
+      - model.pth.tar
+      - train_bpe1000.model
+    kinds:
+      Qwen2-7B-Instruct/config.json: config
+      Qwen2-7B-Instruct/generation_config.json: config
+      Qwen2-7B-Instruct/merges.txt: tokenizer
+      Qwen2-7B-Instruct/model-00001-of-00004.safetensors: model
+      Qwen2-7B-Instruct/model-00002-of-00004.safetensors: model
+      Qwen2-7B-Instruct/model-00003-of-00004.safetensors: model
+      Qwen2-7B-Instruct/model-00004-of-00004.safetensors: model
+      Qwen2-7B-Instruct/model.safetensors.index.json: model
+      Qwen2-7B-Instruct/tokenizer.json: tokenizer
+      Qwen2-7B-Instruct/tokenizer_config.json: tokenizer
+      Qwen2-7B-Instruct/vocab.json: tokenizer
+      asr_encoder.pth.tar: model
+      cmvn.ark: config
+      dict.txt: tokenizer
+      model.pth.tar: model
+      train_bpe1000.model: tokenizer
+    exclude:
+      - .gitattributes
+      - Qwen2-7B-Instruct/.gitattributes
+      - Qwen2-7B-Instruct/LICENSE
+      - Qwen2-7B-Instruct/README.md
+      - README.md
+      - config.yaml
+  firered_lid:
+    include:
+      - cmvn.ark
+      - dict.txt
+      - model.pth.tar
+    kinds:
+      cmvn.ark: config
+      dict.txt: tokenizer
+      model.pth.tar: model
+    exclude:
+      - .gitattributes
+      - README.md
+      - config.yaml
+  firered_punc:
+    include:
+      - chinese-bert-wwm-ext_vocab.txt
+      - chinese-lert-base/added_tokens.json
+      - chinese-lert-base/config.json
+      - chinese-lert-base/pytorch_model.bin
+      - chinese-lert-base/special_tokens_map.json
+      - chinese-lert-base/tokenizer.json
+      - chinese-lert-base/tokenizer_config.json
+      - chinese-lert-base/vocab.txt
+      - config.yaml
+      - model.pth.tar
+      - out_dict
+    kinds:
+      chinese-bert-wwm-ext_vocab.txt: tokenizer
+      chinese-lert-base/added_tokens.json: tokenizer
+      chinese-lert-base/config.json: config
+      chinese-lert-base/pytorch_model.bin: model
+      chinese-lert-base/special_tokens_map.json: tokenizer
+      chinese-lert-base/tokenizer.json: tokenizer
+      chinese-lert-base/tokenizer_config.json: tokenizer
+      chinese-lert-base/vocab.txt: tokenizer
+      config.yaml: config
+      model.pth.tar: model
+      out_dict: tokenizer
+    exclude:
+      - .gitattributes
+      - README.md
+      - chinese-lert-base/.gitattributes
+      - chinese-lert-base/README.md
+      - chinese-lert-base/tf_model.h5
+  firered_vad:
+    include:
+      - Stream-VAD/cmvn.ark
+      - Stream-VAD/model.pth.tar
+      - VAD/cmvn.ark
+      - VAD/model.pth.tar
+    kinds:
+      Stream-VAD/cmvn.ark: config
+      Stream-VAD/model.pth.tar: model
+      VAD/cmvn.ark: config
+      VAD/model.pth.tar: model
+    exclude:
+      - .gitattributes
+      - AED/cmvn.ark
+      - AED/model.pth.tar
+      - README.md
+      - config.yaml
+  fun_asr_nano_2512:
+    include:
+      - chat_template.jinja
+      - config.json
+      - generation_config.json
+      - merges.txt
+      - model.safetensors
+      - processor_config.json
+      - tokenizer.json
+      - tokenizer_config.json
+      - vocab.json
+    kinds:
+      chat_template.jinja: tokenizer
+      config.json: config
+      generation_config.json: config
+      merges.txt: tokenizer
+      model.safetensors: model
+      processor_config.json: config
+      tokenizer.json: tokenizer
+      tokenizer_config.json: tokenizer
+      vocab.json: tokenizer
+    exclude:
+      - .gitattributes
+      - README.md
+  granite_speech_4_1_2b:
+    include:
+      - added_tokens.json
+      - chat_template.jinja
+      - config.json
+      - merges.txt
+      - model-00001-of-00003.safetensors
+      - model-00002-of-00003.safetensors
+      - model-00003-of-00003.safetensors
+      - model.safetensors.index.json
+      - preprocessor_config.json
+      - processor_config.json
+      - special_tokens_map.json
+      - tokenizer.json
+      - tokenizer_config.json
+      - vocab.json
+    kinds:
+      added_tokens.json: tokenizer
+      chat_template.jinja: tokenizer
+      config.json: config
+      merges.txt: tokenizer
+      model-00001-of-00003.safetensors: model
+      model-00002-of-00003.safetensors: model
+      model-00003-of-00003.safetensors: model
+      model.safetensors.index.json: model
+      preprocessor_config.json: config
+      processor_config.json: config
+      special_tokens_map.json: tokenizer
+      tokenizer.json: tokenizer
+      tokenizer_config.json: tokenizer
+      vocab.json: tokenizer
+    exclude:
+      - .eval_results/MODEL_ibm-granite-granite-speech-4.1-2b_DATASET_hf-audio-esb-datasets-test-only-sorted_ami_test.jsonl
+      - .eval_results/MODEL_ibm-granite-granite-speech-4.1-2b_DATASET_hf-audio-esb-datasets-test-only-sorted_earnings22_test.jsonl
+      - .eval_results/MODEL_ibm-granite-granite-speech-4.1-2b_DATASET_hf-audio-esb-datasets-test-only-sorted_gigaspeech_test.jsonl
+      - .eval_results/MODEL_ibm-granite-granite-speech-4.1-2b_DATASET_hf-audio-esb-datasets-test-only-sorted_librispeech_test.clean.jsonl
+      - .eval_results/MODEL_ibm-granite-granite-speech-4.1-2b_DATASET_hf-audio-esb-datasets-test-only-sorted_librispeech_test.other.jsonl
+      - .eval_results/MODEL_ibm-granite-granite-speech-4.1-2b_DATASET_hf-audio-esb-datasets-test-only-sorted_spgispeech_test.jsonl
+      - .eval_results/MODEL_ibm-granite-granite-speech-4.1-2b_DATASET_hf-audio-esb-datasets-test-only-sorted_tedlium_test.jsonl
+      - .eval_results/MODEL_ibm-granite-granite-speech-4.1-2b_DATASET_hf-audio-esb-datasets-test-only-sorted_voxpopuli_test.jsonl
+      - .eval_results/open_asr_leaderboard.yaml
+      - .eval_results/output.log
+      - .gitattributes
+      - README.md
+      - model.sig
+      - multilingual_sample.wav
+      - out_llm.safetensors
+  granite_speech_5_0_turboctc_470m:
+    include:
+      - config.json
+      - generation_config.json
+      - model.safetensors
+      - preprocessor_config.json
+      - processing_ctc_conformer.py
+      - processor_config.json
+      - tokenizer.json
+      - tokenizer_config.json
+    kinds:
+      config.json: config
+      generation_config.json: config
+      model.safetensors: model
+      preprocessor_config.json: config
+      processing_ctc_conformer.py: remote_code
+      processor_config.json: config
+      tokenizer.json: tokenizer
+      tokenizer_config.json: tokenizer
+    exclude:
+      - .gitattributes
+      - README.md
+      - configuration_ctc_conformer.py
+      - granite_encoder.py
+      - model.sig
+      - modeling_ctc_conformer.py
+  moss_td_0_9b:
+    include:
+      - added_tokens.json
+      - chat_template.jinja
+      - config.json
+      - configuration_moss_transcribe_diarize.py
+      - generation_config.json
+      - merges.txt
+      - model-00000-of-00001.safetensors
+      - model.safetensors.index.json
+      - modeling_moss_transcribe_diarize.py
+      - preprocessor_config.json
+      - processing_moss_transcribe_diarize.py
+      - processor_config.json
+      - special_tokens_map.json
+      - tokenizer.json
+      - tokenizer_config.json
+      - vocab.json
+    kinds:
+      added_tokens.json: tokenizer
+      chat_template.jinja: remote_code
+      config.json: config
+      configuration_moss_transcribe_diarize.py: remote_code
+      generation_config.json: config
+      merges.txt: tokenizer
+      model-00000-of-00001.safetensors: model
+      model.safetensors.index.json: model
+      modeling_moss_transcribe_diarize.py: remote_code
+      preprocessor_config.json: config
+      processing_moss_transcribe_diarize.py: remote_code
+      processor_config.json: config
+      special_tokens_map.json: tokenizer
+      tokenizer.json: tokenizer
+      tokenizer_config.json: tokenizer
+      vocab.json: tokenizer
+    exclude:
+      - .eval_results/open_asr_leaderboard.yaml
+      - .gitattributes
+      - Model_Architecture.png
+      - README.md
+  moss_transcribe_preview_2b:
+    include:
+      - added_tokens.json
+      - chat_template.jinja
+      - chat_template_default.py
+      - config.json
+      - generation_config.json
+      - merges.txt
+      - model-00000-of-00001.safetensors
+      - model.safetensors.index.json
+      - modeling_Moss.py
+      - processing_Moss.py
+      - special_tokens_map.json
+      - tokenizer.json
+      - tokenizer_config.json
+      - vocab.json
+    kinds:
+      added_tokens.json: tokenizer
+      chat_template.jinja: remote_code
+      chat_template_default.py: remote_code
+      config.json: config
+      generation_config.json: config
+      merges.txt: tokenizer
+      model-00000-of-00001.safetensors: model
+      model.safetensors.index.json: model
+      modeling_Moss.py: remote_code
+      processing_Moss.py: remote_code
+      special_tokens_map.json: tokenizer
+      tokenizer.json: tokenizer
+      tokenizer_config.json: tokenizer
+      vocab.json: tokenizer
+    exclude:
+      - .eval_results/open_asr_leaderboard.yaml
+      - .gitattributes
+      - README.md
+  nemotron_3_5_asr_streaming_0_6b:
+    include:
+      - nemotron-3.5-asr-streaming-0.6b.nemo
+    kinds:
+      nemotron-3.5-asr-streaming-0.6b.nemo: model
+    exclude:
+      - .gitattributes
+      - README.md
+      - arch_slide10.png
+      - avg_wer_summary.png
+      - bias.md
+      - config.json
+      - explainability.md
+      - fleurs_langid_vs_auto.png
+      - fleurs_wer_vs_chunk_size.png
+      - generation_config.json
+      - latency_vs_parallel.png
+      - model.safetensors
+      - model_architecture.png
+      - model_overview.png
+      - nemotron-3.5-asr-streaming-0.6b.q8_0.gguf
+      - privacy.md
+      - processor_config.json
+      - safety.md
+      - throughput_vs_chunk.png
+      - tokenizer.json
+      - tokenizer_config.json
+  nemotron_speech_streaming_en_0_6b:
+    include:
+      - nemotron-speech-streaming-en-0.6b.nemo
+    kinds:
+      nemotron-speech-streaming-en-0.6b.nemo: model
+    exclude:
+      - .gitattributes
+      - README.md
+      - bias.md
+      - config.json
+      - explainability.md
+      - figures/caching_schema.png
+      - figures/inference_pipeline.png
+      - figures/results_wer_and_scaling.png
+      - generation_config.json
+      - model.safetensors
+      - nemotron-speech-streaming-en-0.6b.q8_0.gguf
+      - privacy.md
+      - processor_config.json
+      - safety.md
+      - tokenizer.json
+      - tokenizer_config.json
+  pyannote_community_1:
+    include:
+      - config.yaml
+      - embedding/pytorch_model.bin
+      - plda/plda.npz
+      - plda/xvec_transform.npz
+      - segmentation/pytorch_model.bin
+    kinds:
+      config.yaml: config
+      embedding/pytorch_model.bin: model
+      plda/plda.npz: model
+      plda/xvec_transform.npz: model
+      segmentation/pytorch_model.bin: model
+    exclude:
+      - .gitattributes
+      - README.md
+      - diarization.gif
+      - embedding/README.md
+      - plda/README.md
+  qwen3_asr_0_6b:
+    include:
+      - chat_template.json
+      - config.json
+      - generation_config.json
+      - merges.txt
+      - model.safetensors
+      - preprocessor_config.json
+      - tokenizer_config.json
+      - vocab.json
+    kinds:
+      chat_template.json: tokenizer
+      config.json: config
+      generation_config.json: config
+      merges.txt: tokenizer
+      model.safetensors: model
+      preprocessor_config.json: config
+      tokenizer_config.json: tokenizer
+      vocab.json: tokenizer
+    exclude:
+      - .gitattributes
+      - README.md
+  qwen3_asr_1_7b:
+    include:
+      - chat_template.json
+      - config.json
+      - generation_config.json
+      - merges.txt
+      - model-00001-of-00002.safetensors
+      - model-00002-of-00002.safetensors
+      - model.safetensors.index.json
+      - preprocessor_config.json
+      - tokenizer_config.json
+      - vocab.json
+    kinds:
+      chat_template.json: tokenizer
+      config.json: config
+      generation_config.json: config
+      merges.txt: tokenizer
+      model-00001-of-00002.safetensors: model
+      model-00002-of-00002.safetensors: model
+      model.safetensors.index.json: model
+      preprocessor_config.json: config
+      tokenizer_config.json: tokenizer
+      vocab.json: tokenizer
+    exclude:
+      - .gitattributes
+      - README.md
+  qwen3_forced_aligner_0_6b:
+    include:
+      - chat_template.json
+      - config.json
+      - generation_config.json
+      - merges.txt
+      - model.safetensors
+      - preprocessor_config.json
+      - tokenizer_config.json
+      - vocab.json
+    kinds:
+      chat_template.json: tokenizer
+      config.json: config
+      generation_config.json: config
+      merges.txt: tokenizer
+      model.safetensors: model
+      preprocessor_config.json: config
+      tokenizer_config.json: tokenizer
+      vocab.json: tokenizer
+    exclude:
+      - .gitattributes
+      - README.md
+  vibevoice_asr_streaming_1_5b:
+    include:
+      - added_tokens.json
+      - config.json
+      - merges.txt
+      - model-00001-of-00003.safetensors
+      - model-00002-of-00003.safetensors
+      - model-00003-of-00003.safetensors
+      - model.safetensors.index.json
+      - preprocessor_config.json
+      - special_tokens_map.json
+      - tokenizer.json
+      - tokenizer_config.json
+      - vocab.json
+    kinds:
+      added_tokens.json: tokenizer
+      config.json: config
+      merges.txt: tokenizer
+      model-00001-of-00003.safetensors: model
+      model-00002-of-00003.safetensors: model
+      model-00003-of-00003.safetensors: model
+      model.safetensors.index.json: model
+      preprocessor_config.json: config
+      special_tokens_map.json: tokenizer
+      tokenizer.json: tokenizer
+      tokenizer_config.json: tokenizer
+      vocab.json: tokenizer
+    exclude:
+      - .gitattributes
+      - README.md
+      - figures/VibeVoice_ASR_Streaming_architecture.png
+      - figures/VibeVoice_ASR_Streaming_results.png
+  voxtral_mini_4b_realtime_2602:
+    include:
+      - config.json
+      - generation_config.json
+      - model.safetensors
+      - processor_config.json
+      - tekken.json
+    kinds:
+      config.json: config
+      generation_config.json: config
+      model.safetensors: model
+      processor_config.json: config
+      tekken.json: tokenizer
+    exclude:
+      - .gitattributes
+      - README.md
+      - consolidated.safetensors
+      - params.json
+  whisper_tiny_reference:
+    include:
+      - config.json
+      - model.bin
+      - tokenizer.json
+      - vocabulary.txt
+    kinds:
+      config.json: config
+      model.bin: model
+      tokenizer.json: tokenizer
+      vocabulary.txt: tokenizer
+    exclude:
+      - .gitattributes
+      - README.md

@@ -1,0 +1,28 @@
+{
+  "environment": {
+    "dtype": "float16",
+    "python": "3.12",
+    "runtime_backend": "nemo_or_transformers_rnnt",
+    "worker_lock": "workers/nemotron/uv.lock",
+    "worker_lock_sha256": "b2f372c42831303a4decd4c6f358191b3373c7206acc5a23478280e651610505"
+  },
+  "estimated_download_bytes": 2368284501,
+  "files": [
+    {
+      "kind": "model",
+      "path": "nemotron-3.5-asr-streaming-0.6b.nemo",
+      "sha256": "210214ed94039bf6bfbb9a047c7fa289628db75b103e2bf6381fa78285436a74",
+      "size_bytes": 2368284501
+    }
+  ],
+  "installed_size_bytes": 2368284501,
+  "license_id": "LicenseRef-OpenMDW-1.1",
+  "license_url": "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
+  "manifest_version": 1,
+  "model_id": "nemotron_3_5_asr_streaming_0_6b",
+  "repository": "nvidia/nemotron-3.5-asr-streaming-0.6b",
+  "requires_terms_acceptance": false,
+  "revision": "1c8deaecc64b91f034d73e08dd8b64625eb3395d",
+  "trust_remote_code": false,
+  "worker": "nemotron"
+}

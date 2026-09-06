@@ -15,3 +15,9 @@ htmlcov/
 playwright-report/
 test-results/
 *.tsbuildinfo
+# Local real-model acceptance and XDG roots
+/.c-whisper-*/
+/.e-*-health.*/
+
+# Local generated test state
+/.hypothesis/

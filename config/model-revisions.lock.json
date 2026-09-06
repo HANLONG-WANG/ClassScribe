@@ -2,6 +2,22 @@
   "schema_version": 1,
   "registry_revision": 1,
   "facts_as_of": "2026-09-03",
+  "component_sources": [
+    {
+      "model_id": "pyannote_community_1",
+      "repository": "pyannote/wespeaker-voxceleb-resnet34-LM",
+      "revision": "837717ddb9ff5507820346191109dc79c958d614",
+      "relationship": "derived",
+      "files": [
+        {
+          "installed_path": "embedding/pytorch_model.bin",
+          "source_path": "pytorch_model.bin",
+          "source_sha256": "366edf44f4c80889a3eb7a9d7bdf02c4aede3127f7dd15e274dcdb826b143c56",
+          "source_size_bytes": 26645418
+        }
+      ]
+    }
+  ],
   "models": [
     {"id": "moss_td_0_9b", "repository": "OpenMOSS-Team/MOSS-Transcribe-Diarize", "revision": "704aa4a9c304e8520be88901e0d1960158ef5b15", "worker": "moss_td", "enabled": true},
     {"id": "firered_asr2_aed", "repository": "FireRedTeam/FireRedASR2-AED", "revision": "2304afed56eacfee6256dee5937ed22ffa0b64ec", "worker": "firered", "enabled": true},

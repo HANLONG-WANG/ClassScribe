@@ -17,6 +17,7 @@ from classscribe.models import (
     SandboxedModelInvoker,
     SQLAlchemyInstallationRecorder,
     WorkerEnvironmentProvisioner,
+    load_builtin_manifest_bundle,
     load_model_licenses,
     load_registry,
 )
@@ -26,14 +27,19 @@ from classscribe.security import RestrictedCredentialEnvironment
 
 
 def build_default_service() -> ClassScribeService:
+    registry_path = resource_path("config/model-registry.v1.yaml")
+    registry = load_registry(registry_path)
+    model_licenses = load_model_licenses(resource_path("config/model-licenses.v1.json"))
+    manifest_bundle = load_builtin_manifest_bundle(
+        resource_path("config/model-manifests/v1/bundle.v1.json"),
+        registry,
+        model_licenses,
+    )
     paths = AppPaths.from_environment()
     paths.ensure()
     engine = create_sqlite_engine(paths.data / "classscribe.sqlite3")
     create_schema(engine)
     sessions = make_session_factory(engine)
-    registry_path = resource_path("config/model-registry.v1.yaml")
-    registry = load_registry(registry_path)
-    model_licenses = load_model_licenses(resource_path("config/model-licenses.v1.json"))
     manager = ModelManager(
         paths.cache / "models", recorder=SQLAlchemyInstallationRecorder(sessions)
     )
@@ -65,6 +71,7 @@ def build_default_service() -> ClassScribeService:
         model_downloader=HuggingFaceDownloader(token=credentials.get("HF_TOKEN")),
         model_health_check=InstalledModelHealthChecker(provisioner, paths.runtime),
         model_licenses=model_licenses,
+        manifest_bundle=manifest_bundle,
         resident_workers=resident_workers,
         allow_pending_jobs_without_pipeline=False,
     )

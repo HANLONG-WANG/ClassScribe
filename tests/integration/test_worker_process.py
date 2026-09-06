@@ -99,6 +99,34 @@ def test_worker_command_rejects_path_traversal() -> None:
         worker_command(ROOT, "../qwen")
 
 
+def test_worker_transport_supports_runtime_root_beyond_af_unix_path_limit(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        socket_path = tmp_path / ("r" * 50) / "worker.sock"
+        assert len(str(socket_path).encode()) > 107
+        process = WorkerProcess(
+            WorkerProcessSpec(
+                worker_id="qwen",
+                command=worker_command(ROOT, "qwen"),
+                socket_path=socket_path,
+                data_roots=(),
+            )
+        )
+        await process.start()
+        try:
+            response = await process.call(
+                RPCRequest("health", "long-runtime", 1000, Priority.BACKGROUND, "health", {})
+            )
+            assert response.ok
+            assert socket_path.exists()
+        finally:
+            await process.stop()
+        assert not socket_path.exists()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("worker_id", WORKERS)
 def test_every_worker_serves_versioned_rpc_lifecycle(worker_id: str, tmp_path: Path) -> None:
     async def scenario() -> None:

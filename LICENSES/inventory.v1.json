@@ -34,6 +34,7 @@
       "mistralai/Voxtral-Mini-4B-Realtime-2602": "Apache-2.0",
       "microsoft/VibeVoice-ASR-Streaming-1.5B": "MIT",
       "pyannote/speaker-diarization-community-1": "CC-BY-4.0",
+      "pyannote/wespeaker-voxceleb-resnet34-LM": "CC-BY-4.0",
       "FunAudioLLM/Fun-ASR-Nano-2512-hf": "Apache-2.0",
       "Systran/faster-whisper-tiny": "MIT"
     }

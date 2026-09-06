@@ -10,6 +10,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
   "classscribe-protocol>=0.1.0",
   "fireredasr2s @ git+https://github.com/FireRedTeam/FireRedASR2S.git@4e7d9aaf4482a47cec1724807026b9b151926eb5",
+  "kaldi-native-fbank==1.19.0",
 ]
 
 [tool.uv.sources]

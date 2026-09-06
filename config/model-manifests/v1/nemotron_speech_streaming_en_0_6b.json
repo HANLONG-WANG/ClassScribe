@@ -1,0 +1,28 @@
+{
+  "environment": {
+    "dtype": "float16",
+    "python": "3.12",
+    "runtime_backend": "nemo",
+    "worker_lock": "workers/nemotron/uv.lock",
+    "worker_lock_sha256": "b2f372c42831303a4decd4c6f358191b3373c7206acc5a23478280e651610505"
+  },
+  "estimated_download_bytes": 2473041920,
+  "files": [
+    {
+      "kind": "model",
+      "path": "nemotron-speech-streaming-en-0.6b.nemo",
+      "sha256": "283638054c44f6794e74fe9af9048d78a6d9d6c058c12131856c7859a62ac9cd",
+      "size_bytes": 2473041920
+    }
+  ],
+  "installed_size_bytes": 2473041920,
+  "license_id": "LicenseRef-NVIDIA-Open-Model-License",
+  "license_url": "https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b",
+  "manifest_version": 1,
+  "model_id": "nemotron_speech_streaming_en_0_6b",
+  "repository": "nvidia/nemotron-speech-streaming-en-0.6b",
+  "requires_terms_acceptance": false,
+  "revision": "ebe59e5a817142986528bbbee5dba8db7b38ed50",
+  "trust_remote_code": false,
+  "worker": "nemotron"
+}

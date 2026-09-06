@@ -531,7 +531,9 @@ def _alignment_language(params: Mapping[str, Any]) -> str:
 def _alignment_words(native: Any, *, offset: int, end_limit: int) -> list[dict[str, Any]]:
     items = native
     if isinstance(native, Mapping):
-        items = native.get("timestamps", native.get("words"))
+        items = native.get("items", native.get("timestamps", native.get("words")))
+    elif hasattr(native, "items"):
+        items = native.items
     elif hasattr(native, "timestamps"):
         items = native.timestamps
     if not isinstance(items, (list, tuple)):

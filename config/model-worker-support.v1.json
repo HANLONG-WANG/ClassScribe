@@ -1,0 +1,69 @@
+{
+  "models": [
+    {
+      "model_id": "ark_asr_3b",
+      "worker": "ark"
+    },
+    {
+      "model_id": "firered_asr2_aed",
+      "worker": "firered"
+    },
+    {
+      "model_id": "firered_lid",
+      "worker": "firered"
+    },
+    {
+      "model_id": "firered_punc",
+      "worker": "firered"
+    },
+    {
+      "model_id": "firered_vad",
+      "worker": "firered"
+    },
+    {
+      "model_id": "fun_asr_nano_2512",
+      "worker": "funasr_experimental"
+    },
+    {
+      "model_id": "granite_speech_4_1_2b",
+      "worker": "granite"
+    },
+    {
+      "model_id": "moss_td_0_9b",
+      "worker": "moss_td"
+    },
+    {
+      "model_id": "moss_transcribe_preview_2b",
+      "worker": "moss_en"
+    },
+    {
+      "model_id": "nemotron_3_5_asr_streaming_0_6b",
+      "worker": "nemotron"
+    },
+    {
+      "model_id": "nemotron_speech_streaming_en_0_6b",
+      "worker": "nemotron"
+    },
+    {
+      "model_id": "pyannote_community_1",
+      "worker": "pyannote"
+    },
+    {
+      "model_id": "qwen3_asr_0_6b",
+      "worker": "qwen"
+    },
+    {
+      "model_id": "qwen3_asr_1_7b",
+      "worker": "qwen"
+    },
+    {
+      "model_id": "qwen3_forced_aligner_0_6b",
+      "worker": "qwen"
+    },
+    {
+      "model_id": "whisper_tiny_reference",
+      "worker": "moss_en"
+    }
+  ],
+  "schema_version": 1
+}

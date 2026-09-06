@@ -44,6 +44,8 @@ class WorkerProcess:
         self.spec = spec
         self.process: asyncio.subprocess.Process | None = None
         self._stderr_task: asyncio.Task[bytes] | None = None
+        self._socket_directory_fd: int | None = None
+        self._transport_path: Path | None = None
 
     @property
     def running(self) -> bool:
@@ -58,7 +60,15 @@ class WorkerProcess:
             return
         self.spec.socket_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.spec.socket_path.parent.chmod(0o700)
-        socket_argument = self.spec.socket_argument_path or self.spec.socket_path
+        socket_directory_fd = os.open(
+            self.spec.socket_path.parent,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        self._socket_directory_fd = socket_directory_fd
+        self._transport_path = (
+            Path(f"/proc/self/fd/{socket_directory_fd}") / self.spec.socket_path.name
+        )
+        socket_argument = self.spec.socket_argument_path or self._transport_path
         data_root_arguments = self.spec.data_root_arguments or self.spec.data_roots
         command = [*self.spec.command, "--socket", str(socket_argument)]
         for root in data_root_arguments:
@@ -72,26 +82,33 @@ class WorkerProcess:
                 "NO_PROXY": "*",
             }
         )
-        self.process = await asyncio.create_subprocess_exec(
-            *command,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-            env=environment,
-            start_new_session=True,
-        )
+        try:
+            self.process = await asyncio.create_subprocess_exec(
+                *command,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+                env=environment,
+                start_new_session=True,
+                pass_fds=()
+                if self.spec.socket_argument_path is not None
+                else (socket_directory_fd,),
+            )
+        except BaseException:
+            self._close_socket_directory()
+            raise
         if self.process.stderr is not None:
             self._stderr_task = asyncio.create_task(self.process.stderr.read())
         try:
             async with asyncio.timeout(timeout_seconds):
-                while not self.spec.socket_path.exists():
+                while not self._transport_path.exists():
                     if self.process.returncode is not None:
                         detail = await self.stderr()
                         raise ProtocolError(
                             f"worker {self.spec.worker_id} exited during startup: {detail}"
                         )
                     await asyncio.sleep(0.01)
-                if not stat.S_ISSOCK(self.spec.socket_path.lstat().st_mode):
+                if not stat.S_ISSOCK(self._transport_path.lstat().st_mode):
                     raise ProtocolError("worker created a non-socket transport path")
         except BaseException:
             await self.stop()
@@ -100,7 +117,9 @@ class WorkerProcess:
     async def call(self, request: RPCRequest) -> RPCResponse:
         if not self.running:
             raise ProtocolError(f"worker {self.spec.worker_id} is not running")
-        return await RPCClient(self.spec.socket_path).call(request)
+        if self._transport_path is None:
+            raise ProtocolError(f"worker {self.spec.worker_id} transport is unavailable")
+        return await RPCClient(self._transport_path).call(request)
 
     async def cancel(
         self,
@@ -123,23 +142,35 @@ class WorkerProcess:
 
     async def stop(self, *, grace_seconds: float = 3.0) -> None:
         process = self.process
-        if process is None:
-            return
-        if process.returncode is None:
-            process.terminate()
-            try:
-                async with asyncio.timeout(grace_seconds):
-                    await process.wait()
-            except TimeoutError:
-                process.kill()
-                await process.wait()
-        self.process = None
-        if self._stderr_task is not None:
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._stderr_task
-            self._stderr_task = None
-        if self.spec.socket_path.exists() and stat.S_ISSOCK(self.spec.socket_path.lstat().st_mode):
-            self.spec.socket_path.unlink()
+        try:
+            if process is not None:
+                if process.returncode is None:
+                    process.terminate()
+                    try:
+                        async with asyncio.timeout(grace_seconds):
+                            await process.wait()
+                    except TimeoutError:
+                        process.kill()
+                        await process.wait()
+                self.process = None
+                if self._stderr_task is not None:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self._stderr_task
+                    self._stderr_task = None
+            if (
+                self._transport_path is not None
+                and self._transport_path.exists()
+                and stat.S_ISSOCK(self._transport_path.lstat().st_mode)
+            ):
+                self._transport_path.unlink()
+        finally:
+            self._close_socket_directory()
+
+    def _close_socket_directory(self) -> None:
+        if self._socket_directory_fd is not None:
+            os.close(self._socket_directory_fd)
+            self._socket_directory_fd = None
+        self._transport_path = None
 
     async def stderr(self) -> str:
         if self._stderr_task is None:

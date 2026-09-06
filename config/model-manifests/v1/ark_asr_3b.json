@@ -1,0 +1,130 @@
+{
+  "environment": {
+    "dtype": "bfloat16",
+    "python": "3.12",
+    "runtime_backend": "transformers_custom_code",
+    "worker_lock": "workers/ark/uv.lock",
+    "worker_lock_sha256": "2eb496262c521c235b6fb303097c03b595313198ac026b163d976b82afd6afea"
+  },
+  "estimated_download_bytes": 8142995244,
+  "files": [
+    {
+      "kind": "tokenizer",
+      "path": "added_tokens.json",
+      "sha256": "586b3fa4bf3feefb10232df1b1ddf76d01e1d45481384343fbe22b8632da3350",
+      "size_bytes": 760
+    },
+    {
+      "kind": "remote_code",
+      "path": "chat_template.jinja",
+      "sha256": "b65159f329e94704814031bb882de38ae9d0ac8955e520044e37ab49b2252ada",
+      "size_bytes": 334
+    },
+    {
+      "kind": "config",
+      "path": "config.json",
+      "sha256": "caeca44885fbb11f61d5fd7ee9d6e2ac4551a0b38a4fdb4401c8d2bc6103423f",
+      "size_bytes": 3119
+    },
+    {
+      "kind": "remote_code",
+      "path": "configuration_arkasr.py",
+      "sha256": "f7dc852c604f985b675c866e352ce81dfbc69f3a6c69646d0863adf9dd6e3aed",
+      "size_bytes": 1619
+    },
+    {
+      "kind": "config",
+      "path": "generation_config.json",
+      "sha256": "ade5316c0962ced5772ab4317c0430758648e1993cd5c8386df03c0983d2f376",
+      "size_bytes": 147
+    },
+    {
+      "kind": "tokenizer",
+      "path": "merges.txt",
+      "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+      "size_bytes": 1671853
+    },
+    {
+      "kind": "model",
+      "path": "model-00001-of-00002.safetensors",
+      "sha256": "b0f93d36c42c3487d95532c7d54952c7810bf629ee2a2265ed4e2f9e988e5342",
+      "size_bytes": 4996098432
+    },
+    {
+      "kind": "model",
+      "path": "model-00002-of-00002.safetensors",
+      "sha256": "db6d540d2b230e322efc17176d7f67ae44a25705bd85c5caccdf5d8c426c072c",
+      "size_bytes": 3130890232
+    },
+    {
+      "kind": "model",
+      "path": "model.safetensors.index.json",
+      "sha256": "cca15b058f9ce515b2cab5521b7ebb932d2600f06ffb5c65350ea86bcd754dcf",
+      "size_bytes": 82157
+    },
+    {
+      "kind": "remote_code",
+      "path": "modeling_arkasr.py",
+      "sha256": "b15aa7f98fc3de644ad68df2ebee3b16229763a0988a273cca92a1bf0ec33333",
+      "size_bytes": 9402
+    },
+    {
+      "kind": "remote_code",
+      "path": "modeling_audio.py",
+      "sha256": "645093b34975a9556503384bb10ad9cf23d8b137bbe0cad1cc50715cf0d21fd3",
+      "size_bytes": 11834
+    },
+    {
+      "kind": "config",
+      "path": "preprocessor_config.json",
+      "sha256": "1e180caf7382179f67c7ffe0ac585d1d639ee9032dadae6868968ffb2e65dd77",
+      "size_bytes": 434
+    },
+    {
+      "kind": "remote_code",
+      "path": "processing_arkasr.py",
+      "sha256": "1db5338f55e714f97eb5d8ed076568897dda7339cb585e3b13fc7d8782c1a94e",
+      "size_bytes": 19160
+    },
+    {
+      "kind": "config",
+      "path": "processor_config.json",
+      "sha256": "d637206d91054c242bea3f2ab25210582161f0c135cc1aa97c3b068d5e0fbd57",
+      "size_bytes": 201
+    },
+    {
+      "kind": "tokenizer",
+      "path": "special_tokens_map.json",
+      "sha256": "1c6f70185b3b9ba0cb0ffede543c9a153e27e1d9e2fcc90c50bdfaf13fee2167",
+      "size_bytes": 434
+    },
+    {
+      "kind": "tokenizer",
+      "path": "tokenizer.json",
+      "sha256": "bc63972a406328b950c3dea5f64994846a95e444609657d440f0f2ecc4721b32",
+      "size_bytes": 11422866
+    },
+    {
+      "kind": "tokenizer",
+      "path": "tokenizer_config.json",
+      "sha256": "d6ef48bad22668f57a44db107dbbaf15adb8253e77e3012129dbf53c32558bd4",
+      "size_bytes": 5427
+    },
+    {
+      "kind": "tokenizer",
+      "path": "vocab.json",
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+      "size_bytes": 2776833
+    }
+  ],
+  "installed_size_bytes": 8142995244,
+  "license_id": "Apache-2.0",
+  "license_url": "https://huggingface.co/Audio8/ARK-ASR-3B",
+  "manifest_version": 1,
+  "model_id": "ark_asr_3b",
+  "repository": "Audio8/ARK-ASR-3B",
+  "requires_terms_acceptance": false,
+  "revision": "1e28271b79edc97635783bea65abc89195a09ed3",
+  "trust_remote_code": true,
+  "worker": "ark"
+}

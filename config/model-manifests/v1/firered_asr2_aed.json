@@ -1,0 +1,46 @@
+{
+  "environment": {
+    "dtype": "float16",
+    "python": "3.12",
+    "runtime_backend": "fireredasr2s_torch",
+    "worker_lock": "workers/firered/uv.lock",
+    "worker_lock_sha256": "14543cb7df6705b7ec82ef75e4a265bf2edf9e7f8b4e9465560ac4114b26f445"
+  },
+  "estimated_download_bytes": 4731890696,
+  "files": [
+    {
+      "kind": "config",
+      "path": "cmvn.ark",
+      "sha256": "6efba6105429d1630c05d818d956bfe4edfad37a04b3b27bb5a029b9adb37945",
+      "size_bytes": 1311
+    },
+    {
+      "kind": "tokenizer",
+      "path": "dict.txt",
+      "sha256": "1bc613de2112d257e61a349c3e72d1b1a9cf19c33d3ca954197ad2171e5ea07b",
+      "size_bytes": 79172
+    },
+    {
+      "kind": "model",
+      "path": "model.pth.tar",
+      "sha256": "4677cbd30988d63ed3e777f6a42a1e5260a3865317f6e15e488bef40954f7054",
+      "size_bytes": 4731558506
+    },
+    {
+      "kind": "tokenizer",
+      "path": "train_bpe1000.model",
+      "sha256": "473bbc157cb4eade2059b30a3c877a1c29bd50cadbfbed869ae36eeade7fee07",
+      "size_bytes": 251707
+    }
+  ],
+  "installed_size_bytes": 4731890696,
+  "license_id": "Apache-2.0",
+  "license_url": "https://huggingface.co/FireRedTeam/FireRedASR2-AED",
+  "manifest_version": 1,
+  "model_id": "firered_asr2_aed",
+  "repository": "FireRedTeam/FireRedASR2-AED",
+  "requires_terms_acceptance": false,
+  "revision": "2304afed56eacfee6256dee5937ed22ffa0b64ec",
+  "trust_remote_code": false,
+  "worker": "firered"
+}

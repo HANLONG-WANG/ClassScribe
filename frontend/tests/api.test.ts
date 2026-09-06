@@ -1,10 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 describe("API authentication bootstrap", () => {
   beforeEach(() => {
     vi.resetModules();
     sessionStorage.clear();
     document.head.replaceChildren();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("uses the runtime-injected token and removes it from the DOM", async () => {
@@ -42,4 +46,43 @@ describe("API authentication bootstrap", () => {
       ).toBe("session-token");
     },
   );
+
+  it("redacts credentials and local paths from API error details", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: {
+                code: "MODEL_HEALTH_CHECK_FAILED",
+                detail:
+                  "Authorization: Bearer browser-secret hf_abcdefghijklmnop failed at /home/private-user/models/revision/config.json",
+              },
+            }),
+            {
+              status: 409,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        ),
+      ),
+    );
+    const { api } = await import("../src/api");
+
+    let message = "";
+    try {
+      await api("/models/example/install", { method: "POST", body: "{}" });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("[REDACTED]");
+    expect(message).toContain("[LOCAL_PATH]");
+    expect(message).not.toContain("Authorization");
+    expect(message).not.toContain("browser-secret");
+    expect(message).not.toContain("hf_abcdefghijklmnop");
+    expect(message).not.toContain(
+      "/home/private-user/models/revision/config.json",
+    );
+  });
 });

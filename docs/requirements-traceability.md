@@ -257,11 +257,13 @@ raw confidence 仅记录而不参与跨模型加权；本机校准不可用时�
 
 | 范围 | 已落地控制 | 自动证据 | 必须由外部环境补齐 |
 |---|---|---|---|
-| 冻结供应链 | 20 模型完整 commit/manifest/license、16 个 uv lock、pnpm lock、host/redirect/hash/size 限制、两步条款确认 | model manager/download/license/environment/release-check tests | gated 上游账号实际授权（如适用） |
+| 冻结供应链 | 20 模型完整 commit/manifest/license、bundle SHA 索引、人工 selection、独立锁定生成器/离线 verifier、16 个 uv lock、pnpm lock、host/redirect/hash/size 限制、两步条款确认 | manifest-tool 全量/攻击/双 clean 测试、bundle loader、model manager/download/license/environment/release-check 篡改测试 | gated 上游账号实际授权（重新生成时适用） |
 | 生产运行绑定 | API runtime 使用 `ProductionStageRunner`；创建 Job 前 preflight；13 checkpoint 和本机 calibration/profile 真正进入执行 | production runner、pipeline、API、local-profile/calibration tests；architecture gate | 固定生产 checkpoint 与私有 gold 的实测指标 |
 | IBus 常驻生命周期 | core supervisor、VRAM budget、frozen env、Bubblewrap、VAD/LID CPU、严格 resident manifest、idle-boundary profile 路由 | resident supervisor/manifest/router、dictation、scheduler tests | 本机 RTX 4070 的真实显存、延迟与抢占数据 |
-| Fedora 交付 | RPM/spec、3 user units、IBus component、desktop/icon、doctor、installed-tree validator、用户数据保留 | 双版本 RPM lifecycle、doctor/static/release checks | 干净 Fedora SELinux Enforcing 正常安装/升级/卸载与完整桌面矩阵 |
+| Fedora 交付 | RPM/spec、3 user units、IBus component、desktop/icon、doctor、installed-tree bundle validator、用户数据保留；RPM 不含权重/凭证/cache | 不同bundle双版本RPM lifecycle、21 JSON source/installed逐字节比对、doctor/static/release checks | 干净 Fedora SELinux Enforcing 正常安装/升级/卸载与完整桌面矩阵 |
 | 发布授权 | `NOASSERTION` 源码/自制图标 inventory 强制阻塞签名 | `source_license=false` fail-closed gate | 版权方选择并提供 SPDX 许可证后更新 spec/inventory/NOTICE |
+| 发布阻塞 waiver | 规范化独立工件；release manifest 固定路径/SHA；版本、facts、registry、三项 gate 和四项免责声明精确绑定；raw/effective 状态分离 | waiver 缺失/symlink/SHA/canonical/version/registry/额外 gate/ack/scope 攻击测试；source/RPM installed-tree 字节与篡改回归 | waiver 不补许可证、私有 gold、性能或桌面实机证据，原始风险继续公开 |
 
-阶段 13 没有把工程通过等同于正式发布通过。机器清单中的九个发布门只有六个通过；其余三个门
-保留阻塞状态，直到真实证据和授权到位。
+阶段 13 没有把 waiver 等同于原始证据通过。机器清单中的十个发布门仍只有七个原始值为 true；其余
+三个保持 false，但精确 waiver 使 `effective_checks` 全部为 true，并以独立状态
+`ready_with_waivers` 放行自动流程。无 waiver 的真正全绿状态仍只叫 `ready`。

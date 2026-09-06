@@ -1,0 +1,76 @@
+{
+  "environment": {
+    "dtype": "bfloat16",
+    "python": "3.12",
+    "runtime_backend": "transformers",
+    "worker_lock": "workers/funasr_experimental/uv.lock",
+    "worker_lock_sha256": "380f4c6bf0a9cc07d82a4bf7331f462fd19b4f1414458db00e27c7d9182130a9"
+  },
+  "estimated_download_bytes": 1675656640,
+  "files": [
+    {
+      "kind": "tokenizer",
+      "path": "chat_template.jinja",
+      "sha256": "05fef6e90fcdcb879cebcf5d337d9df41668c9d341abad088ea4958b133c29fe",
+      "size_bytes": 1648
+    },
+    {
+      "kind": "config",
+      "path": "config.json",
+      "sha256": "5ada32046d667ad9668d336413af018e485def59c605a77b02e2cb9083843e13",
+      "size_bytes": 2572
+    },
+    {
+      "kind": "config",
+      "path": "generation_config.json",
+      "sha256": "68903240367c583c6700f9bdb6cef3a9591f2a72595399745e6484b27f0e20ca",
+      "size_bytes": 210
+    },
+    {
+      "kind": "tokenizer",
+      "path": "merges.txt",
+      "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+      "size_bytes": 1671853
+    },
+    {
+      "kind": "model",
+      "path": "model.safetensors",
+      "sha256": "8cb92d6fa7c85d6981092bf1ea20369e52263f71a1dfe8259471c282bbbb9625",
+      "size_bytes": 1659779680
+    },
+    {
+      "kind": "config",
+      "path": "processor_config.json",
+      "sha256": "4bbe26c6109b27e4b7fd68008a4e8f60e519b326b59dadba00725ea5678a6b93",
+      "size_bytes": 412
+    },
+    {
+      "kind": "tokenizer",
+      "path": "tokenizer.json",
+      "sha256": "be75606093db2094d7cd20f3c2f385c212750648bd6ea4fb2bf507a6a4c55506",
+      "size_bytes": 11422650
+    },
+    {
+      "kind": "tokenizer",
+      "path": "tokenizer_config.json",
+      "sha256": "8ce06c29ff930e3582c2e19b6776cd68cd996d5748bbf723313743b94f1e389a",
+      "size_bytes": 782
+    },
+    {
+      "kind": "tokenizer",
+      "path": "vocab.json",
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+      "size_bytes": 2776833
+    }
+  ],
+  "installed_size_bytes": 1675656640,
+  "license_id": "Apache-2.0",
+  "license_url": "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512-hf",
+  "manifest_version": 1,
+  "model_id": "fun_asr_nano_2512",
+  "repository": "FunAudioLLM/Fun-ASR-Nano-2512-hf",
+  "requires_terms_acceptance": false,
+  "revision": "1fd03aa58072a4c00bf0a0b149cc4cf0d36d11ed",
+  "trust_remote_code": false,
+  "worker": "funasr_experimental"
+}

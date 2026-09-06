@@ -10,7 +10,7 @@ import wave
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from classscribe_protocol.adapter import AdapterError, StatefulAdapter
 from classscribe_protocol.messages import RPCErrorCode
@@ -24,13 +24,15 @@ _SUPPORTED_MODELS = {
 
 @dataclass(slots=True)
 class _CacheStream:
-    feature_buffer: Any
+    audio_buffer: Any
     cache_last_channel: Any
     cache_last_time: Any
     cache_last_channel_len: Any
+    attention_context: tuple[int, int]
     pending_pcm: bytearray = field(default_factory=bytearray)
     previous_hypotheses: Any | None = None
     previous_pred_out: Any | None = None
+    audio_started: bool = False
     steps: int = 0
     language: str = "auto"
 
@@ -50,7 +52,8 @@ class NemotronAdapter(StatefulAdapter):
         )
         self._model: Any | None = None
         self._torch: Any | None = None
-        self._feature_buffer_type: Any | None = None
+        self._numpy: Any | None = None
+        self._audio_buffer_type: Any | None = None
         self._decode_lock = asyncio.Lock()
         self._stream_bases: dict[str, int] = {}
         self._decoded_samples: dict[str, int] = {}
@@ -110,13 +113,15 @@ class NemotronAdapter(StatefulAdapter):
                 "Nemotron snapshot must contain exactly one local .nemo archive",
             )
 
-        def load() -> tuple[Any, Any, Any, str]:
+        def load() -> tuple[Any, Any, Any, Any, str]:
             try:
+                import numpy  # type: ignore[import-not-found]
                 import torch  # type: ignore[import-not-found]
                 from nemo.collections.asr.models import ASRModel  # type: ignore[import-not-found]
                 from nemo.collections.asr.parts.utils.streaming_utils import (  # type: ignore[import-not-found]
-                    StreamingFeatureBufferer,
+                    CacheAwareStreamingAudioBuffer,
                 )
+                from nemo.utils import model_utils  # type: ignore[import-not-found]
             except ImportError as exc:
                 raise AdapterError(
                     RPCErrorCode.MODEL_LOAD_FAILED,
@@ -125,19 +130,44 @@ class NemotronAdapter(StatefulAdapter):
             device = str(params.get("device", "auto"))
             if device == "auto":
                 device = "cuda:0" if torch.cuda.is_available() else "cpu"
-            model = ASRModel.restore_from(str(archives[0]), map_location=device)
+            config = ASRModel.restore_from(str(archives[0]), return_config=True)
+            target = config.get("target")
+            if not isinstance(target, str) or not target.startswith(
+                "nemo.collections.asr.models."
+            ):
+                raise AdapterError(
+                    RPCErrorCode.MODEL_LOAD_FAILED,
+                    "Nemotron archive has no supported NeMo ASR target class",
+                )
+            model_type = model_utils.import_class_by_path(target)
+            if not isinstance(model_type, type) or not issubclass(model_type, ASRModel):
+                raise AdapterError(
+                    RPCErrorCode.MODEL_LOAD_FAILED,
+                    "Nemotron archive target is not a NeMo ASR model class",
+                )
+            model = cast(Any, model_type).restore_from(str(archives[0]), map_location=device)
             model.freeze()
             model.eval()
             model.to(device)
+            if hasattr(model, "set_inference_prompt"):
+                strip_language_tags = getattr(
+                    getattr(model, "decoding", None), "set_strip_lang_tags", None
+                )
+                if not callable(strip_language_tags):
+                    raise AdapterError(
+                        RPCErrorCode.MODEL_LOAD_FAILED,
+                        "prompt-aware Nemotron cannot strip language control tags",
+                    )
+                strip_language_tags(True)
             if not hasattr(model, "conformer_stream_step") or not hasattr(model, "encoder"):
                 raise AdapterError(
                     RPCErrorCode.MODEL_LOAD_FAILED,
                     "Nemotron archive does not expose cache-aware Conformer streaming",
                 )
-            return model, torch, StreamingFeatureBufferer, device
+            return model, torch, numpy, CacheAwareStreamingAudioBuffer, device
 
         try:
-            model, torch, feature_buffer_type, device = await asyncio.to_thread(load)
+            model, torch, numpy, audio_buffer_type, device = await asyncio.to_thread(load)
         except AdapterError:
             raise
         except Exception as exc:
@@ -150,31 +180,30 @@ class NemotronAdapter(StatefulAdapter):
         result = await super().dispatch("load", params, cancelled)
         self._model = model
         self._torch = torch
-        self._feature_buffer_type = feature_buffer_type
+        self._numpy = numpy
+        self._audio_buffer_type = audio_buffer_type
         return {**result, "backend": "nemo_cached_streaming", "device": device, "offline": True}
 
     async def _open_cache_stream(self, *, chunk_ms: int, language: str) -> _CacheStream:
         def create() -> _CacheStream:
             assert self._model is not None
-            assert self._feature_buffer_type is not None
-            streaming = self._model.encoder.streaming_cfg
-            pre_encode_frames = float(_steady_value(streaming.pre_encode_cache_size))
-            stride = float(self._model.cfg.preprocessor.window_stride)
-            chunk_seconds = chunk_ms / 1000
-            buffer_seconds = chunk_seconds + max(stride, pre_encode_frames * stride)
-            feature_buffer = self._feature_buffer_type(
-                asr_model=self._model,
-                chunk_size=chunk_seconds,
-                buffer_size=buffer_seconds,
+            assert self._audio_buffer_type is not None
+            attention_context = _attention_context(self._model.encoder, chunk_ms)
+            self._model.encoder.set_default_att_context_size(list(attention_context))
+            audio_buffer = self._audio_buffer_type(
+                model=self._model,
+                online_normalization=False,
+                pad_and_drop_preencoded=False,
             )
             cache_channel, cache_time, cache_length = self._model.encoder.get_initial_cache_state(
                 batch_size=1
             )
             return _CacheStream(
-                feature_buffer=feature_buffer,
+                audio_buffer=audio_buffer,
                 cache_last_channel=cache_channel,
                 cache_last_time=cache_time,
                 cache_last_channel_len=cache_length,
+                attention_context=attention_context,
                 language=language,
             )
 
@@ -263,51 +292,65 @@ class NemotronAdapter(StatefulAdapter):
         def infer() -> tuple[str, str | None]:
             assert self._model is not None
             assert self._torch is not None
+            assert self._numpy is not None
             state = self._cache_streams[stream_id]
+            current_context = tuple(int(item) for item in self._model.encoder.att_context_size)
+            if current_context != state.attention_context:
+                self._model.encoder.set_default_att_context_size(
+                    list(state.attention_context)
+                )
             if hasattr(self._model, "set_inference_prompt"):
                 self._model.set_inference_prompt(_prompt_language(state.language))
-            samples = (
-                self._torch.frombuffer(bytearray(pcm), dtype=self._torch.int16)
-                .clone()
-                .to(self._model.device)
-                .float()
-                .div_(32768.0)
+            samples = self._numpy.frombuffer(pcm, dtype=self._numpy.int16).astype(
+                self._numpy.float32
             )
-            state.feature_buffer.update_feature_buffer(samples)
-            processed = state.feature_buffer.get_normalized_feature_buffer().unsqueeze(0)
-            processed = processed.to(self._model.device)
-            processed_length = self._torch.tensor(
-                [processed.shape[-1]], dtype=self._torch.long, device=self._model.device
+            samples /= 32768.0
+            state.audio_buffer.append_audio(
+                samples,
+                stream_id=0 if state.audio_started else -1,
             )
-            drop = (
-                0
-                if state.steps == 0
-                else int(getattr(self._model.encoder.streaming_cfg, "drop_extra_pre_encoded", 0))
-            )
-            with self._torch.inference_mode():
-                (
-                    pred_out,
-                    transcriptions,
-                    state.cache_last_channel,
-                    state.cache_last_time,
-                    state.cache_last_channel_len,
-                    best_hypotheses,
-                ) = self._model.conformer_stream_step(
-                    processed_signal=processed,
-                    processed_signal_length=processed_length,
-                    cache_last_channel=state.cache_last_channel,
-                    cache_last_time=state.cache_last_time,
-                    cache_last_channel_len=state.cache_last_channel_len,
-                    keep_all_outputs=final,
-                    previous_hypotheses=state.previous_hypotheses,
-                    previous_pred_out=state.previous_pred_out,
-                    drop_extra_pre_encoded=drop,
-                    return_transcription=True,
+            state.audio_started = True
+            hypothesis: object | None = None
+            for processed, processed_length in state.audio_buffer:
+                processed = processed.to(self._model.device)
+                processed_length = processed_length.to(self._model.device)
+                drop = (
+                    0
+                    if state.steps == 0
+                    else int(
+                        getattr(
+                            self._model.encoder.streaming_cfg,
+                            "drop_extra_pre_encoded",
+                            0,
+                        )
+                    )
                 )
-            state.steps += 1
-            state.previous_pred_out = pred_out
-            state.previous_hypotheses = best_hypotheses
-            hypothesis = _first_hypothesis(best_hypotheses, transcriptions)
+                with self._torch.inference_mode():
+                    (
+                        pred_out,
+                        transcriptions,
+                        state.cache_last_channel,
+                        state.cache_last_time,
+                        state.cache_last_channel_len,
+                        best_hypotheses,
+                    ) = self._model.conformer_stream_step(
+                        processed_signal=processed,
+                        processed_signal_length=processed_length,
+                        cache_last_channel=state.cache_last_channel,
+                        cache_last_time=state.cache_last_time,
+                        cache_last_channel_len=state.cache_last_channel_len,
+                        keep_all_outputs=final,
+                        previous_hypotheses=state.previous_hypotheses,
+                        previous_pred_out=state.previous_pred_out,
+                        drop_extra_pre_encoded=drop,
+                        return_transcription=True,
+                    )
+                state.steps += 1
+                state.previous_pred_out = pred_out
+                state.previous_hypotheses = best_hypotheses
+                hypothesis = _first_hypothesis(best_hypotheses, transcriptions)
+            if hypothesis is None:
+                hypothesis = _first_hypothesis(state.previous_hypotheses, ())
             reported = getattr(hypothesis, "language", getattr(hypothesis, "lang", None))
             text = str(hypothesis.text if hasattr(hypothesis, "text") else hypothesis)
             return text, str(reported) if reported is not None else None
@@ -372,9 +415,21 @@ class NemotronAdapter(StatefulAdapter):
                     writer.setsampwidth(2)
                     writer.setframerate(SAMPLE_RATE)
                     writer.writeframes(pcm)
-                hypotheses = self._model.transcribe(
-                    [str(clip)], batch_size=1, return_hypotheses=True
-                )
+                transcribe_options: dict[str, object] = {
+                    "batch_size": 1,
+                    "return_hypotheses": True,
+                }
+                if hasattr(self._model, "set_inference_prompt"):
+                    config_factory = getattr(self._model, "get_transcribe_config", None)
+                    if not callable(config_factory):
+                        raise ValueError("prompt-aware Nemotron has no transcribe config")
+                    transcribe_config = config_factory()
+                    transcribe_config.batch_size = 1
+                    transcribe_config.return_hypotheses = True
+                    transcribe_config.use_lhotse = False
+                    transcribe_config.target_lang = _prompt_language(language)
+                    transcribe_options["override_config"] = transcribe_config
+                hypotheses = self._model.transcribe([str(clip)], **transcribe_options)
             if not isinstance(hypotheses, list) or len(hypotheses) != 1:
                 raise ValueError("Nemotron decode must return one hypothesis")
             value = hypotheses[0]
@@ -407,7 +462,8 @@ class NemotronAdapter(StatefulAdapter):
         self._model = None
         torch = self._torch
         self._torch = None
-        self._feature_buffer_type = None
+        self._numpy = None
+        self._audio_buffer_type = None
         self._stream_bases.clear()
         self._decoded_samples.clear()
         self._chunk_samples.clear()
@@ -433,12 +489,19 @@ def _prompt_language(value: str) -> str:
     return {"zh": "zh-CN", "ja": "ja-JP", "en": "en-US"}.get(value, "auto")
 
 
-def _steady_value(value: Any) -> Any:
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        if not value:
-            raise ValueError("empty Nemotron streaming configuration")
-        return value[-1]
-    return value
+def _attention_context(encoder: Any, chunk_ms: int) -> tuple[int, int]:
+    right_context = {80: 0, 160: 1, 320: 3, 560: 6, 1120: 13}.get(chunk_ms)
+    if right_context is None:
+        raise ValueError("Nemotron chunk_ms must be one of 80, 160, 320, 560, or 1120")
+    for value in getattr(encoder, "att_context_size_all", ()):
+        if (
+            isinstance(value, Sequence)
+            and not isinstance(value, (str, bytes, bytearray))
+            and len(value) == 2
+            and int(value[1]) == right_context
+        ):
+            return int(value[0]), int(value[1])
+    raise ValueError(f"Nemotron model does not support {chunk_ms} ms cache chunks")
 
 
 def _first_hypothesis(best: object, transcriptions: object) -> object:

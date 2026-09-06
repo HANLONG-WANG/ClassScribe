@@ -35,7 +35,8 @@ ClassScribe **不承诺**任何录音条件下都达到零 CER/WER，也不承�
 ## 当前发布状态
 
 工程实现由 `scripts/validate_release.py` 做 fail-closed 检查。当前源码许可证、真实模型／私有
-gold 验收和完整桌面矩阵尚未通过，因此不得把本树签名为正式发布。详情见
+gold 验收和完整桌面矩阵的原始检查仍未通过；release owner 已对这三项实施一次精确、版本绑定的
+自动阻塞 waiver。详情见
 [已知限制](docs/known-limitations.md)、[风险记录](docs/risk-register.md) 和
 [许可证状态](LICENSES/README.md)。
 
@@ -43,5 +44,6 @@ gold 验收和完整桌面矩阵尚未通过，因此不得把本树签名为正
 UV_CACHE_DIR=/tmp/classscribe-uv-cache uv run --offline python scripts/validate_release.py
 ```
 
-当前 9 个发布门中 6 个工程门通过；命令以状态码 2 返回 `blocked` 是预期的安全行为，而不是把
-缺失的私人验收数据、桌面实机或版权方授权伪造成成功。
+当前十个发布门中七个原始工程门通过，另三项保持 `false`；有效 waiver 使命令以状态码 0 返回
+`ready_with_waivers`。这不把缺失的私人验收数据、桌面实机或版权方授权伪造成成功，也不授予源码
+或图标的再分发权。

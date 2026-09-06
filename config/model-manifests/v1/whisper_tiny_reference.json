@@ -1,0 +1,46 @@
+{
+  "environment": {
+    "dtype": "int8",
+    "python": "3.12",
+    "runtime_backend": "faster_whisper_cpu_int8",
+    "worker_lock": "workers/moss_en/uv.lock",
+    "worker_lock_sha256": "ac392045030024e28a7ec9103fce0a73f96021d4880324d8e770a2fd6e17890c"
+  },
+  "estimated_download_bytes": 78203619,
+  "files": [
+    {
+      "kind": "config",
+      "path": "config.json",
+      "sha256": "a73a28cdfe1c43ccc7202fa333d1f89c202477271407ae9a7f19afa52039cac8",
+      "size_bytes": 2249
+    },
+    {
+      "kind": "model",
+      "path": "model.bin",
+      "sha256": "dcb76c6586fc06cbdac6dd21f14cfd129cc4cdd9dce19bf4ffa62e59cbe6e6d1",
+      "size_bytes": 75538270
+    },
+    {
+      "kind": "tokenizer",
+      "path": "tokenizer.json",
+      "sha256": "fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab",
+      "size_bytes": 2203239
+    },
+    {
+      "kind": "tokenizer",
+      "path": "vocabulary.txt",
+      "sha256": "34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913",
+      "size_bytes": 459861
+    }
+  ],
+  "installed_size_bytes": 78203619,
+  "license_id": "MIT",
+  "license_url": "https://huggingface.co/Systran/faster-whisper-tiny",
+  "manifest_version": 1,
+  "model_id": "whisper_tiny_reference",
+  "repository": "Systran/faster-whisper-tiny",
+  "requires_terms_acceptance": false,
+  "revision": "d90ca5fe260221311c53c58e660288d3deb8d356",
+  "trust_remote_code": false,
+  "worker": "moss_en"
+}

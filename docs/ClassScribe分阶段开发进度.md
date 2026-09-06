@@ -20,7 +20,7 @@
 | 阶段 10：课堂流水线／API／WebUI | 已完成 | 2026-09-04 | 完整 API 合同、3 项 UI 测试；真实 Chromium 实际覆盖导入→任务→校对→词典→模型→导出 |
 | 阶段 11：IBus／流式长听写／Portal 快捷键 | 已完成 | 2026-09-04 | 流式/长听写、按语言双驻留或热切换 accuracy、Portal/IBus 错误降级均有专项证据 |
 | 阶段 12：Gold benchmark／校准／全测试／性能 | 实现完成，实机验收阻塞 | — | 337 项自动回归通过、1 项真实模型按设计 skip；缺私人 gold、固定权重、可用 CUDA 与完整桌面矩阵 |
-| 阶段 13：发布加固／RPM／文档／最终交付 | 工程实现完成，发布签核阻塞 | 2026-09-04 | 9 个发布门中 6 个通过；源码许可、Phase 12 实机验收、桌面矩阵 fail-closed |
+| 阶段 13：发布加固／RPM／文档／最终交付 | release waiver 生效 | 2026-09-06 | 10 门中 7 个原始通过；3 个原始失败由精确版本绑定 waiver 形成 `ready_with_waivers` |
 
 ## 阶段 0：冻结产品边界、质量承诺与工程原则
 
@@ -175,7 +175,7 @@ worker 只能接收 `SecureFileLocator` 批准的路径。实际模型下载、s
 - 实现 Model Manifest v1 schema 和事务型 `ModelManager`：一次性 10 分钟用户确认、下载／
   磁盘／环境展示、同文件系统 0700 staging、完整 commit revision、resolved revision
   核对、逐文件 size/SHA-256、额外文件/symlink 拒绝、aggregate hash 与原子发布。
-- `trust_remote_code` 必须把代码存入 `code/` 快照并逐文件哈希；供应链 JSON 记录 manifest、
+- `trust_remote_code` 必须保留上游安全相对路径并把文件分类为 `remote_code` 后逐文件哈希；供应链 JSON 记录 manifest、
   来源、下载量、依赖环境、全部 hash、健康音频 hash/格式、实际健康结果和 VRAM；升级前
   生成 added/removed/changed/remote-code-changed 清单。
 - 安装发布后必须用非空 16 kHz 16-bit PCM 短音频执行实际 worker 健康回调，失败清理新
@@ -644,9 +644,11 @@ confidence/logprob，不得跨模型直接比较；阶段 12 才可产生校准 
   1.5～2.5 秒 overlap、绝对 sample、`chunk_seq`、rolling context 和未提交尾部。
   stable-prefix 和合并按 token+绝对时间，没有固定字符删除；5 分钟固定回归证明
   300 个 token 跨多块不丢不重。
-- Nemotron adapter 使用 `StreamingFeatureBufferer`/`conformer_stream_step`，跨 chunk 保存
-  attention/convolution/cache-length/RNNT hypothesis/predictor output；fast 只排空右上下文，
-  balanced 重解当前句段。accuracy 按语言选择 batch/final worker：显存足够时双驻留，否则
+- Nemotron adapter 使用 `CacheAwareStreamingAudioBuffer`/`conformer_stream_step`，把
+  80/160/320/560/1120 ms 映射到模型声明的右 attention context 0/1/3/6/13，只增量预处理新
+  PCM，并跨 chunk 保存audio buffer、attention/convolution/cache-length/RNNT
+  hypothesis/predictor output；fast 只排空右上下文，balanced 重解当前句段。accuracy 按语言选择
+  batch/final worker：显存足够时双驻留，否则
   松键后由 core 卸载流式 GPU worker 再热切换；batch-only 模型经有界内存 PCM→临时 WAV 桥运行。
 - Auto 语言在稳定边界融合主 ASR 与 FireRedLID，缺失 detector 不当作零票，连续
   两窗达到 0.80 才切换；日语英文术语保持日语会话。三种标点模式保证非标点
@@ -736,13 +738,14 @@ confidence/logprob，不得跨模型直接比较；阶段 12 才可产生校准 
 
 ## 阶段 13：完成发布加固、风险闭环、文档、RPM 与最终交付
 
-状态：**工程实现完成，发布签核阻塞**（2026-09-04）
+状态：**工程实现完成，release-blocking waiver 生效**（2026-09-06）
 
 ### 已完成的工程交付
 
 - 冻结 `release/release-manifest.v1.json`、20 个模型的 revision/逐文件 manifest/许可证披露、
-  根与 16 个 Python 工程 lock、pnpm lock、协议 schema、迁移、RPM 和文档 inventory；
-  `classscribe-release-check` 对缺件、lock hash、registry/revision/license 漂移和架构绑定 fail closed。
+  production bundle SHA 索引、人工 selection、独立 generator/verifier lock、16 个 Python 工程 lock、
+  pnpm lock、协议 schema、迁移、RPM 和文档 inventory；release check 对缺件、额外成员、成员 byte/SHA、
+  selection、registry/revision/license/worker/tool lock 漂移和架构绑定 fail closed。
 - 模型安装改为两步确认：预检只返回许可证/remote-code/空间/diff/一次性 token，确认才允许固定
   Hugging Face host+commit+文件的下载。下载器拒绝凭证 URL、跨 host redirect、symlink、短写、
   大小/hash 不符；真实短 WAV 完成离线 load→infer→unload 后才切换 active revision。
@@ -763,13 +766,19 @@ confidence/logprob，不得跨模型直接比较；阶段 12 才可产生校准 
 - 最终架构门验证课堂仍为“结构→语言正文→可疑复核→时间对齐共识→术语→严格标点→门控对齐
   →自动导出”，IBus 仍为“PipeWire/VAD→常驻流式 preedit→自动分块→可选确认→commit”；新增
   模型只需 worker+registry+benchmark，不需要复制业务流水线。
+- 新增规范化 `release/release-waivers.v1.json`；release manifest 以 SHA 固定该工件，source 与 RPM
+  installed-tree 共用同字节合同。waiver 只覆盖 `source_license`、`phase12_acceptance`、
+  `desktop_matrix` 的自动阻塞，报告继续保留三项原始失败、免责声明和详细原因。
 
 ### 自动验证证据
 
-- 全仓按运行权限拆分合计 387 passed、1 skipped、零失败：非 RPM 的 core/protocol/IBus/worker/
-  API/生产流水线共 384 passed，真实固定 checkpoint 因未设置 `CLASSSCRIBE_REAL_MODEL_PATH` 按
-  设计 skip；RPM 三项另在普通 UID sandbox 通过。statement+branch 总覆盖率 80.16%，超过 80% 门。
-- Ruff format/check（310 files）、mypy strict（218 source files）、11 个 worker 各自三入口 strict
+- 最终全仓按运行权限拆分合计 488 passed、1 expected skip、零失败：非 RPM 的 core/protocol/IBus/
+  worker/API/生产流水线共 485 passed，通用 opt-in real-model 用例因未设置
+  `CLASSSCRIBE_REAL_MODEL_PATH` 按设计 skip；RPM/packaging 三项在可执行 RPM6 事务的隔离边界通过。
+- manifest-tool 149 项（含固定 revision、LFS redirect、gated/短写/超长攻击）及独立 offline/frozen
+  production verifier 20/20 通过；bundle SHA 为
+  `55069eea4fd82af5132a708ce1658217a652d4af16003352f7f15593e5c11357`。
+- Ruff、根 mypy strict（224 source files）、manifest-tool strict（19 source files）、11 个 worker 各自三入口 strict
   mypy、architecture boundary 和 `git diff --check` 通过；根/协议/3 桌面进程/11 worker 共 16 份
   uv lock 均以 offline `uv lock --check` 通过。
 - 前端 Prettier、ESLint、TypeScript project build、Vitest 3 项、Vite production build 和真实
@@ -778,19 +787,21 @@ confidence/logprob，不得跨模型直接比较；阶段 12 才可产生校准 
   缺 GI namespace、系统 Node 22 为 Maintenance LTS、无全局 pnpm，且 NVIDIA driver/userspace
   无法通信。它们与生产 checkpoint/桌面矩阵一起保留为实机发布环境阻塞，不由本地 node_modules
   或系统 Python 的局部可用性掩盖。
-- `release/release-readiness.json` 保存九门机器结果，validator 预期以状态码 2 返回 `blocked`；
-  六个工程门为 true，三个外部签核门为 false。
+- `release/release-readiness.json` 保存十门原始/有效机器结果：七个原始工程门为 true，三个外部门为
+  false；经有效 waiver 后十个 effective gate 全为 true，validator 以状态码 0 返回
+  `ready_with_waivers`。
 
 ### 发布门结果与未满足退出条件
 
 - `artifact_inventory`、`model_revision_lock`、`model_license_inventory`、
-  `dependency_lock_hashes`、`final_architecture`、`production_runtime_binding` 六门通过。
+  `model_manifest_bundle`、`dependency_lock_hashes`、`final_architecture`、`production_runtime_binding`
+  七门通过。
 - `source_license` 未通过：仓库没有版权方提供的 ClassScribe 源码和自制 SVG 许可证，inventory
   保持 `NOASSERTION` 且明确 `release_blocking=true`；实现者不能代替版权方选择授权。
-- `phase12_acceptance` 未通过：缺用户私有中/日/英 gold、已安装固定生产权重、可用 CUDA 驱动和
-  90 分钟/近讲/多说话人实测，报告保持 `incomplete`。
+- `phase12_acceptance` 未通过：14 个当前使用模型的固定权重 CPU 生命周期已通过，但仍缺用户私有
+  中/日/英 gold、可用 CUDA 驱动和 90 分钟/近讲/多说话人质量与性能实测，报告保持 `incomplete`。
 - `desktop_matrix` 未通过：GNOME/KDE × Wayland/X11 × 八类应用没有全部在已安装实机执行，报告
   保持 `incomplete`。
-- 因此阶段 13 的源码工程已经交付，但计划规定的“干净 Fedora 可复现 + 所有实机性能/桌面条件 +
-  可再分发许可证”退出条件不能诚实标记完成，正式 RPM 不得签名或发布。解除只能补充外部证据/
-  版权方决定并重新运行 Phase 12、桌面和 release validator，不能修改状态文字绕过。
+- release owner 已明确授权版本绑定 waiver，因此自动发布阻塞可在完整校验后解除；状态必须显示为
+  `ready_with_waivers`，不得显示为无 waiver 的 `ready`。这不授予源码/图标再分发权，也不声称
+  Phase 12 或桌面矩阵通过；三项原始限制会持续公开，直至外部证据/版权方决定真正补齐。

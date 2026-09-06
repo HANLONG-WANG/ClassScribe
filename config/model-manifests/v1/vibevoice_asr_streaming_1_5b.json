@@ -1,0 +1,94 @@
+{
+  "environment": {
+    "dtype": "bfloat16",
+    "python": "3.12",
+    "runtime_backend": "transformers",
+    "worker_lock": "workers/vibevoice/uv.lock",
+    "worker_lock_sha256": "d6b0385c972a91643f8fc22d8dc517db3fb9c028af83c5335343a2045039aa03"
+  },
+  "estimated_download_bytes": 5644393692,
+  "files": [
+    {
+      "kind": "tokenizer",
+      "path": "added_tokens.json",
+      "sha256": "d5401f76119bc71e1844d8e909826f8cb3d68e152a058fe228cc37f74603ca84",
+      "size_bytes": 714
+    },
+    {
+      "kind": "config",
+      "path": "config.json",
+      "sha256": "2b46a311855872193b218bc8d4de499e3252cd3c3c06662128d16e3f9e8bc72f",
+      "size_bytes": 2941
+    },
+    {
+      "kind": "tokenizer",
+      "path": "merges.txt",
+      "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+      "size_bytes": 1671853
+    },
+    {
+      "kind": "model",
+      "path": "model-00001-of-00003.safetensors",
+      "sha256": "788e6206a158c614e1e6777ab843baf64ca8a3f555e3cb72c26d5d79b925d4b9",
+      "size_bytes": 2498354152
+    },
+    {
+      "kind": "model",
+      "path": "model-00002-of-00003.safetensors",
+      "sha256": "4d58b3ce47ac6b0ac5d3b142d54e56f10e02a928cf016b493e9e6a3f91beb75d",
+      "size_bytes": 2486576066
+    },
+    {
+      "kind": "model",
+      "path": "model-00003-of-00003.safetensors",
+      "sha256": "884b560dcd3024436d8827d32c7e211c545751c099df4ee75101c1ee2196f427",
+      "size_bytes": 643458072
+    },
+    {
+      "kind": "model",
+      "path": "model.safetensors.index.json",
+      "sha256": "beac94f964e3358f8c66e7dcdbc700e5518e5cf2a7b7697a0c156ff7bcf89038",
+      "size_bytes": 120114
+    },
+    {
+      "kind": "config",
+      "path": "preprocessor_config.json",
+      "sha256": "59ee0cc74687fc2ab8f5f9c2fc3b61cdf66078ebd4f34a61e1fcfc1a644ac31a",
+      "size_bytes": 191
+    },
+    {
+      "kind": "tokenizer",
+      "path": "special_tokens_map.json",
+      "sha256": "7093fea72a118fb4016ee85c13cc2f94ecd659d4600c6ce16cdcd3a2c1d96e68",
+      "size_bytes": 769
+    },
+    {
+      "kind": "tokenizer",
+      "path": "tokenizer.json",
+      "sha256": "d198a051741ee47805797b744e6524c259b08a59b58d1ec159cfd7f1da5f2df7",
+      "size_bytes": 11422657
+    },
+    {
+      "kind": "tokenizer",
+      "path": "tokenizer_config.json",
+      "sha256": "e80c7714aaff125403ba7c18a4c06da9b18eb81cb6ee4bee711143fa15d94fd6",
+      "size_bytes": 9330
+    },
+    {
+      "kind": "tokenizer",
+      "path": "vocab.json",
+      "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+      "size_bytes": 2776833
+    }
+  ],
+  "installed_size_bytes": 5644393692,
+  "license_id": "MIT",
+  "license_url": "https://huggingface.co/microsoft/VibeVoice-ASR-Streaming-1.5B",
+  "manifest_version": 1,
+  "model_id": "vibevoice_asr_streaming_1_5b",
+  "repository": "microsoft/VibeVoice-ASR-Streaming-1.5B",
+  "requires_terms_acceptance": false,
+  "revision": "4262d23d8a539a6530cf64fbd0b1751ef9a30853",
+  "trust_remote_code": false,
+  "worker": "vibevoice"
+}

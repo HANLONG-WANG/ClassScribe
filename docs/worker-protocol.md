@@ -91,11 +91,14 @@ worker socket 须是清单相邻 `workers/` 下的同 UID 真实 socket 且 `060
 具体 model ID 只能命中清单中的 route。core shutdown 会逐个 `unload`/stop 并发布 `ready=false`；
 启动、load 或停止失败被隔离成结构化错误，不会留下一个虚假的 ready 清单。
 
-Nemotron streaming 会话使用 NeMo `StreamingFeatureBufferer` 和 `conformer_stream_step`。每个
-`stream_id` 隔离保存 attention channel cache、convolution time cache、cache length、previous
-hypothesis 与 predictor output；首块 `drop_extra_pre_encoded=0`，后续使用模型配置。`fast`
-flush 只处理补齐后的尾块并保持实际绝对 sample 终点；`balanced`/`accuracy` 可对当前完整句段
-重解码。close/unload 会清除所有 cache；worker 不把“每块累计重跑整个音频”冒充 cache-aware。
+Nemotron streaming 会话使用 NeMo `CacheAwareStreamingAudioBuffer` 和
+`conformer_stream_step`。worker 将 80/160/320/560/1120 ms 分别映射到模型声明的右 attention
+context 0/1/3/6/13，并拒绝模型未声明的组合；每个 `stream_id` 隔离保存 audio buffer、attention
+channel cache、convolution time cache、cache length、previous hypothesis 与 predictor output。
+每次只向 buffer 追加新 PCM，首步 `stream_id=-1` 且 `drop_extra_pre_encoded=0`，后续使用同一
+stream 与模型配置。`fast` flush 只处理补齐后的尾块并保持实际绝对 sample 终点；
+`balanced`/`accuracy` 可对当前完整句段重解码。close/unload 会清除所有 buffer/cache；worker
+不把“每块累计重跑整个音频”冒充 cache-aware。
 
 ## 真实模型验收
 

@@ -28,11 +28,19 @@
 
 模型安装的写接口为：
 
-- `POST /api/v1/models/{model_id}/install`：接收 Manifest v1，只生成十分钟、一次性的安装计划；
+- `POST /api/v1/models/{model_id}/install`：请求体必须是 `{}`；服务按 path 中的 model ID 从内置只读
+  bundle 选择 Manifest v1，额外字段（包括客户端 `manifest`）返回 422。202 响应包含固定 revision、
+  manifest SHA、下载/安装/临时空间、许可证与条款、依赖环境、component source、remote-code 路径
+  摘要、到期时间和十分钟一次性确认 token；
 - `POST /api/v1/models/{model_id}/install/confirm`：提交确认 token、健康录音 UUID、健康语言、可选
   参考文本与条款接受位，成功后才返回安装 revision、aggregate SHA 和真实健康结果；
 - `POST /api/v1/models/{model_id}/verify`、`DELETE /api/v1/models/{model_id}?revision=...` 与
   `POST /api/v1/models/{model_id}/rollback?revision=...`：分别复验、删除非活动 revision 和回滚。
+
+`GET /api/v1/models/{model_id}/manifest` 返回发布 bundle 中的 `model_id`、成员 `sha256` 和公开
+manifest；它不返回确认 token、HF token 或本机路径。`GET /api/v1/models` 分别报告
+`manifest_available`、`worker_implemented`、`installable`、`enabled` 及稳定阻塞原因，不能把这些
+状态合并成一个布尔值。
 
 `GET /api/v1/diagnostics/bundle` 返回只含脱敏 `diagnostics.json` 的 zip；它与诊断页使用同一快照和
 认证边界，不包含音频、正文、preedit、token、凭证或用户绝对路径。

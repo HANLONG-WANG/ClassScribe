@@ -1,0 +1,113 @@
+{
+  "facts_as_of": "2026-09-03",
+  "generated_at": "2026-09-03T16:00:00Z",
+  "generator": {
+    "lock_sha256": "b089d564b6043b41cea4c565c4add10b411d21f9ccb6e9d81e6a2670ba4d4f90",
+    "name": "classscribe-model-manifest",
+    "version": "1"
+  },
+  "manifests": [
+    {
+      "model_id": "ark_asr_3b",
+      "path": "ark_asr_3b.json",
+      "sha256": "4601414756b4b47da4f816d1cf0c851948647a61f92c7f0629455edad0f3e05d"
+    },
+    {
+      "model_id": "firered_asr2_aed",
+      "path": "firered_asr2_aed.json",
+      "sha256": "b762acfbf217087e23dc79eca1f98754c88e7e158d8ff90d8c6968c0d2e5755b"
+    },
+    {
+      "model_id": "firered_asr2_llm",
+      "path": "firered_asr2_llm.json",
+      "sha256": "1eb3e170cffd04ce8368716955d12b2059451395c80add3f473657b5829c3879"
+    },
+    {
+      "model_id": "firered_lid",
+      "path": "firered_lid.json",
+      "sha256": "1670bdef7cc7f84b2d1972d4667484ef17c2e6a4769e62d8231acf536ecbedbc"
+    },
+    {
+      "model_id": "firered_punc",
+      "path": "firered_punc.json",
+      "sha256": "98153f5694bbc0d09484f25fa1417329c53618d4db8180b6e5e481387c92dd6e"
+    },
+    {
+      "model_id": "firered_vad",
+      "path": "firered_vad.json",
+      "sha256": "e8067bf09fd90b66a056dcae8493c852ff4abd09bdadaa00111660c89aea174a"
+    },
+    {
+      "model_id": "fun_asr_nano_2512",
+      "path": "fun_asr_nano_2512.json",
+      "sha256": "375e3c770e1da4ed1c35e97d22841de98d8871cd72fa6f3cf07aae685707aa66"
+    },
+    {
+      "model_id": "granite_speech_4_1_2b",
+      "path": "granite_speech_4_1_2b.json",
+      "sha256": "7ca6adadf1a0c81e3694156e017b3c91f524b8b882f9b954973e511f9064427e"
+    },
+    {
+      "model_id": "granite_speech_5_0_turboctc_470m",
+      "path": "granite_speech_5_0_turboctc_470m.json",
+      "sha256": "e886354a819b9b868f12fd9d0c3582a0a08e6b04d10ac43aa10b84b3b14b4fbd"
+    },
+    {
+      "model_id": "moss_td_0_9b",
+      "path": "moss_td_0_9b.json",
+      "sha256": "2e364b702da1dfc8bca35d292cb578fc6c31795ec72121fed7c697f38c9bd913"
+    },
+    {
+      "model_id": "moss_transcribe_preview_2b",
+      "path": "moss_transcribe_preview_2b.json",
+      "sha256": "78797aaaa515ff283f48535b7d4f985bf164bb7933d42d35bc31770cdf023a83"
+    },
+    {
+      "model_id": "nemotron_3_5_asr_streaming_0_6b",
+      "path": "nemotron_3_5_asr_streaming_0_6b.json",
+      "sha256": "4df2371465afb83453a540980daf304c426e8fa67c29c68434c25fd93b831362"
+    },
+    {
+      "model_id": "nemotron_speech_streaming_en_0_6b",
+      "path": "nemotron_speech_streaming_en_0_6b.json",
+      "sha256": "494f48f80b7b569b6584f717713197b33b683e4912dfa3bb1dfd88d49c53c4c1"
+    },
+    {
+      "model_id": "pyannote_community_1",
+      "path": "pyannote_community_1.json",
+      "sha256": "179c9160ebaaa22687971e9271eecf0bf6158d590e50b798f8a53e709c6a6a0e"
+    },
+    {
+      "model_id": "qwen3_asr_0_6b",
+      "path": "qwen3_asr_0_6b.json",
+      "sha256": "50f7366f9206e96a9d5f66000418492601eb7af235bfd01f8146813800ffbe0e"
+    },
+    {
+      "model_id": "qwen3_asr_1_7b",
+      "path": "qwen3_asr_1_7b.json",
+      "sha256": "a56f3fcc7b6474f4853da296d3b8fba1b7a3ba9dedafcf85f8a790427f935f49"
+    },
+    {
+      "model_id": "qwen3_forced_aligner_0_6b",
+      "path": "qwen3_forced_aligner_0_6b.json",
+      "sha256": "613e1af895d44e2598a90c9435fc84447298210a9baea57e5afd1889dda17702"
+    },
+    {
+      "model_id": "vibevoice_asr_streaming_1_5b",
+      "path": "vibevoice_asr_streaming_1_5b.json",
+      "sha256": "50ee47bf50db6e811e0e42e642f48ab405a6be02dd41a4a43391fc070cc4b933"
+    },
+    {
+      "model_id": "voxtral_mini_4b_realtime_2602",
+      "path": "voxtral_mini_4b_realtime_2602.json",
+      "sha256": "67282a2ad05f70871e92306e782ce0d58f15cdafef12b3e301c9def602f1e26b"
+    },
+    {
+      "model_id": "whisper_tiny_reference",
+      "path": "whisper_tiny_reference.json",
+      "sha256": "2d805d29c6ec3465a0824d2d87c121c3b16514856bdbdaee3d0b90750c16eba8"
+    }
+  ],
+  "registry_revision": 1,
+  "schema_version": 1
+}

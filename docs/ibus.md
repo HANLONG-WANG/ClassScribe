@@ -88,8 +88,9 @@ overflow、bus error/EOS 和麦克风断开都进入不提交的安全失败。�
 三个分块层级：
 
 1. 模型 chunk 为 80/160/320/560/1120 ms；Nemotron worker 使用模型的
-   `StreamingFeatureBufferer` 与 `conformer_stream_step`，跨 chunk 保存 attention channel cache、
-   convolution time cache、cache length、RNNT hypothesis 和 predictor output，不累计重算历史。
+   `CacheAwareStreamingAudioBuffer` 与 `conformer_stream_step`，选择模型声明的右 attention
+   context 0/1/3/6/13，只增量预处理新 PCM，并跨 chunk 保存 audio buffer、attention channel
+   cache、convolution time cache、cache length、RNNT hypothesis 和 predictor output，不累计重算历史。
 2. 有声段至少 3 秒后，650 ms（可配置 300～2000 ms）自然停顿形成 semantic endpoint；语义段不
    超过 20 秒。
 3. 连续无停顿达到 25 秒（可配置 20～30 秒）形成 hard chunk，保留 2 秒（1.5～2.5 秒）PCM 重叠。

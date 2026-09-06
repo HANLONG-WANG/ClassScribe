@@ -33,7 +33,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.output is not None:
         _write(args.output, result)
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
-    return 0 if result["status"] == "ready" else 2
+    return 0 if result["status"] in {"ready", "ready_with_waivers"} else 2
 
 
 def _write(path: Path, result: dict[str, object]) -> None:

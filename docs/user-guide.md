@@ -20,9 +20,10 @@ URL；不要把 token 复制到截图、日志或工单。
 
 ## 2. 安装模型
 
-RPM 不携带任何模型权重。进入“模型管理”，选择与注册表中完整 commit revision 一致的
-manifest。界面会先显示下载量、安装后占用、临时空间、独立 worker 环境、许可证和 gated
-条件。只有再次明确确认才可联网下载；确认 token 十分钟失效且只能使用一次。
+RPM 不携带任何模型权重。进入“模型管理”，按模型名称／model ID 从 RPM 自带的只读 manifest
+bundle 选择；不需要、也不能选择或上传 manifest 文件。界面会显示发布方固定的完整 commit、
+manifest SHA、下载量、安装后占用、临时空间、独立 worker 环境、许可证和 gated 条件。只有再次
+明确确认才可联网下载；确认 token 十分钟失效且只能使用一次。
 
 安装事务先写同文件系统 staging，逐文件核对大小和 SHA-256，运行离线真实短音频健康检查，
 最后原子切换 active revision。失败会删除未完成 staging 并保留旧 active。运行时缺文件只会

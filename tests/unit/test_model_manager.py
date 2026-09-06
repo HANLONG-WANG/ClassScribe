@@ -15,6 +15,8 @@ from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.models import (
     DownloadReceipt,
     HealthCheckOutcome,
+    ManifestComponentSource,
+    ManifestComponentSourceFile,
     ManifestFile,
     ModelManager,
     ModelManifest,
@@ -39,7 +41,7 @@ def manifest(
     model: bytes = b"model-a",
     code: bytes = b"def load(): return 'a'\n",
 ) -> tuple[ModelManifest, dict[str, bytes]]:
-    content = {"weights/model.bin": model, "code/modeling.py": code}
+    content = {"code/modeling.py": code, "weights/model.bin": model}
     files = tuple(
         ManifestFile(
             path=path,
@@ -179,7 +181,7 @@ def test_install_is_atomic_audited_offline_and_persisted(
     assert audit["manifest"]["revision"] == REVISION_A
     assert audit["source"] == "fixture://offline-model-store"
     assert audit["aggregate_sha256"] == result.aggregate_sha256
-    assert audit["manifest"]["files"][1]["path"] == "code/modeling.py"
+    assert audit["manifest"]["files"][0]["path"] == "code/modeling.py"
     assert audit["health_audio"]["frames"] == 3_200
     assert audit["health_audio"]["sample_rate"] == 16_000
     assert audit["health_check"]["healthy"] is True
@@ -300,18 +302,27 @@ def test_health_failure_removes_candidate_and_restores_previous_active(tmp_path:
     manager = ModelManager(tmp_path / "models")
     audio = write_health_wav(tmp_path / "health.wav")
     first_path = install(manager, first, first_content, audio)
+    active_path = tmp_path / "models" / "moss-test" / "active.json"
+    active_before = active_path.read_bytes()
+    revisions_root = tmp_path / "models" / "moss-test" / "revisions"
+    revisions_before = {path.name for path in revisions_root.iterdir()}
 
     plan = manager.request_user_install(second)
+    downloader = FakeDownloader(second_content)
     with pytest.raises(ClassScribeError) as failed:
         manager.install_confirmed(
             plan.confirmation_token,
-            downloader=FakeDownloader(second_content),
+            downloader=downloader,
             health_audio=audio,
             health_check=lambda *_: HealthCheckOutcome(False, None, "no transcript", {}),
         )
     assert failed.value.code is ErrorCode.MODEL_HEALTH_CHECK_FAILED
+    assert downloader.calls == 1
+    assert active_path.read_bytes() == active_before
     assert manager.resolve_for_runtime("moss-test") == first_path
+    assert {path.name for path in revisions_root.iterdir()} == revisions_before
     assert not (tmp_path / "models" / "moss-test" / "revisions" / REVISION_B).exists()
+    assert not list((tmp_path / "models" / ".staging").iterdir())
 
 
 def test_upgrade_diff_rollback_and_delete(tmp_path: Path) -> None:
@@ -373,6 +384,8 @@ def test_remote_code_snapshot_and_health_audio_contracts_are_strict(tmp_path: Pa
                 item.size_bytes for item in base.files if item.kind != "remote_code"
             ),
         )
+    with pytest.raises(ValueError, match="trust_remote_code=true"):
+        replace(base, trust_remote_code=False)
 
     manager = ModelManager(tmp_path / "models")
     plan = manager.request_user_install(base)
@@ -385,6 +398,266 @@ def test_remote_code_snapshot_and_health_audio_contracts_are_strict(tmp_path: Pa
             health_audio=invalid_audio,
             health_check=healthy,
         )
+
+
+def test_remote_code_preserves_safe_root_and_nested_upstream_paths(tmp_path: Path) -> None:
+    base, _ = manifest()
+    content = {
+        "modeling.py": b"from pkg.helper import load\n",
+        "pkg/helper.py": b"def load(): return 'ok'\n",
+        "weights/model.bin": b"model",
+    }
+    files = tuple(
+        ManifestFile(
+            path=path,
+            sha256=sha(value),
+            size_bytes=len(value),
+            kind="remote_code" if path.endswith(".py") else "model",
+        )
+        for path, value in content.items()
+    )
+    candidate = replace(
+        base,
+        estimated_download_bytes=sum(map(len, content.values())),
+        installed_size_bytes=sum(map(len, content.values())),
+        files=files,
+    )
+
+    installed = install(
+        ModelManager(tmp_path / "models"),
+        candidate,
+        content,
+        write_health_wav(tmp_path / "health.wav"),
+    )
+
+    assert (installed / "modeling.py").read_bytes() == content["modeling.py"]
+    assert (installed / "pkg/helper.py").read_bytes() == content["pkg/helper.py"]
+    audit = json.loads((installed / AUDIT_FILENAME).read_text(encoding="utf-8"))
+    assert [item["path"] for item in audit["manifest"]["files"]] == list(content)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "",
+        "/absolute.py",
+        "../escape.py",
+        "pkg/../../escape.py",
+        "pkg/../escape.py",
+        "./modeling.py",
+        "pkg//modeling.py",
+        "pkg\\modeling.py",
+        "modeling.py/",
+        "control\x00.py",
+        "supply-chain.json",
+    ],
+)
+def test_manifest_file_rejects_unsafe_or_control_paths(path: str) -> None:
+    with pytest.raises(ValueError, match="unsafe manifest path"):
+        ManifestFile(path=path, sha256="0" * 64, size_bytes=1, kind="remote_code")
+
+
+def test_manifest_rejects_duplicate_and_unsorted_paths() -> None:
+    base, _ = manifest()
+    with pytest.raises(ValueError, match="unique"):
+        replace(
+            base,
+            files=(base.files[0], base.files[0]),
+            installed_size_bytes=base.files[0].size_bytes * 2,
+        )
+    with pytest.raises(ValueError, match="sorted"):
+        replace(base, files=tuple(reversed(base.files)))
+
+
+def test_manifest_file_rejects_invalid_sha_size_and_kind() -> None:
+    with pytest.raises(ValueError, match="invalid sha256"):
+        ManifestFile("model.bin", "A" * 64, 1)
+    with pytest.raises(ValueError, match="negative size"):
+        ManifestFile("model.bin", "0" * 64, -1)
+    with pytest.raises(ValueError, match="invalid manifest file kind"):
+        ManifestFile("model.bin", "0" * 64, 1, "unknown")  # type: ignore[arg-type]
+
+
+def test_manifest_component_source_is_frozen_round_trippable_and_audited(
+    tmp_path: Path,
+) -> None:
+    base, content = manifest()
+    source = ManifestComponentSource(
+        repository="upstream/component",
+        revision="c" * 40,
+        relationship="derived",
+        license_id="CC-BY-4.0",
+        license_url="https://example.invalid/upstream/component",
+        requires_terms_acceptance=False,
+        files=(
+            ManifestComponentSourceFile(
+                installed_path="weights/model.bin",
+                source_path="pytorch_model.bin",
+                source_sha256="d" * 64,
+                source_size_bytes=99,
+            ),
+        ),
+    )
+    candidate = replace(base, component_sources=(source,))
+
+    assert ModelManifest.from_dict(candidate.as_dict()) == candidate
+    installed = install(
+        ModelManager(tmp_path / "models"),
+        candidate,
+        content,
+        write_health_wav(tmp_path / "health.wav"),
+    )
+    audit = json.loads((installed / AUDIT_FILENAME).read_text(encoding="utf-8"))
+    assert audit["manifest"]["component_sources"][0]["repository"] == (
+        "upstream/component"
+    )
+
+
+@pytest.mark.parametrize(
+    ("updates", "match"),
+    [
+        ({"repository": "invalid"}, "owner/name"),
+        ({"revision": "A" * 40}, "full commit"),
+        ({"relationship": "unknown"}, "relationship"),
+        ({"license_id": "invalid license"}, "license ID"),
+        ({"license_url": "http://example.invalid"}, "license URL"),
+        ({"files": ()}, "at least one"),
+    ],
+)
+def test_manifest_component_source_rejects_invalid_identity(
+    updates: dict[str, object], match: str
+) -> None:
+    values: dict[str, object] = {
+        "repository": "upstream/component",
+        "revision": "c" * 40,
+        "relationship": "derived",
+        "license_id": "CC-BY-4.0",
+        "license_url": "https://example.invalid/upstream/component",
+        "requires_terms_acceptance": False,
+        "files": (
+            ManifestComponentSourceFile(
+                installed_path="weights/model.bin",
+                source_path="pytorch_model.bin",
+                source_sha256="d" * 64,
+                source_size_bytes=99,
+            ),
+        ),
+    }
+    values.update(updates)
+    with pytest.raises(ValueError, match=match):
+        ManifestComponentSource(**values)  # type: ignore[arg-type]
+
+
+def test_manifest_rejects_unsafe_or_ambiguous_component_file_provenance() -> None:
+    with pytest.raises(ValueError, match="unsafe component installed path"):
+        ManifestComponentSourceFile(
+            installed_path="../escape.bin",
+            source_path="pytorch_model.bin",
+            source_sha256="d" * 64,
+            source_size_bytes=1,
+        )
+    with pytest.raises(ValueError, match="unsafe component source path"):
+        ManifestComponentSourceFile(
+            installed_path="weights/model.bin",
+            source_path="../escape.bin",
+            source_sha256="d" * 64,
+            source_size_bytes=1,
+        )
+    base, _ = manifest()
+    source_file = ManifestComponentSourceFile(
+        installed_path="weights/model.bin",
+        source_path="pytorch_model.bin",
+        source_sha256="d" * 64,
+        source_size_bytes=99,
+    )
+    source = ManifestComponentSource(
+        repository="upstream/component",
+        revision="c" * 40,
+        relationship="copied",
+        license_id="CC-BY-4.0",
+        license_url="https://example.invalid/upstream/component",
+        requires_terms_acceptance=False,
+        files=(source_file,),
+    )
+    with pytest.raises(ValueError, match="differs from its fixed source"):
+        replace(base, component_sources=(source,))
+    derived = replace(source, relationship="derived")
+    assert replace(base, component_sources=(derived,)).component_sources == (derived,)
+    outside = replace(
+        derived,
+        files=(replace(source_file, installed_path="outside.bin"),),
+    )
+    with pytest.raises(ValueError, match="outside the manifest"):
+        replace(base, component_sources=(outside,))
+    with pytest.raises(ValueError, match="payload repository"):
+        replace(base, component_sources=(replace(derived, repository=base.repository),))
+
+
+def test_manifest_rejects_unsorted_duplicate_or_overlapping_component_sources() -> None:
+    base, _ = manifest()
+    source_file = ManifestComponentSourceFile(
+        installed_path="weights/model.bin",
+        source_path="pytorch_model.bin",
+        source_sha256="d" * 64,
+        source_size_bytes=99,
+    )
+    alpha = ManifestComponentSource(
+        repository="upstream/alpha",
+        revision="c" * 40,
+        relationship="derived",
+        license_id="CC-BY-4.0",
+        license_url="https://example.invalid/upstream/alpha",
+        requires_terms_acceptance=False,
+        files=(source_file,),
+    )
+    beta = replace(alpha, repository="upstream/beta")
+
+    with pytest.raises(ValueError, match="sorted by repository"):
+        replace(base, component_sources=(beta, alpha))
+    with pytest.raises(ValueError, match="repositories must be unique"):
+        replace(base, component_sources=(alpha, alpha))
+    with pytest.raises(ValueError, match="multiple component sources"):
+        replace(base, component_sources=(alpha, beta))
+
+
+def test_manifest_component_source_file_rejects_invalid_hash_and_size() -> None:
+    with pytest.raises(ValueError, match="SHA-256"):
+        ManifestComponentSourceFile("weights/model.bin", "model.bin", "D" * 64, 1)
+    with pytest.raises(ValueError, match="size is negative"):
+        ManifestComponentSourceFile("weights/model.bin", "model.bin", "d" * 64, -1)
+
+
+def test_payload_symlink_is_rejected_before_health_check(tmp_path: Path) -> None:
+    model_manifest, _ = manifest()
+    outside = tmp_path / "outside.py"
+    outside.write_text("unsafe", encoding="utf-8")
+
+    class SymlinkDownloader:
+        def download(
+            self,
+            *,
+            repository: str,
+            revision: str,
+            destination: Path,
+            files: Sequence[ManifestFile],
+        ) -> DownloadReceipt:
+            del repository
+            target = destination / files[0].path
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            target.symlink_to(outside)
+            return DownloadReceipt(revision, "fixture://symlink", 0)
+
+    manager = ModelManager(tmp_path / "models")
+    plan = manager.request_user_install(model_manifest)
+    with pytest.raises(ClassScribeError) as raised:
+        manager.install_confirmed(
+            plan.confirmation_token,
+            downloader=SymlinkDownloader(),
+            health_audio=write_health_wav(tmp_path / "health.wav"),
+            health_check=lambda *_: pytest.fail("health check must not run"),
+        )
+    assert raised.value.code is ErrorCode.MODEL_INTEGRITY_FAILED
+    assert not list((manager.root / ".staging").iterdir())
 
 
 def test_runtime_environment_overrides_online_values() -> None:

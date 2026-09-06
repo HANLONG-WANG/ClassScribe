@@ -13,7 +13,7 @@ import wave
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 
@@ -30,6 +30,9 @@ IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 LICENSE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]{0,127}$")
 AUDIT_FILENAME = "supply-chain.json"
 ACTIVE_FILENAME = "active.json"
+MANIFEST_KINDS = frozenset({"model", "tokenizer", "config", "remote_code", "other"})
+COMPONENT_SOURCE_RELATIONSHIPS = frozenset({"copied", "derived"})
+MAX_MANIFEST_PATH_LENGTH = 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,11 +43,15 @@ class ManifestFile:
     kind: Literal["model", "tokenizer", "config", "remote_code", "other"] = "model"
 
     def __post_init__(self) -> None:
-        relative = Path(self.path)
+        relative = PurePosixPath(self.path)
         if (
             not self.path
+            or len(self.path) > MAX_MANIFEST_PATH_LENGTH
             or relative.is_absolute()
             or ".." in relative.parts
+            or self.path != relative.as_posix()
+            or "\\" in self.path
+            or any(ord(character) < 32 or ord(character) == 127 for character in self.path)
             or self.path == AUDIT_FILENAME
         ):
             raise ValueError(f"unsafe manifest path: {self.path!r}")
@@ -52,8 +59,84 @@ class ManifestFile:
             raise ValueError(f"invalid sha256 for {self.path}")
         if self.size_bytes < 0:
             raise ValueError(f"negative size for {self.path}")
-        if self.kind == "remote_code" and relative.parts[0] != "code":
-            raise ValueError("remote-code snapshots must be stored below code/")
+        if self.kind not in MANIFEST_KINDS:
+            raise ValueError(f"invalid manifest file kind for {self.path}")
+
+
+@dataclass(frozen=True, slots=True)
+class ManifestComponentSourceFile:
+    """One installed file traced to a fixed file in a component source repository."""
+
+    installed_path: str
+    source_path: str
+    source_sha256: str
+    source_size_bytes: int
+
+    def __post_init__(self) -> None:
+        for label, path in (
+            ("component installed path", self.installed_path),
+            ("component source path", self.source_path),
+        ):
+            relative = PurePosixPath(path)
+            if (
+                not path
+                or len(path) > MAX_MANIFEST_PATH_LENGTH
+                or relative.is_absolute()
+                or ".." in relative.parts
+                or path != relative.as_posix()
+                or "\\" in path
+                or any(ord(character) < 32 or ord(character) == 127 for character in path)
+                or path == AUDIT_FILENAME
+            ):
+                raise ValueError(f"unsafe {label}: {path!r}")
+        if not SHA256_RE.fullmatch(self.source_sha256):
+            raise ValueError("component source file SHA-256 is invalid")
+        if self.source_size_bytes < 0:
+            raise ValueError("component source file size is negative")
+
+
+@dataclass(frozen=True, slots=True)
+class ManifestComponentSource:
+    """Auditable origin for files copied or derived from another fixed repository."""
+
+    repository: str
+    revision: str
+    relationship: Literal["copied", "derived"]
+    license_id: str
+    license_url: str
+    requires_terms_acceptance: bool
+    files: tuple[ManifestComponentSourceFile, ...]
+
+    def __post_init__(self) -> None:
+        if (
+            self.repository.count("/") != 1
+            or any(character.isspace() for character in self.repository)
+        ):
+            raise ValueError("component source repository must use owner/name")
+        if not COMMIT_RE.fullmatch(self.revision):
+            raise ValueError("component source revision must be a full commit SHA")
+        if self.relationship not in COMPONENT_SOURCE_RELATIONSHIPS:
+            raise ValueError("component source relationship is invalid")
+        if not LICENSE_ID_RE.fullmatch(self.license_id):
+            raise ValueError("component source license ID is invalid")
+        license_url = urlsplit(self.license_url)
+        if (
+            license_url.scheme != "https"
+            or not license_url.hostname
+            or license_url.username is not None
+            or license_url.password is not None
+        ):
+            raise ValueError("component source license URL must be credential-free HTTPS")
+        if not self.files:
+            raise ValueError("component source must identify at least one installed file")
+        installed_paths = [item.installed_path for item in self.files]
+        if installed_paths != sorted(installed_paths):
+            raise ValueError("component source files must be sorted by installed path")
+        if len(installed_paths) != len(set(installed_paths)):
+            raise ValueError("component source installed paths must be unique")
+        source_paths = [item.source_path for item in self.files]
+        if len(source_paths) != len(set(source_paths)):
+            raise ValueError("component source paths must be unique")
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +154,7 @@ class ModelManifest:
     installed_size_bytes: int
     environment: Mapping[str, str]
     files: tuple[ManifestFile, ...]
+    component_sources: tuple[ManifestComponentSource, ...] = ()
 
     def __post_init__(self) -> None:
         if self.manifest_version != 1:
@@ -99,6 +183,8 @@ class ModelManifest:
         if not self.files:
             raise ValueError("model manifest must list every installed file")
         paths = [item.path for item in self.files]
+        if paths != sorted(paths):
+            raise ValueError("model manifest files must be sorted by path")
         if len(paths) != len(set(paths)):
             raise ValueError("model manifest paths must be unique")
         actual_size = sum(item.size_bytes for item in self.files)
@@ -106,9 +192,31 @@ class ModelManifest:
             raise ValueError("installed_size_bytes must equal the manifest file sizes")
         remote_code = [item for item in self.files if item.kind == "remote_code"]
         if self.trust_remote_code and not remote_code:
-            raise ValueError("trust_remote_code requires a hashed code/ snapshot")
+            raise ValueError("trust_remote_code requires at least one hashed code file")
         if remote_code and not self.trust_remote_code:
             raise ValueError("remote-code files require trust_remote_code=true")
+        source_repositories = [source.repository for source in self.component_sources]
+        if source_repositories != sorted(source_repositories):
+            raise ValueError("component sources must be sorted by repository")
+        if len(source_repositories) != len(set(source_repositories)):
+            raise ValueError("component source repositories must be unique")
+        if self.repository in source_repositories:
+            raise ValueError("component source must differ from the payload repository")
+        manifest_files = {item.path: item for item in self.files}
+        installed_component_paths: set[str] = set()
+        for source in self.component_sources:
+            for item in source.files:
+                if item.installed_path in installed_component_paths:
+                    raise ValueError("installed file belongs to multiple component sources")
+                installed_component_paths.add(item.installed_path)
+                installed = manifest_files.get(item.installed_path)
+                if installed is None:
+                    raise ValueError("component source refers to a file outside the manifest")
+                if source.relationship == "copied" and (
+                    installed.sha256 != item.source_sha256
+                    or installed.size_bytes != item.source_size_bytes
+                ):
+                    raise ValueError("copied component file differs from its fixed source")
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> ModelManifest:
@@ -120,6 +228,23 @@ class ModelManifest:
             isinstance(key, str) and isinstance(item, str) for key, item in environment.items()
         ):
             raise ValueError("manifest environment must be a string map")
+        raw_component_sources = value.get("component_sources", [])
+        if not isinstance(raw_component_sources, list):
+            raise ValueError("manifest component_sources must be an array")
+        component_sources: list[ManifestComponentSource] = []
+        for raw_source in raw_component_sources:
+            if not isinstance(raw_source, dict):
+                raise ValueError("manifest component source must be an object")
+            raw_source_files = raw_source.get("files")
+            if not isinstance(raw_source_files, list) or not all(
+                isinstance(item, dict) for item in raw_source_files
+            ):
+                raise ValueError("manifest component source files must be an array")
+            source_value = dict(raw_source)
+            source_value["files"] = tuple(
+                ManifestComponentSourceFile(**item) for item in raw_source_files
+            )
+            component_sources.append(ManifestComponentSource(**source_value))
         return cls(
             manifest_version=int(value["manifest_version"]),
             model_id=str(value["model_id"]),
@@ -134,14 +259,39 @@ class ModelManifest:
             installed_size_bytes=int(value["installed_size_bytes"]),
             environment=environment,
             files=tuple(ManifestFile(**item) for item in raw_files),
+            component_sources=tuple(component_sources),
         )
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            **asdict(self),
+        value: dict[str, Any] = {
+            "manifest_version": self.manifest_version,
+            "model_id": self.model_id,
+            "repository": self.repository,
+            "revision": self.revision,
+            "worker": self.worker,
+            "license_id": self.license_id,
+            "license_url": self.license_url,
+            "requires_terms_acceptance": self.requires_terms_acceptance,
+            "trust_remote_code": self.trust_remote_code,
+            "estimated_download_bytes": self.estimated_download_bytes,
+            "installed_size_bytes": self.installed_size_bytes,
             "environment": dict(self.environment),
             "files": [asdict(item) for item in self.files],
         }
+        if self.component_sources:
+            value["component_sources"] = [
+                {
+                    "repository": source.repository,
+                    "revision": source.revision,
+                    "relationship": source.relationship,
+                    "license_id": source.license_id,
+                    "license_url": source.license_url,
+                    "requires_terms_acceptance": source.requires_terms_acceptance,
+                    "files": [asdict(item) for item in source.files],
+                }
+                for source in self.component_sources
+            ]
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +302,7 @@ class InstallationPlan:
     license_id: str
     license_url: str
     requires_terms_acceptance: bool
+    component_sources: tuple[ManifestComponentSource, ...]
     estimated_download_bytes: int
     installed_size_bytes: int
     required_free_bytes: int
@@ -312,6 +463,7 @@ class ModelManager:
             license_id=manifest.license_id,
             license_url=manifest.license_url,
             requires_terms_acceptance=manifest.requires_terms_acceptance,
+            component_sources=manifest.component_sources,
             estimated_download_bytes=manifest.estimated_download_bytes,
             installed_size_bytes=manifest.installed_size_bytes,
             required_free_bytes=required,
@@ -410,8 +562,12 @@ class ModelManager:
         except Exception:
             if target.exists() and not target.is_symlink():
                 shutil.rmtree(target)
-            if previous_active is not None:
-                self._activate(manifest.model_id, previous_active)
+            current_active = self._active_revision(manifest.model_id)
+            if current_active != previous_active:
+                if previous_active is None:
+                    (model_root / ACTIVE_FILENAME).unlink(missing_ok=True)
+                else:
+                    self._activate(manifest.model_id, previous_active)
             raise
         finally:
             if staging.exists() and not staging.is_symlink():

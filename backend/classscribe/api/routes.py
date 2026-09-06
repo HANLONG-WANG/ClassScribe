@@ -52,6 +52,10 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
             sample_rate=sample_rate,
         )
 
+    @router.get("/recordings")
+    async def list_recordings() -> list[dict[str, object]]:
+        return service.recordings()
+
     @router.get("/recordings/{recording_id}")
     async def get_recording(recording_id: str) -> dict[str, object]:
         return service.recording(recording_id)
@@ -174,9 +178,13 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
     async def models() -> list[dict[str, object]]:
         return service.models()
 
+    @router.get("/models/{model_id}/manifest")
+    async def model_manifest(model_id: str) -> dict[str, object]:
+        return service.model_manifest(model_id)
+
     @router.post("/models/{model_id}/install", status_code=status.HTTP_202_ACCEPTED)
-    async def install_model(model_id: str, value: ModelInstallRequest) -> dict[str, object]:
-        return service.request_model_install(model_id, value.manifest)
+    async def install_model(model_id: str, _value: ModelInstallRequest) -> dict[str, object]:
+        return service.request_bundled_model_install(model_id)
 
     @router.post("/models/{model_id}/install/confirm")
     async def confirm_model_install(

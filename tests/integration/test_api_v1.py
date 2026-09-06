@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlencode, urlsplit
 
+import pytest
 from classscribe.api.app import create_app
 from classscribe.api.schemas import ProfileUpdate
 from classscribe.api.service import ClassScribeService
@@ -24,12 +25,16 @@ from classscribe.db.models import (
     TranscriptSegment,
 )
 from classscribe.diagnostics import DiagnosticSnapshot
-from classscribe.errors import ErrorCode
+from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.models import (
     DownloadReceipt,
     HealthCheckOutcome,
+    LoadedManifestBundle,
+    ManifestBundleIndex,
     ManifestFile,
+    ModelLicense,
     ModelManager,
+    ModelManifest,
     SQLAlchemyInstallationRecorder,
     load_registry,
 )
@@ -108,6 +113,8 @@ def service_fixture(
     *,
     model_downloader: Any = None,
     model_health_check: Any = None,
+    manifest_bundle: LoadedManifestBundle | None = None,
+    model_licenses: dict[str, ModelLicense] | None = None,
 ) -> tuple[ClassScribeService, Any]:
     paths = AppPaths.from_environment({}, home=tmp_path / "home")
     paths.ensure()
@@ -126,14 +133,22 @@ def service_fixture(
             model_manager=manager,
             model_downloader=model_downloader,
             model_health_check=model_health_check,
+            manifest_bundle=manifest_bundle,
+            model_licenses=model_licenses,
         ),
         sessions,
     )
 
 
 class FixtureModelDownloader:
-    def __init__(self, content: dict[str, bytes]) -> None:
+    def __init__(
+        self,
+        content: dict[str, bytes],
+        repository: str = "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+    ) -> None:
         self.content = content
+        self.repository = repository
+        self.calls = 0
 
     def download(
         self,
@@ -143,8 +158,9 @@ class FixtureModelDownloader:
         destination: Path,
         files: tuple[ManifestFile, ...],
     ) -> DownloadReceipt:
-        assert repository == "OpenMOSS-Team/MOSS-Transcribe-Diarize"
+        assert repository == self.repository
         assert {item.path for item in files} == self.content.keys()
+        self.calls += 1
         for relative, content in self.content.items():
             target = destination / relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -152,6 +168,571 @@ class FixtureModelDownloader:
         return DownloadReceipt(
             revision, "https://huggingface.co/fixture", sum(map(len, self.content.values()))
         )
+
+
+def injected_bundle(manifest: ModelManifest) -> LoadedManifestBundle:
+    manifest_bytes = (
+        json.dumps(manifest.as_dict(), ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    ).encode()
+    return LoadedManifestBundle(
+        index=ManifestBundleIndex.model_validate(
+            {
+                "schema_version": 1,
+                "registry_revision": 1,
+                "facts_as_of": "2026-09-03",
+                "generated_at": "2026-09-05T00:00:00Z",
+                "generator": {
+                    "name": "classscribe-model-manifest",
+                    "version": "1",
+                    "lock_sha256": "0" * 64,
+                },
+                "manifests": [
+                    {
+                        "model_id": manifest.model_id,
+                        "path": f"{manifest.model_id}.json",
+                        "sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+                    }
+                ],
+            }
+        ),
+        manifests=(manifest,),
+    )
+
+
+def registry_fixture_manifest(
+    model_id: str,
+    content: dict[str, bytes],
+    *,
+    requires_terms_acceptance: bool = False,
+) -> ModelManifest:
+    entry = load_registry(Path("config/model-registry.v1.yaml")).model(model_id)
+    return ModelManifest(
+        manifest_version=1,
+        model_id=entry.id,
+        repository=entry.repository,
+        revision=entry.revision,
+        worker=entry.worker,
+        license_id="CC-BY-4.0" if requires_terms_acceptance else "Apache-2.0",
+        license_url=f"https://huggingface.co/{entry.repository}",
+        requires_terms_acceptance=requires_terms_acceptance,
+        trust_remote_code=entry.trust_remote_code,
+        estimated_download_bytes=sum(map(len, content.values())),
+        installed_size_bytes=sum(map(len, content.values())),
+        environment={"worker_lock": "pinned"},
+        files=tuple(
+            ManifestFile(
+                path=path,
+                sha256=hashlib.sha256(value).hexdigest(),
+                size_bytes=len(value),
+                kind="remote_code" if entry.trust_remote_code else "config",
+            )
+            for path, value in content.items()
+        ),
+    )
+
+
+def test_model_install_preflight_uses_only_injected_bundle_manifest(tmp_path: Path) -> None:
+    manifest_bytes = (
+        Path("config/model-manifests/v1/whisper_tiny_reference.json").read_bytes()
+    )
+    manifest = ModelManifest.from_dict(json.loads(manifest_bytes))
+    index = ManifestBundleIndex.model_validate(
+        {
+            "schema_version": 1,
+            "registry_revision": 1,
+            "facts_as_of": "2026-09-03",
+            "generated_at": "2026-09-05T00:00:00Z",
+            "generator": {
+                "name": "classscribe-model-manifest",
+                "version": "1",
+                "lock_sha256": "0" * 64,
+            },
+            "manifests": [
+                {
+                    "model_id": manifest.model_id,
+                    "path": f"{manifest.model_id}.json",
+                    "sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+                }
+            ],
+        }
+    )
+    service, _ = service_fixture(
+        tmp_path,
+        manifest_bundle=LoadedManifestBundle(index=index, manifests=(manifest,)),
+    )
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+
+    async def request_preflight(body: bytes = b"{}") -> Response:
+        return await request(
+            app,
+            "POST",
+            "/api/v1/models/whisper_tiny_reference/install",
+            headers={**auth(token, csrf, write=True), "Content-Type": "application/json"},
+            body=body,
+        )
+
+    replacement = manifest.as_dict()
+    replacement["repository"] = "attacker/replacement"
+    replacement["revision"] = "0" * 40
+    rejected = asyncio.run(
+        request_preflight(json.dumps({"manifest": replacement}).encode())
+    )
+    assert rejected.status == 422
+    assert "extra_forbidden" in rejected.content.decode()
+    manifest_response = asyncio.run(
+        request(
+            app,
+            "GET",
+            "/api/v1/models/whisper_tiny_reference/manifest",
+            headers=auth(token, csrf),
+        )
+    )
+    assert manifest_response.status == 200
+    assert manifest_response.json() == {
+        "model_id": manifest.model_id,
+        "sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "manifest": manifest.as_dict(),
+    }
+    assert "confirmation_token" not in manifest_response.content.decode()
+    assert "HF_TOKEN" not in manifest_response.content.decode()
+    assert str(tmp_path).encode() not in manifest_response.content
+    models_response = asyncio.run(
+        request(app, "GET", "/api/v1/models", headers=auth(token, csrf))
+    )
+    models_by_id = {item["id"]: item for item in models_response.json()}
+    assert models_by_id["whisper_tiny_reference"]["manifest_available"] is True
+    assert models_by_id["whisper_tiny_reference"]["manifest_sha256"] == hashlib.sha256(
+        manifest_bytes
+    ).hexdigest()
+    assert (
+        models_by_id["whisper_tiny_reference"]["estimated_download_bytes"]
+        == manifest.estimated_download_bytes
+    )
+    assert (
+        models_by_id["whisper_tiny_reference"]["installed_size_bytes"]
+        == manifest.installed_size_bytes
+    )
+    assert models_by_id["whisper_tiny_reference"]["remote_code_file_count"] == 0
+    assert models_by_id["moss_td_0_9b"]["manifest_available"] is False
+    assert models_by_id["moss_td_0_9b"]["manifest_sha256"] is None
+    assert models_by_id["moss_td_0_9b"]["estimated_download_bytes"] is None
+    assert models_by_id["moss_td_0_9b"]["installed_size_bytes"] is None
+    assert models_by_id["moss_td_0_9b"]["remote_code_file_count"] is None
+    assert models_by_id["moss_td_0_9b"]["enabled"] is True
+    assert models_by_id["moss_td_0_9b"]["worker_implemented"] is True
+    assert models_by_id["whisper_tiny_reference"]["worker_implemented"] is True
+    assert models_by_id["whisper_tiny_reference"]["installable"] is False
+    assert (
+        models_by_id["whisper_tiny_reference"]["install_block_reason"]
+        == "registry_policy_disabled"
+    )
+    assert models_by_id["moss_td_0_9b"]["installable"] is False
+    assert models_by_id["moss_td_0_9b"]["install_block_reason"] == "manifest_unavailable"
+    assert models_by_id["firered_asr2_llm"]["worker_implemented"] is False
+    assert models_by_id["granite_speech_5_0_turboctc_470m"]["worker_implemented"] is False
+    assert models_by_id["granite_speech_5_0_turboctc_470m"]["enabled"] is True
+    assert (
+        models_by_id["granite_speech_5_0_turboctc_470m"]["install_block_reason"]
+        == "worker_not_implemented"
+    )
+    assert models_by_id["voxtral_mini_4b_realtime_2602"]["worker_implemented"] is False
+    assert models_by_id["vibevoice_asr_streaming_1_5b"]["worker_implemented"] is False
+    response = asyncio.run(request_preflight())
+    assert response.status == 409
+    assert response.json()["error"] == {
+        "code": ErrorCode.MODEL_INSTALL_BLOCKED.value,
+        "detail": "model is not ordinarily installable: registry_policy_disabled",
+    }
+    with pytest.raises(ClassScribeError, match="manifest_unavailable") as failure:
+        service.request_bundled_model_install("moss_td_0_9b")
+    assert failure.value.code is ErrorCode.MODEL_INSTALL_BLOCKED
+
+
+def test_injected_bundle_drives_complete_installation_transaction(tmp_path: Path) -> None:
+    content = {"code/modeling.py": b"MODEL = 'bundle-fixture'\n", "config.json": b"{}"}
+    manifest = ModelManifest.from_dict(
+        {
+            "manifest_version": 1,
+            "model_id": "moss_td_0_9b",
+            "repository": "OpenMOSS-Team/MOSS-Transcribe-Diarize",
+            "revision": "704aa4a9c304e8520be88901e0d1960158ef5b15",
+            "worker": "moss_td",
+            "license_id": "Apache-2.0",
+            "license_url": "https://huggingface.co/OpenMOSS-Team/MOSS-Transcribe-Diarize",
+            "requires_terms_acceptance": False,
+            "trust_remote_code": True,
+            "estimated_download_bytes": sum(map(len, content.values())),
+            "installed_size_bytes": sum(map(len, content.values())),
+            "environment": {"worker_lock": "pinned"},
+            "files": [
+                {
+                    "path": path,
+                    "sha256": hashlib.sha256(value).hexdigest(),
+                    "size_bytes": len(value),
+                    "kind": "remote_code" if path.startswith("code/") else "config",
+                }
+                for path, value in content.items()
+            ],
+        }
+    )
+    manifest_bytes = (
+        json.dumps(manifest.as_dict(), ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    ).encode()
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    bundle = LoadedManifestBundle(
+        index=ManifestBundleIndex.model_validate(
+            {
+                "schema_version": 1,
+                "registry_revision": 1,
+                "facts_as_of": "2026-09-03",
+                "generated_at": "2026-09-05T00:00:00Z",
+                "generator": {
+                    "name": "classscribe-model-manifest",
+                    "version": "1",
+                    "lock_sha256": "0" * 64,
+                },
+                "manifests": [
+                    {
+                        "model_id": manifest.model_id,
+                        "path": f"{manifest.model_id}.json",
+                        "sha256": manifest_sha256,
+                    }
+                ],
+            }
+        ),
+        manifests=(manifest,),
+    )
+    lifecycle: list[str] = []
+
+    class BundleDownloader(FixtureModelDownloader):
+        def download(
+            self,
+            *,
+            repository: str,
+            revision: str,
+            destination: Path,
+            files: tuple[ManifestFile, ...],
+        ) -> DownloadReceipt:
+            lifecycle.append("download")
+            return super().download(
+                repository=repository,
+                revision=revision,
+                destination=destination,
+                files=files,
+            )
+
+    def health_check(
+        _entry: Any,
+        model: Path,
+        audio: Path,
+        environment: dict[str, str],
+        language: str,
+        transcript: str | None,
+    ) -> HealthCheckOutcome:
+        lifecycle.append("health")
+        assert {path: (model / path).read_bytes() for path in content} == content
+        assert audio.read_bytes().startswith(b"RIFF")
+        assert environment["HF_HUB_OFFLINE"] == "1"
+        assert environment["TRANSFORMERS_OFFLINE"] == "1"
+        assert environment["HF_DATASETS_OFFLINE"] == "1"
+        assert language == "ja"
+        assert transcript == "bundle health transcript"
+        return HealthCheckOutcome(True, 4096, "bundle health inference completed", {"gpu": "test"})
+
+    service, _ = service_fixture(
+        tmp_path,
+        model_downloader=BundleDownloader(content),
+        model_health_check=health_check,
+        manifest_bundle=bundle,
+    )
+    xdg_roots = (
+        service.paths.config,
+        service.paths.data,
+        service.paths.cache,
+        service.paths.runtime,
+    )
+
+    def user_manifest_files() -> list[Path]:
+        return [
+            path
+            for root in xdg_roots
+            for path in root.rglob("*")
+            if path.is_file() and "manifest" in path.name
+        ]
+
+    assert all(root.is_relative_to(tmp_path / "home") for root in xdg_roots)
+    assert user_manifest_files() == []
+    recording = service.create_recording(
+        source_name="health.wav",
+        content=health_wav_bytes(),
+        duration_samples=3_200,
+        channels=1,
+        sample_rate=16_000,
+    )
+
+    planned = service.request_bundled_model_install(manifest.model_id)
+    assert planned["manifest_sha256"] == manifest_sha256
+    confirmed = service.confirm_model_install(
+        manifest.model_id,
+        confirmation_token=planned["confirmation_token"],
+        health_recording_id=recording["id"],
+        health_language="ja",
+        health_transcript="bundle health transcript",
+        terms_accepted=False,
+    )
+
+    assert lifecycle == ["download", "health"]
+    assert confirmed["installed"] is True
+    assert confirmed["revision"] == manifest.revision
+    assert confirmed["health"]["healthy"] is True
+    manager = service.model_manager
+    assert manager is not None
+    active = manager.resolve_for_runtime(manifest.model_id)
+    active_pointer = json.loads((active.parent.parent / "active.json").read_text())
+    assert active_pointer["revision"] == manifest.revision
+    audit = json.loads((active / "supply-chain.json").read_text())
+    assert audit["manifest"] == manifest.as_dict()
+    assert audit["health_check"]["healthy"] is True
+    assert service.verify_model(manifest.model_id)["verified"] is True
+    assert user_manifest_files() == []
+
+
+def test_aligner_confirmation_requires_exact_text_before_download(tmp_path: Path) -> None:
+    content = {"config.json": b"{}"}
+    manifest = registry_fixture_manifest("qwen3_forced_aligner_0_6b", content)
+    downloader = FixtureModelDownloader(content, manifest.repository)
+    observed: dict[str, str | None] = {}
+
+    def health_check(
+        _entry: Any,
+        _model: Path,
+        _audio: Path,
+        _environment: dict[str, str],
+        language: str,
+        transcript: str | None,
+    ) -> HealthCheckOutcome:
+        observed.update(language=language, transcript=transcript)
+        return HealthCheckOutcome(True, 1024, "aligner health completed", {})
+
+    service, _ = service_fixture(
+        tmp_path,
+        model_downloader=downloader,
+        model_health_check=health_check,
+        manifest_bundle=injected_bundle(manifest),
+    )
+    recording = service.create_recording(
+        source_name="health.wav",
+        content=health_wav_bytes(),
+        duration_samples=3_200,
+        channels=1,
+        sample_rate=16_000,
+    )
+    plan = service.request_bundled_model_install(manifest.model_id)
+
+    with pytest.raises(ClassScribeError, match="exact transcript") as missing:
+        service.confirm_model_install(
+            manifest.model_id,
+            confirmation_token=plan["confirmation_token"],
+            health_recording_id=recording["id"],
+            health_language="ja",
+            health_transcript=None,
+            terms_accepted=False,
+        )
+    assert missing.value.code is ErrorCode.MODEL_HEALTH_CHECK_FAILED
+    assert downloader.calls == 0
+
+    confirmed = service.confirm_model_install(
+        manifest.model_id,
+        confirmation_token=plan["confirmation_token"],
+        health_recording_id=recording["id"],
+        health_language="ja",
+        health_transcript="正確なアラインメント文字列",
+        terms_accepted=False,
+    )
+    assert confirmed["installed"] is True
+    assert observed == {"language": "ja", "transcript": "正確なアラインメント文字列"}
+    assert downloader.calls == 1
+
+
+def test_gated_confirmation_requires_terms_before_download(tmp_path: Path) -> None:
+    content = {"config.json": b"{}"}
+    manifest = registry_fixture_manifest(
+        "pyannote_community_1", content, requires_terms_acceptance=True
+    )
+    downloader = FixtureModelDownloader(content, manifest.repository)
+
+    def health_check(*_args: Any) -> HealthCheckOutcome:
+        return HealthCheckOutcome(True, 2048, "gated health completed", {})
+
+    service, _ = service_fixture(
+        tmp_path,
+        model_downloader=downloader,
+        model_health_check=health_check,
+        manifest_bundle=injected_bundle(manifest),
+    )
+    recording = service.create_recording(
+        source_name="health.wav",
+        content=health_wav_bytes(),
+        duration_samples=3_200,
+        channels=1,
+        sample_rate=16_000,
+    )
+    plan = service.request_bundled_model_install(manifest.model_id)
+
+    with pytest.raises(ClassScribeError, match="access terms") as rejected:
+        service.confirm_model_install(
+            manifest.model_id,
+            confirmation_token=plan["confirmation_token"],
+            health_recording_id=recording["id"],
+            health_language="en",
+            health_transcript=None,
+            terms_accepted=False,
+        )
+    assert rejected.value.code is ErrorCode.MODEL_INSTALL_NOT_USER_INITIATED
+    assert downloader.calls == 0
+
+    accepted = service.request_bundled_model_install(manifest.model_id)
+    confirmed = service.confirm_model_install(
+        manifest.model_id,
+        confirmation_token=accepted["confirmation_token"],
+        health_recording_id=recording["id"],
+        health_language="en",
+        health_transcript=None,
+        terms_accepted=True,
+    )
+    assert confirmed["installed"] is True
+    assert downloader.calls == 1
+
+
+def test_model_install_error_response_redacts_credentials_and_local_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _pipeline = service_fixture(tmp_path)
+
+    def fail_install(_model_id: str) -> dict[str, Any]:
+        raise ClassScribeError(
+            ErrorCode.MODEL_HEALTH_CHECK_FAILED,
+            "Authorization: Bearer server-secret hf_abcdefghijklmnop failed at "
+            "/home/private-user/models/revision/config.json",
+        )
+
+    monkeypatch.setattr(service, "request_bundled_model_install", fail_install)
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+    response = asyncio.run(
+        request(
+            app,
+            "POST",
+            "/api/v1/models/moss_td_0_9b/install",
+            headers={**auth(token, csrf, write=True), "Content-Type": "application/json"},
+            body=b"{}",
+        )
+    )
+
+    assert response.status == 409
+    assert response.json()["error"] == {
+        "code": ErrorCode.MODEL_HEALTH_CHECK_FAILED.value,
+        "detail": "[REDACTED] [REDACTED] failed at [LOCAL_PATH]",
+    }
+    serialized = response.content.decode()
+    for unsafe in (
+        "Authorization",
+        "server-secret",
+        "hf_abcdefghijklmnop",
+        "/home/private-user/models/revision/config.json",
+    ):
+        assert unsafe not in serialized
+
+
+def test_recordings_collection_supports_health_audio_selection_without_paths(
+    tmp_path: Path,
+) -> None:
+    service, _pipeline = service_fixture(tmp_path)
+    created = service.create_recording(
+        source_name="health.wav",
+        content=health_wav_bytes(),
+        duration_samples=3_200,
+        channels=1,
+        sample_rate=16_000,
+    )
+    invalid = service.create_recording(
+        source_name="spoofed.wav",
+        content=b"RIFFtest",
+        duration_samples=3_200,
+        channels=1,
+        sample_rate=16_000,
+    )
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+
+    response = asyncio.run(
+        request(app, "GET", "/api/v1/recordings", headers=auth(token, csrf))
+    )
+
+    assert response.status == 200
+    rows = {item["id"]: item for item in response.json()}
+    assert rows.keys() == {created["id"], invalid["id"]}
+    assert rows[created["id"]]["audio_qc"]["health_wav_eligible"] is True
+    assert rows[invalid["id"]]["audio_qc"]["health_wav_eligible"] is False
+    serialized = response.content.decode()
+    assert "source_path" not in serialized
+    assert str(tmp_path) not in serialized
+
+
+def test_health_recording_must_be_server_verified_before_confirmation(
+    tmp_path: Path,
+) -> None:
+    content = {"config.json": b"{}"}
+    manifest = registry_fixture_manifest("moss_td_0_9b", content)
+    downloader = FixtureModelDownloader(content)
+
+    def health_check(*_args: Any) -> HealthCheckOutcome:
+        return HealthCheckOutcome(True, None, "valid health audio", {})
+
+    service, _pipeline = service_fixture(
+        tmp_path,
+        model_downloader=downloader,
+        model_health_check=health_check,
+        manifest_bundle=injected_bundle(manifest),
+    )
+    invalid = service.create_recording(
+        source_name="spoofed.wav",
+        content=b"RIFFtest",
+        duration_samples=3_200,
+        channels=1,
+        sample_rate=16_000,
+    )
+    valid = service.create_recording(
+        source_name="health.wav",
+        content=health_wav_bytes(),
+        duration_samples=3_200,
+        channels=1,
+        sample_rate=16_000,
+    )
+    plan = service.request_bundled_model_install(manifest.model_id)
+
+    with pytest.raises(ClassScribeError, match="16 kHz mono 16-bit PCM"):
+        service.confirm_model_install(
+            manifest.model_id,
+            confirmation_token=plan["confirmation_token"],
+            health_recording_id=invalid["id"],
+            health_language="ja",
+            health_transcript=None,
+            terms_accepted=False,
+        )
+    assert downloader.calls == 0
+
+    confirmed = service.confirm_model_install(
+        manifest.model_id,
+        confirmation_token=plan["confirmation_token"],
+        health_recording_id=valid["id"],
+        health_language="ja",
+        health_transcript=None,
+        terms_accepted=False,
+    )
+    assert confirmed["installed"] is True
+    assert downloader.calls == 1
 
 
 def health_wav_bytes() -> bytes:
@@ -363,7 +944,7 @@ def test_built_webui_is_served_without_shadowing_versioned_api(tmp_path: Path) -
 def test_model_install_requires_second_confirmation_and_runs_health_inference(
     tmp_path: Path,
 ) -> None:
-    content = {"config.json": b"{}", "code/modeling.py": b"MODEL = 'fixture'\n"}
+    content = {"code/modeling.py": b"MODEL = 'fixture'\n", "config.json": b"{}"}
 
     def healthy(
         _entry: Any,
@@ -379,13 +960,6 @@ def test_model_install_requires_second_confirmation_and_runs_health_inference(
         assert language == "ja"
         return HealthCheckOutcome(True, 4096, "fixture inference completed", {"gpu": "test"})
 
-    service, _ = service_fixture(
-        tmp_path,
-        model_downloader=FixtureModelDownloader(content),
-        model_health_check=healthy,
-    )
-    token, csrf = "t" * 43, "c" * 43
-    app = create_app(api_token=token, csrf_token=csrf, service=service)
     revision = "704aa4a9c304e8520be88901e0d1960158ef5b15"
     manifest = {
         "manifest_version": 1,
@@ -409,10 +983,90 @@ def test_model_install_requires_second_confirmation_and_runs_health_inference(
             }
             for path, value in content.items()
         ],
+        "component_sources": [
+            {
+                "repository": "upstream/component",
+                "revision": "c" * 40,
+                "relationship": "derived",
+                "license_id": "CC-BY-4.0",
+                "license_url": "https://huggingface.co/upstream/component",
+                "requires_terms_acceptance": False,
+                "files": [
+                    {
+                        "installed_path": "config.json",
+                        "source_path": "source-config.json",
+                        "source_sha256": "d" * 64,
+                        "source_size_bytes": 7,
+                    }
+                ],
+            }
+        ],
     }
+    model_manifest = ModelManifest.from_dict(manifest)
+    manifest_bytes = (
+        json.dumps(model_manifest.as_dict(), ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    ).encode()
+    bundle = LoadedManifestBundle(
+        index=ManifestBundleIndex.model_validate(
+            {
+                "schema_version": 1,
+                "registry_revision": 1,
+                "facts_as_of": "2026-09-03",
+                "generated_at": "2026-09-05T00:00:00Z",
+                "generator": {
+                    "name": "classscribe-model-manifest",
+                    "version": "1",
+                    "lock_sha256": "0" * 64,
+                },
+                "manifests": [
+                    {
+                        "model_id": model_manifest.model_id,
+                        "path": f"{model_manifest.model_id}.json",
+                        "sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+                    }
+                ],
+            }
+        ),
+        manifests=(model_manifest,),
+    )
+    service, _ = service_fixture(
+        tmp_path,
+        model_downloader=FixtureModelDownloader(content),
+        model_health_check=healthy,
+        manifest_bundle=bundle,
+        model_licenses={
+            cast(str, manifest["repository"]): ModelLicense.model_validate(
+                {
+                    "repository": manifest["repository"],
+                    "license_id": manifest["license_id"],
+                    "license_url": manifest["license_url"],
+                    "requires_terms_acceptance": False,
+                    "verified_as_of": "2026-09-03",
+                }
+            ),
+            "upstream/component": ModelLicense.model_validate(
+                {
+                    "repository": "upstream/component",
+                    "license_id": "CC-BY-4.0",
+                    "license_url": "https://huggingface.co/upstream/component",
+                    "requires_terms_acceptance": False,
+                    "verified_as_of": "2026-09-03",
+                }
+            ),
+        },
+    )
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
 
     async def scenario() -> None:
         headers = {**auth(token, csrf, write=True), "Content-Type": "application/json"}
+        model_rows = await request(app, "GET", "/api/v1/models", headers=auth(token, csrf))
+        model_row = next(item for item in model_rows.json() if item["id"] == manifest["model_id"])
+        assert model_row["installable"] is True
+        assert model_row["install_block_reason"] is None
+        assert model_row["remote_code_file_count"] == 1
+        assert model_row["component_source_count"] == 1
+        assert model_row["component_sources"][0]["repository"] == "upstream/component"
         audio = health_wav_bytes()
         uploaded = await request(
             app,
@@ -433,10 +1087,22 @@ def test_model_install_requires_second_confirmation_and_runs_health_inference(
             "POST",
             "/api/v1/models/moss_td_0_9b/install",
             headers=headers,
-            body=json.dumps({"manifest": manifest}).encode(),
+            body=b"{}",
         )
         assert planned.status == 202
-        assert planned.json()["license_id"] == "Apache-2.0"
+        plan_value = planned.json()
+        assert plan_value["license_id"] == "Apache-2.0"
+        assert plan_value["license_url"] == model_manifest.license_url
+        assert plan_value["requires_terms_acceptance"] is False
+        assert plan_value["manifest_sha256"] == hashlib.sha256(manifest_bytes).hexdigest()
+        assert plan_value["estimated_download_bytes"] == sum(map(len, content.values()))
+        assert plan_value["installed_size_bytes"] == sum(map(len, content.values()))
+        assert plan_value["required_free_bytes"] > sum(map(len, content.values())) * 2
+        assert plan_value["available_bytes"] >= plan_value["required_free_bytes"]
+        assert plan_value["environment"] == {"worker_lock": "pinned"}
+        assert plan_value["remote_code_file_count"] == 1
+        assert plan_value["remote_code_files"] == ["code/modeling.py"]
+        assert plan_value["component_sources"] == manifest["component_sources"]
         confirmed = await request(
             app,
             "POST",
@@ -444,7 +1110,7 @@ def test_model_install_requires_second_confirmation_and_runs_health_inference(
             headers=headers,
             body=json.dumps(
                 {
-                    "confirmation_token": planned.json()["confirmation_token"],
+                    "confirmation_token": plan_value["confirmation_token"],
                     "health_recording_id": uploaded.json()["id"],
                     "health_language": "ja",
                     "health_transcript": "これは健康確認です",

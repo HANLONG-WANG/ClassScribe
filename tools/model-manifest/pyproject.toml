@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "classscribe-model-manifest"
+version = "0.1.0"
+description = "Release-time model manifest discovery, generation, and verification for ClassScribe"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "huggingface-hub>=0.34,<2",
+  "httpx>=0.28,<1",
+  "jsonschema>=4.25,<5",
+  "pyyaml>=6,<7",
+]
+
+[project.scripts]
+classscribe-model-manifest = "classscribe_manifest_tool.cli:main"
+
+[dependency-groups]
+dev = [
+  "mypy>=1.17,<2",
+  "pytest>=8.4,<9",
+  "ruff>=0.12,<1",
+  "types-jsonschema>=4.25,<5",
+  "types-pyyaml>=6.0.12,<7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["classscribe_manifest_tool"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["classscribe_manifest_tool", "tests"]

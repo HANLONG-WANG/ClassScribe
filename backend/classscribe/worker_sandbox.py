@@ -77,8 +77,18 @@ class WorkerSandbox:
     ) -> tuple[str, ...]:
         bubblewrap = _canonical(self.bubblewrap, directory=False)
         python = _canonical(worker_python, directory=False)
-        worker_root = _canonical(python.parent.parent, directory=True)
         entrypoint = _canonical(worker_entrypoint, directory=False)
+        environment_root = python.parent.parent
+        if entrypoint.parent == environment_root:
+            worker_root = environment_root
+        elif environment_root.name == ".venv" and entrypoint.parent == environment_root.parent:
+            worker_root = environment_root.parent
+        else:
+            raise ClassScribeError(
+                ErrorCode.PATH_OUTSIDE_ALLOWED_ROOT,
+                "worker Python and entrypoint must use a supported isolated layout",
+            )
+        worker_root = _canonical(worker_root, directory=True)
         try:
             entry_relative = entrypoint.relative_to(worker_root)
             python_relative = python.relative_to(worker_root)
@@ -102,6 +112,15 @@ class WorkerSandbox:
             "PATH",
             "/worker/bin:/usr/bin",
             "--setenv",
+            "HOME",
+            "/home/classscribe",
+            "--setenv",
+            "USER",
+            "classscribe",
+            "--setenv",
+            "LOGNAME",
+            "classscribe",
+            "--setenv",
             "PYTHONNOUSERSITE",
             "1",
             "--setenv",
@@ -121,6 +140,8 @@ class WorkerSandbox:
             "/tmp",
             "--dir",
             "/home",
+            "--dir",
+            "/home/classscribe",
             "--dir",
             "/run",
             "--ro-bind",

@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
+
+AUTHORIZATION_ERROR_RE = re.compile(r"(?i)\bauthorization\s*[:=]\s*bearer\s+\S+")
+BEARER_ERROR_RE = re.compile(r"(?i)\bbearer\s+\S+")
+HF_TOKEN_ERROR_RE = re.compile(r"(?i)\bhf_[a-z0-9]{8,}\b")
+POSIX_PATH_ERROR_RE = re.compile(r"(?<![A-Za-z0-9:/])/(?:[^/\s]+/)+[^/\s]*")
+WINDOWS_PATH_ERROR_RE = re.compile(r"(?i)\b[A-Z]:\\(?:[^\\\s]+\\)+[^\\\s]*")
 
 
 class ErrorCode(StrEnum):
@@ -27,6 +34,7 @@ class ErrorCode(StrEnum):
     ALIGNMENT_FAILED = "ALIGNMENT_FAILED"
     WINDOW_DEDUP_CONFLICT = "WINDOW_DEDUP_CONFLICT"
     MODEL_INSTALL_NOT_USER_INITIATED = "MODEL_INSTALL_NOT_USER_INITIATED"
+    MODEL_INSTALL_BLOCKED = "MODEL_INSTALL_BLOCKED"
     MODEL_REVISION_NOT_PINNED = "MODEL_REVISION_NOT_PINNED"
     MODEL_INTEGRITY_FAILED = "MODEL_INTEGRITY_FAILED"
     MODEL_HEALTH_CHECK_FAILED = "MODEL_HEALTH_CHECK_FAILED"
@@ -45,3 +53,13 @@ class ClassScribeError(RuntimeError):
         super().__init__(detail)
         self.code = code
         self.detail = detail
+
+
+def public_error_detail(detail: str) -> str:
+    """Remove credentials and full local paths before serializing an API error."""
+
+    value = AUTHORIZATION_ERROR_RE.sub("[REDACTED]", detail)
+    value = BEARER_ERROR_RE.sub("[REDACTED]", value)
+    value = HF_TOKEN_ERROR_RE.sub("[REDACTED]", value)
+    value = POSIX_PATH_ERROR_RE.sub("[LOCAL_PATH]", value)
+    return WINDOWS_PATH_ERROR_RE.sub("[LOCAL_PATH]", value)

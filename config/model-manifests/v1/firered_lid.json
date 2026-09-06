@@ -1,0 +1,40 @@
+{
+  "environment": {
+    "dtype": "float32",
+    "python": "3.12",
+    "runtime_backend": "fireredasr2s_torch",
+    "worker_lock": "workers/firered/uv.lock",
+    "worker_lock_sha256": "14543cb7df6705b7ec82ef75e4a265bf2edf9e7f8b4e9465560ac4114b26f445"
+  },
+  "estimated_download_bytes": 3550105508,
+  "files": [
+    {
+      "kind": "config",
+      "path": "cmvn.ark",
+      "sha256": "6efba6105429d1630c05d818d956bfe4edfad37a04b3b27bb5a029b9adb37945",
+      "size_bytes": 1311
+    },
+    {
+      "kind": "tokenizer",
+      "path": "dict.txt",
+      "sha256": "23ef00941731a24c0b547ab3db69387be2a9d203e4f84a61008a6ab20df1f78b",
+      "size_bytes": 779
+    },
+    {
+      "kind": "model",
+      "path": "model.pth.tar",
+      "sha256": "7dee2a280e9b11d5241a0e3d4fa60ee1520a036a2e8385f17960371cfea10093",
+      "size_bytes": 3550103418
+    }
+  ],
+  "installed_size_bytes": 3550105508,
+  "license_id": "Apache-2.0",
+  "license_url": "https://huggingface.co/FireRedTeam/FireRedLID",
+  "manifest_version": 1,
+  "model_id": "firered_lid",
+  "repository": "FireRedTeam/FireRedLID",
+  "requires_terms_acceptance": false,
+  "revision": "1bb4d285c8456429385d9c0810300df4297bc11b",
+  "trust_remote_code": false,
+  "worker": "firered"
+}

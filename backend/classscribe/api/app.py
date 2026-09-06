@@ -32,7 +32,7 @@ from classscribe.diagnostics import (
     diagnostic_bundle_bytes,
     snapshot_payload,
 )
-from classscribe.errors import ClassScribeError, ErrorCode
+from classscribe.errors import ClassScribeError, ErrorCode, public_error_detail
 from classscribe.paths import AppPaths
 from classscribe.scheduler import GPULeaseIPCServer, GPULeaseManager
 from classscribe.version import __version__
@@ -126,7 +126,12 @@ def create_app(
         http_status = 404 if exc.code is ErrorCode.INVALID_FILE_ID else 409
         return JSONResponse(
             status_code=http_status,
-            content={"error": {"code": exc.code.value, "detail": exc.detail}},
+            content={
+                "error": {
+                    "code": exc.code.value,
+                    "detail": public_error_detail(exc.detail),
+                }
+            },
         )
 
     @application.get("/healthz", include_in_schema=False)

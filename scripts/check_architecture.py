@@ -45,6 +45,7 @@ HEAVY_IMPORTS = {
     "openai",
     "anthropic",
 }
+MODEL_INSTALL_ENTRYPOINTS = {"install_confirmed", "request_user_install"}
 REQUIRED_PATHS = (
     "README.md",
     "pyproject.toml",
@@ -189,6 +190,24 @@ def check() -> list[str]:
                 f"long-text sequence matching is forbidden in consensus: {path.relative_to(ROOT)}"
             )
 
+    for subsystem in ("jobs", "classroom"):
+        for path in python_files(ROOT / "backend" / "classscribe" / subsystem):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = node.func.attr if isinstance(node.func, ast.Attribute) else None
+                if name in MODEL_INSTALL_ENTRYPOINTS:
+                    errors.append(
+                        "ordinary job execution/recovery may not enter model installation: "
+                        f"{path.relative_to(ROOT)}:{node.lineno}"
+                    )
+                if isinstance(node.func, ast.Name) and node.func.id == "HuggingFaceDownloader":
+                    errors.append(
+                        "ordinary job execution/recovery may not construct a downloader: "
+                        f"{path.relative_to(ROOT)}:{node.lineno}"
+                    )
+
     for worker in WORKERS:
         worker_root = ROOT / "workers" / worker
         for filename in WORKER_FILES:
@@ -227,6 +246,9 @@ def check() -> list[str]:
         if schema.name == "model-manifest.schema.json":
             if "manifest_version" not in properties:
                 errors.append(f"model schema lacks manifest_version: {schema.relative_to(ROOT)}")
+        elif schema.name == "model-manifest-bundle.schema.json":
+            if "schema_version" not in properties:
+                errors.append(f"bundle schema lacks schema_version: {schema.relative_to(ROOT)}")
         elif schema.name != "product-contract.schema.json" and "protocol_version" not in properties:
             errors.append(f"protocol schema lacks protocol_version: {schema.relative_to(ROOT)}")
     return errors

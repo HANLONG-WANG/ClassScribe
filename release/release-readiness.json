@@ -1,10 +1,12 @@
 {
+  "blocking_reasons": [],
   "checks": {
     "artifact_inventory": true,
     "dependency_lock_hashes": true,
     "desktop_matrix": false,
     "final_architecture": true,
     "model_license_inventory": true,
+    "model_manifest_bundle": true,
     "model_revision_lock": true,
     "phase12_acceptance": false,
     "production_runtime_binding": true,
@@ -16,7 +18,28 @@
     "model_count": 20,
     "phase12_status": "incomplete",
     "registry_revision": 1,
-    "version": "0.1.0"
+    "release_policy": "fail_closed_with_explicit_waivers",
+    "version": "0.1.0",
+    "waiver": {
+      "authorized_on": "2026-09-06",
+      "integrity": "valid",
+      "scope": "automated_release_blocking_only",
+      "sha256": "b5a6f6fd90240e630b16b4382a52c8acc2d65542d84e50be9ff56a78ee2a8bf5",
+      "waiver_id": "classscribe-0.1.0-release-blocking-2026-09-06"
+    },
+    "waivers_do_not_change_raw_evidence": true
+  },
+  "effective_checks": {
+    "artifact_inventory": true,
+    "dependency_lock_hashes": true,
+    "desktop_matrix": true,
+    "final_architecture": true,
+    "model_license_inventory": true,
+    "model_manifest_bundle": true,
+    "model_revision_lock": true,
+    "phase12_acceptance": true,
+    "production_runtime_binding": true,
+    "source_license": true
   },
   "reasons": [
     "ClassScribe source license is not finalized",
@@ -25,5 +48,11 @@
     "Phase 12 real-model acceptance is not passed",
     "IBus desktop compatibility matrix is not passed"
   ],
-  "status": "blocked"
+  "status": "ready_with_waivers",
+  "waived_gates": [
+    "source_license",
+    "phase12_acceptance",
+    "desktop_matrix"
+  ],
+  "waiver_errors": []
 }

@@ -1,11 +1,17 @@
 # 已知限制
 
-## 当前发布阻塞
+## 当前原始发布限制与 waiver
+
+以下三项原始 release checks 继续为 `false`。release owner 已用
+`release/release-waivers.v1.json` 对它们实施一次仅限自动阻塞的、0.1.0 版本绑定 waiver；动态状态为
+`ready_with_waivers`，不是无条件 `ready`。waiver 不授予再分发权、不声称 Phase 12 通过，也不声称
+桌面兼容性已验证。
 
 - 没有用户提供的中／日／英私有人工 gold、90 分钟真实课堂、每语言 50～100 条 IBus 近讲和
   1/2/5+ speaker 数据，因此 Phase 12 为 `incomplete`，不能生成 production `auto_best`。
-- 当前验收机/XDG 数据区没有可供本次签核使用的固定生产 checkpoint（含 gated 私有权重）；真实
-  worker 集成测试按设计 skip，不能声称本机 CER/WER、DER、RTF、p95、VRAM 或 OOM 结论。
+- 当前 profile 实际使用的 14 个固定 production checkpoint 已在本机完成 CPU 首次安装、对应任务
+  推理、供应链/active 复验和独立断网重启；这只证明安装与离线 worker 生命周期，不是 CER/WER、
+  DER、RTF、p95、VRAM 或 OOM benchmark。其余 disabled 或 worker 未实现模型在下载前 fail closed。
 - 本机 NVIDIA userspace/driver 不匹配，CUDA 实测不可用。
 - GNOME/KDE × Wayland/X11 × GTK/Qt/Firefox/Chromium/Electron/terminal/LibreOffice 的完整矩阵
   尚未执行，Portal 和 IBus 兼容报告为 `incomplete`。
@@ -31,5 +37,6 @@
 - Fun-ASR-Nano：只供专家测试，已知必须严格防循环并复核日语标点。
 - Whisper Tiny reference：只验证真实 worker 生命周期，不参加 production auto-best。
 
-这些限制由 `classscribe-release-check`、注册表 enabled/disable_reason 和 Phase 12 acceptance 共同
-执行，不能靠 UI 隐藏。
+这些限制仍由 `classscribe-release-check` 的原始 `checks`/`reasons`、注册表 enabled/disable_reason 和
+Phase 12 acceptance 明确披露，不能靠 UI 隐藏；只有 release manifest 固定 SHA 的精确 waiver 会影响
+`effective_checks` 和自动发布退出码。
