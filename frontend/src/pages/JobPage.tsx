@@ -71,12 +71,22 @@ export function JobPage() {
       <p className="error-callout">{query.error?.message ?? "任务不存在"}</p>
     );
   const job = query.data;
-  const activeIndex = Math.max(
-    0,
-    stages.findIndex(([stage]) => stage === job.stage),
-  );
+  const completed = job.status === "completed";
+  const activeIndex = completed
+    ? stages.length
+    : stages.findIndex(([stage]) => stage === job.stage);
+  const stageLabel = completed
+    ? "已完成"
+    : (stages[activeIndex]?.[1] ??
+      { created: "等待调度", completed: "已完成" }[job.stage] ??
+      job.stage);
+  const progressPercent = completed
+    ? 100
+    : Math.max(0, Math.min(100, Math.round(job.progress * 100)));
   const pausedByIbus =
-    lastEvent?.kind === "job_paused" &&
+    job.status === "paused" &&
+    lastEvent?.job_id === job.job_id &&
+    lastEvent.kind === "job_paused" &&
     lastEvent.payload.reason === "ibus_preempted_at_safe_segment_boundary";
 
   return (
@@ -96,17 +106,24 @@ export function JobPage() {
       )}
       <div className="panel progress-panel">
         <div className="progress-heading">
-          <strong>{stages[activeIndex]?.[1] ?? job.stage}</strong>
-          <span>{Math.round(job.progress * 100)}%</span>
+          <strong>{stageLabel}</strong>
+          <span>{progressPercent}%</span>
         </div>
-        <div className="progress-track">
-          <span
-            style={{ width: `${String(Math.max(2, job.progress * 100))}%` }}
-          />
+        <div
+          className="progress-track"
+          role="progressbar"
+          aria-label="任务进度"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={progressPercent}
+          aria-valuetext={stageLabel}
+        >
+          <span style={{ width: `${String(progressPercent)}%` }} />
         </div>
         <ol className="stage-rail">
           {stages.map(([id, label], index) => (
             <li
+              aria-current={index === activeIndex ? "step" : undefined}
               className={
                 index < activeIndex
                   ? "done"
