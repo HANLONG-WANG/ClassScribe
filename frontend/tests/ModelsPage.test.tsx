@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { ModelsPage } from "../src/pages/ModelsPage";
@@ -16,12 +17,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function setup(initialStage = "not_installed") {
+function setup(initialStage = "not_installed", withSecondModel = false) {
   let stage = initialStage;
   let finish: (response: Response) => void = () => {
     throw new Error("No pending install");
   };
   let prepareCount = 0;
+  let finishVerification: (response: Response) => void = () => {
+    throw new Error("No pending verification");
+  };
   const model = {
     id: "model",
     name: "English model",
@@ -40,6 +44,11 @@ function setup(initialStage = "not_installed") {
   const json = (value: unknown, status = 200) =>
     new Response(JSON.stringify(value), { status });
   const fetch = vi.fn((url: string) => {
+    if (url.endsWith("/verify")) {
+      return new Promise<Response>((resolve) => {
+        finishVerification = resolve;
+      });
+    }
     if (url.endsWith("/install/confirm")) {
       stage = "downloading";
       return new Promise<Response>((resolve) => {
@@ -78,7 +87,21 @@ function setup(initialStage = "not_installed") {
           },
         ]),
       );
-    return Promise.resolve(json([{ ...model, install_stage: stage }]));
+    return Promise.resolve(
+      json([
+        { ...model, install_stage: stage },
+        ...(withSecondModel
+          ? [
+              {
+                ...model,
+                id: "other",
+                name: "Other model",
+                install_stage: stage,
+              },
+            ]
+          : []),
+      ]),
+    );
   });
   vi.stubGlobal("fetch", fetch);
   const client = new QueryClient({
@@ -92,6 +115,16 @@ function setup(initialStage = "not_installed") {
   return {
     fetch,
     client,
+    finishVerification: (success: boolean) => {
+      finishVerification(
+        json(
+          success
+            ? { verified: true }
+            : { error: { detail: "模型文件 SHA-256 不匹配" } },
+          success ? 200 : 409,
+        ),
+      );
+    },
     setStage: (next: string) => {
       stage = next;
     },
@@ -195,4 +228,50 @@ it("offers retry for retained files and reports a failed health check", async ()
   expect(
     state.fetch.mock.calls.filter(([url]) => url.endsWith("/install")),
   ).toHaveLength(2);
+});
+
+it("shows verification progress and results on the correct card and prevents duplicate requests", async () => {
+  const state = setup("complete", true);
+  await screen.findByRole("heading", { name: "English model" });
+  const cards = screen.getAllByRole("article");
+  const first = within(cards[0] as HTMLElement);
+  const second = within(cards[1] as HTMLElement);
+  fireEvent.click(first.getByRole("button", { name: "校验模型文件" }));
+  const pendingButton = await first.findByRole("button", { name: "正在校验…" });
+  expect(pendingButton).toBeDisabled();
+  expect(second.getByRole("button", { name: "校验模型文件" })).toBeDisabled();
+  expect(first.getByText(/正在校验当前启用版本/)).toBeVisible();
+  expect(second.queryByText(/正在校验当前启用版本/)).not.toBeInTheDocument();
+  fireEvent.click(pendingButton);
+  fireEvent.click(second.getByRole("button", { name: "校验模型文件" }));
+  await waitFor(() => {
+    expect(
+      state.fetch.mock.calls.filter(([url]) => url.endsWith("/verify")),
+    ).toHaveLength(1);
+  });
+  await act(async () => {
+    state.finishVerification(true);
+    await Promise.resolve();
+  });
+  expect(
+    await first.findByText("校验通过：当前启用版本的模型文件完整。"),
+  ).toBeVisible();
+  expect(second.queryByText(/校验通过/)).not.toBeInTheDocument();
+  expect(first.getByRole("button", { name: "校验模型文件" })).toBeEnabled();
+  fireEvent.click(first.getByRole("button", { name: "校验模型文件" }));
+  await waitFor(() => {
+    expect(
+      state.fetch.mock.calls.filter(([url]) => url.endsWith("/verify")),
+    ).toHaveLength(2);
+  });
+  expect(first.queryByText(/校验通过/)).not.toBeInTheDocument();
+  await act(async () => {
+    state.finishVerification(false);
+    await Promise.resolve();
+  });
+  expect(await first.findByRole("alert")).toHaveTextContent(
+    "校验失败：模型文件 SHA-256 不匹配",
+  );
+  expect(first.getByRole("button", { name: "校验模型文件" })).toBeEnabled();
+  expect(second.queryByRole("alert")).not.toBeInTheDocument();
 });

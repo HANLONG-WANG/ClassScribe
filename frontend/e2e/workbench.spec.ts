@@ -256,8 +256,11 @@ test("complete local classroom workflow is operable", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "Qwen3 ASR 1.7B" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "验证" }).click();
+  await page.getByRole("button", { name: "校验模型文件" }).click();
   await expect.poll(() => writes.includes("model:verify")).toBe(true);
+  await expect(
+    page.getByText("校验通过：当前启用版本的模型文件完整。"),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "导出" }).click();
   await page.getByRole("button", { name: "生成导出" }).click();

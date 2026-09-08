@@ -581,13 +581,17 @@ export function ModelsPage() {
               </button>
               {install.isError && <p role="alert">{install.error.message}</p>}
               <button
-                disabled={busyStages.has(model.install_stage ?? "")}
+                disabled={
+                  verify.isPending || busyStages.has(model.install_stage ?? "")
+                }
                 onClick={() => {
-                  verify.mutate(model.id);
+                  if (!verify.isPending) verify.mutate(model.id);
                 }}
                 type="button"
               >
-                验证
+                {verify.isPending && verify.variables === model.id
+                  ? "正在校验…"
+                  : "校验模型文件"}
               </button>
               <button
                 disabled={busyStages.has(model.install_stage ?? "")}
@@ -609,6 +613,25 @@ export function ModelsPage() {
                 删除
               </button>
             </div>
+            {verify.variables === model.id && (
+              <>
+                {verify.isPending && (
+                  <p className="notice" role="status">
+                    正在校验当前启用版本的模型文件，大模型可能需要一些时间…
+                  </p>
+                )}
+                {verify.isSuccess && (
+                  <p className="notice" role="status">
+                    校验通过：当前启用版本的模型文件完整。
+                  </p>
+                )}
+                {verify.isError && (
+                  <p className="notice" role="alert">
+                    校验失败：{verify.error.message}
+                  </p>
+                )}
+              </>
+            )}
           </article>
         ))}
       </div>
