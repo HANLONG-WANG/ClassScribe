@@ -8,7 +8,6 @@ import {
   retryImport,
   stopImports,
 } from "../batchImports";
-import { useWorkbench } from "../store";
 import { bodyModel } from "../modelGuidance";
 import { ClassroomModelGuide } from "./ClassroomModelGuide";
 import { ModelPicker } from "./ModelPicker";
@@ -17,7 +16,6 @@ type Language = "zh" | "ja" | "en" | "auto_mixed";
 type Accuracy = "fast" | "balanced" | "highest" | "strict_single";
 
 export function UploadPage() {
-  const setPage = useWorkbench((state) => state.setPage);
   const [files, setFiles] = useState<File[]>([]);
   const imports = useBatchImports((state) => state.items);
   const [language, setLanguage] = useState<Language>("auto_mixed");
@@ -87,14 +85,6 @@ export function UploadPage() {
       <p>
         已入队的课堂在关闭浏览器后继续处理；尚未上传完成的文件需要保持此浏览器开启。
       </p>
-      <button
-        type="button"
-        onClick={() => {
-          setPage("queue");
-        }}
-      >
-        查看转录队列
-      </button>
       <form className="panel upload-form" onSubmit={submit}>
         <label
           className={`drop-zone ${files.length ? "has-file" : ""}`}
@@ -346,52 +336,81 @@ export function UploadPage() {
         </button>
       </form>
       {imports.length > 0 && (
-        <div className="panel page-stack">
-          <h2>导入进度</h2>
-          <button type="button" onClick={stopImports}>
-            停止未完成的导入
-          </button>
-          {imports.map((item) => (
-            <div key={item.id} className="batch-import-row">
-              <strong>{item.name}</strong>
-              <span>
-                {
-                  {
-                    waiting: "待上传",
-                    uploading: "上传 / 校验中",
-                    submitting: "正在入队",
-                    done: "已入队",
-                    error: "导入失败",
-                  }[item.status]
-                }{" "}
-                · {item.progress}%
-              </span>
-              {item.error && <p role="alert">{item.error}</p>}
-              {item.status === "error" && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      retryImport(item.id);
-                    }}
-                  >
-                    重试此文件
-                  </button>
-                  <label>
-                    重新选择原文件
-                    <input
-                      type="file"
-                      accept="audio/*,video/*"
-                      onChange={(event) => {
-                        const file = event.target.files?.[0];
-                        if (file) retryImport(item.id, file);
-                      }}
-                    />
-                  </label>
-                </>
-              )}
+        <div className="panel import-progress">
+          <div className="import-progress-heading">
+            <div>
+              <h2>导入进度</h2>
+              <p className="muted">
+                共 {imports.length} 个文件 · 已入队{" "}
+                {imports.filter((item) => item.status === "done").length} 个
+              </p>
             </div>
-          ))}
+            <button
+              type="button"
+              onClick={stopImports}
+              disabled={
+                !imports.some((item) =>
+                  ["waiting", "uploading", "submitting"].includes(item.status),
+                )
+              }
+            >
+              停止未完成的导入
+            </button>
+          </div>
+          <div className="import-progress-list">
+            {imports.map((item) => (
+              <div key={item.id} className="batch-import-row">
+                <div className="import-file-heading">
+                  <strong>{item.name}</strong>
+                  <span className={`import-status ${item.status}`}>
+                    {
+                      {
+                        waiting: "待上传",
+                        uploading: "上传 / 校验中",
+                        submitting: "正在入队",
+                        done: "已入队",
+                        error: "导入失败",
+                      }[item.status]
+                    }{" "}
+                    · {item.progress}%
+                  </span>
+                </div>
+                <progress
+                  max={100}
+                  value={item.progress}
+                  aria-label={`${item.name} 导入进度`}
+                />
+                {item.error && (
+                  <p className="error-callout" role="alert">
+                    {item.error}
+                  </p>
+                )}
+                {item.status === "error" && (
+                  <div className="import-retry-actions">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        retryImport(item.id);
+                      }}
+                    >
+                      重试此文件
+                    </button>
+                    <label>
+                      重新选择原文件
+                      <input
+                        type="file"
+                        accept="audio/*,video/*"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          if (file) retryImport(item.id, file);
+                        }}
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </section>

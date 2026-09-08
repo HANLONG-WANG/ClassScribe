@@ -172,6 +172,10 @@ export interface Segment {
   user_text: string | null;
   auto_final_text: string;
   quality_score: number | null;
+  repetition_warning?: {
+    all_candidates: boolean;
+    candidates: { model_id: string; fragment: string; issues: string[] }[];
+  } | null;
   low_confidence: boolean;
   review_status: string;
   timing_quality: string;

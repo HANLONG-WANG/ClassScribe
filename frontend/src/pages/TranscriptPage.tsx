@@ -155,11 +155,12 @@ export function TranscriptPage() {
   const setLowOnly = useWorkbench((state) => state.setLowConfidenceOnly);
   const wave = useRef<WaveSurfer | null>(null);
   const client = useQueryClient();
-  const [mediaDuration, setMediaDuration] = useState(1);
+  const [mediaDuration, setMediaDuration] = useState(0);
   const onWaveReady = useCallback((instance: WaveSurfer | null) => {
     wave.current = instance;
     if (instance)
       setMediaDuration(Math.max(1, Math.round(instance.getDuration() * 16000)));
+    else setMediaDuration(0);
   }, []);
 
   const job = useQuery({
@@ -259,7 +260,11 @@ export function TranscriptPage() {
   if (!job.data || !transcript.data)
     return <p className="loading">正在加载可追溯转录稿…</p>;
   const segments = transcript.data.segments;
-  const duration = mediaDuration;
+  const duration = Math.max(
+    1,
+    mediaDuration || recording.data?.duration_samples || 0,
+    segments.reduce((end, segment) => Math.max(end, segment.end_sample), 0),
+  );
 
   function seek(segment: Segment) {
     selectSegment(segment.id);
@@ -367,6 +372,14 @@ export function TranscriptPage() {
               </span>
               <span className="segment-copy">
                 {segmentText(segment, layer) || <em>空句段</em>}
+                {segment.repetition_warning && (
+                  <span className="anomaly-tag">
+                    {segment.repetition_warning.all_candidates
+                      ? "所有候选均疑似重复"
+                      : "疑似重复"}{" "}
+                    · 待复核
+                  </span>
+                )}
               </span>
               <span
                 className={`confidence ${segment.low_confidence ? "low" : ""}`}
@@ -476,6 +489,36 @@ function SegmentInspector({
   const textBusy = savedDraft !== undefined && savedDraft.status !== "saved";
   return (
     <aside className="inspector panel">
+      {segment.repetition_warning && (
+        <div className="anomaly-details" role="note">
+          <strong>
+            {segment.repetition_warning.all_candidates
+              ? "所有可用候选均疑似重复"
+              : "疑似重复"}
+          </strong>
+          <p>已保留候选文字，请结合音频复核。模型间一致不会自动解除异常。</p>
+          {segment.repetition_warning.candidates.map((candidate, index) => (
+            <p key={`${candidate.model_id}-${String(index)}`}>
+              {candidate.model_id}：
+              {candidate.fragment ? `重复片段「${candidate.fragment}」；` : ""}
+              {candidate.issues
+                .map(
+                  (issue) =>
+                    (
+                      ({
+                        repeated_3_to_10_token_ngram: "短语大量重复",
+                        shortest_loop_period_detected: "连续循环重复",
+                        decode_prefix_novelty_stalled: "输出停滞",
+                        abnormally_compressible_repetition: "重复内容占比异常",
+                        repeated_sentence: "整句反复出现",
+                      }) as Record<string, string>
+                    )[issue] ?? issue,
+                )
+                .join("、")}
+            </p>
+          ))}
+        </div>
+      )}
       <div className="inspector-heading">
         <div>
           <p className="eyebrow">Selected segment</p>

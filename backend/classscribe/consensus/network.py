@@ -19,12 +19,13 @@ from classscribe.consensus.models import (
 )
 from classscribe.consensus.punctuation import restore_native_punctuation
 from classscribe.quality.language import normalize_kana
+from classscribe.quality.models import REPETITION_ISSUES
 from classscribe.timeline import AudioSpan, format_sample_timestamp
 
 _INAUDIBLE = {
-    "zh": "\uff3b听不清 {start}\u2013{end}\uff3d",
-    "ja": "\uff3b聞き取り不明 {start}\u2013{end}\uff3d",
-    "en": "[inaudible {start}\u2013{end}]",
+    "zh": "\uff3b无可用转录 {start}\u2013{end}\uff3d",
+    "ja": "\uff3b利用可能な文字起こしなし {start}\u2013{end}\uff3d",
+    "en": "[no usable transcript {start}\u2013{end}]",
 }
 
 
@@ -57,8 +58,59 @@ class ConfusionNetwork:
         if any(candidate.evidence.language_requested != language for candidate in candidates):
             raise ValueError("all consensus candidates must use the requested manual language")
         usable = tuple(
-            candidate for candidate in candidates if candidate.quality.valid_for_consensus
+            candidate
+            for candidate in candidates
+            if candidate.quality.valid_for_consensus and candidate.evidence.normalized_text.strip()
         )
+        clean = tuple(c for c in usable if not REPETITION_ISSUES.intersection(c.quality.issues))
+        if usable and not clean:
+            # Never merge multiple looping hypotheses into a new utterance.
+            trusted = max(
+                usable,
+                key=lambda c: (
+                    -len(REPETITION_ISSUES.intersection(c.quality.issues)),
+                    c.quality.quality_gate_score,
+                    inputs.reliability.value(c.evidence.model_id),
+                    c.candidate_id,
+                ),
+            )
+            text = trusted.evidence.normalized_text
+            warning = "all_candidates_repetition" if len(usable) > 1 else "suspected_repetition"
+            token = FinalToken(
+                text,
+                canonical_span,
+                trusted.quality.quality_gate_score,
+                {
+                    "source_type": "asr_candidate",
+                    "selected_candidate_id": trusted.candidate_id,
+                    "candidate_sources": [
+                        {
+                            "candidate_id": trusted.candidate_id,
+                            "model_id": trusted.evidence.model_id,
+                            "model_revision": trusted.evidence.model_revision,
+                            "source_token_index": 0,
+                            "source_start_sample": canonical_span.start_sample,
+                            "source_end_sample": canonical_span.end_sample,
+                            "timing_source": "candidate_span",
+                            "vote_weight": 1.0,
+                        }
+                    ],
+                    "absolute_samples": True,
+                    "fallback_reason": warning,
+                },
+            )
+            return ConsensusResult(
+                language,
+                canonical_span,
+                text,
+                (token,),
+                "best_candidate_repetition_review",
+                trusted.quality.quality_gate_score,
+                False,
+                True,
+                (warning,),
+            )
+        usable = clean
         columns = align_candidates(usable, canonical_span, language, inputs.reliability)
         if not columns:
             return _inaudible(language, canonical_span, "no_valid_asr_candidate")

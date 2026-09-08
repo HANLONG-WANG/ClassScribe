@@ -512,6 +512,7 @@ details summary {
 
 .timeline-panel {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.55rem;
   padding: 1rem;
 }
@@ -1320,4 +1321,161 @@ details summary {
 }
 .queue-card .toolbar {
   flex-wrap: wrap;
+}
+
+.anomaly-tag {
+  display: block;
+  width: fit-content;
+  margin-top: 8px;
+  padding: 3px 9px;
+  border: 1px solid #e6b3b0;
+  border-radius: 6px;
+  color: #a52924;
+  background: #fff0ee;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.anomaly-details {
+  border: 1px solid #e6b3b0;
+  border-radius: 10px;
+  padding: 14px;
+  color: #a52924;
+  background: #fff0ee;
+  overflow-wrap: anywhere;
+}
+.anomaly-details p {
+  margin: 8px 0 0;
+  font-size: 0.85rem;
+}
+.import-progress {
+  padding: 24px;
+}
+.import-progress-heading,
+.import-file-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+.import-progress-heading {
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.import-progress-heading h2 {
+  margin-bottom: 6px;
+}
+.import-progress-heading p {
+  margin-bottom: 0;
+}
+.import-progress-list {
+  display: grid;
+  gap: 16px;
+}
+.import-progress .batch-import-row {
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+.import-file-heading strong {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.import-status {
+  font-size: 0.8rem;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.import-status.done {
+  color: var(--green);
+}
+.import-status.error {
+  color: #a52924;
+}
+.batch-import-row progress {
+  display: block;
+  width: 100%;
+  height: 6px;
+  margin-top: 12px;
+  accent-color: var(--green);
+}
+.import-retry-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+.import-retry-actions label {
+  min-width: 0;
+  font-size: 0.85rem;
+}
+.import-retry-actions input {
+  display: block;
+  width: 100%;
+  max-width: 280px;
+  margin-top: 6px;
+}
+.batch-import-row .error-callout {
+  margin: 12px 0 0;
+}
+.export-selection-toolbar {
+  flex-wrap: wrap;
+}
+.export-manuscript {
+  flex-direction: row;
+  align-items: center;
+  gap: 16px;
+  cursor: pointer;
+}
+.export-manuscript input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: var(--green);
+}
+.export-manuscript > div {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+.export-manuscript.selected {
+  border-color: var(--green);
+  background: #eff5ef;
+}
+.export-manuscript:focus-within {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+@media (max-width: 600px) {
+  .import-progress {
+    padding: 16px;
+  }
+  .import-file-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .export-manuscript {
+    padding: 16px;
+  }
+}
+
+.transcript-page {
+  grid-template-columns: minmax(0, 1fr);
+}
+.transcript-layout > *,
+.inspector input,
+.inspector textarea {
+  min-width: 0;
+}
+.layer-tabs {
+  flex-wrap: wrap;
+}
+
+.timeline-panel > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }

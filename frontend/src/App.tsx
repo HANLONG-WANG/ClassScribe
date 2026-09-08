@@ -50,6 +50,7 @@ export function App() {
         <nav aria-label="主导航">
           {navigation.map((item) => (
             <button
+              aria-label={item.label}
               aria-current={
                 page === item.id ||
                 (page === "job" && item.id === "queue") ||

@@ -79,18 +79,18 @@ def test_normal_candidate_extracts_all_feature_domains_without_unconditional_rev
     assert not ReviewRouter().secondary(report).run_secondary
 
 
-def test_infinite_anata_loop_is_rejected_then_split_with_full_coverage_and_model_switch() -> None:
+def test_infinite_anata_loop_remains_usable_and_requests_review_with_full_coverage() -> None:
     text = "あなたはだれですか" * 8
     report = QualityFeatureExtractor().inspect(
         "loop",
         _candidate(text, "ja", tokens=()),
         _context(prefix_snapshots=(text[:18], text[:27], text[:36], text[:45])),
     )
-    assert not report.valid_for_consensus
+    assert report.valid_for_consensus
     assert QualityIssue.REPEATED_NGRAM in report.issues
     assert QualityIssue.SHORTEST_LOOP in report.issues
     assert report.retry is not None and report.retry.switch_model
-    assert report.retry.reject_candidate
+    assert not report.retry.reject_candidate
     assert report.retry.retry_spans[0].start_sample == SPAN.start_sample
     assert report.retry.retry_spans[-1].end_sample == SPAN.end_sample
     assert report.retry.retry_spans[0].end_sample == report.retry.retry_spans[1].start_sample
@@ -154,7 +154,7 @@ def test_second_model_triggers_cover_time_terms_structure_and_acoustics() -> Non
     assert SecondaryTrigger.LOW_SNR_OR_FAR_FIELD in triggers
 
 
-def test_prefix_stagnation_and_large_adjacent_word_overlap_are_hard_rejections() -> None:
+def test_prefix_stagnation_is_soft_but_large_time_overlap_remains_a_hard_rejection() -> None:
     prefix_report = QualityFeatureExtractor().inspect(
         "prefix",
         _candidate("ordinary result.", "en"),
@@ -168,7 +168,7 @@ def test_prefix_stagnation_and_large_adjacent_word_overlap_are_hard_rejections()
         ),
     )
     assert QualityIssue.PREFIX_STAGNATION in prefix_report.issues
-    assert not prefix_report.valid_for_consensus
+    assert prefix_report.valid_for_consensus
 
     overlapping = (
         ASRTokenEvidence("first", AudioSpan(10 * SAMPLE_RATE, 18 * SAMPLE_RATE), 0.8, 0),
@@ -329,3 +329,30 @@ def test_loop_retry_runs_shorter_full_coverage_pieces_on_a_replacement_model() -
     assert outcome.candidates[1].evidence.audio_span == SPAN
     assert outcome.candidates[1].evidence.model_id == "replacement"
     assert outcome.candidates[1].evidence.provenance["preserved_full_canonical_coverage"] is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "これは3,130万人です。皆さん、日本の人口は何人か知っていますか\uff1f日本の人口は約1億2000万人ですね。ですので、ネパールの人口は日本の人口の約4分の1となります。",
+        "ではネパールの主要な産業は何でしょうか。これは農林業となります。ネパールの通貨はネパールルピーですね。ネパールの主要な相手国は、すみません、ネパールの主要な貿易相手国はインドです。",
+        "ですのでこの言葉を詳しく調べておかないと音声の意味がわかりませんので、まだ調べていない人は必ず調べてください。では皆さんが調べてくれたこととして次に進みます。",
+    ],
+)
+def test_lecture_topic_repetition_is_not_a_decode_loop(text: str) -> None:
+    report = QualityFeatureExtractor().inspect(
+        "lecture", _candidate(text, "ja", tokens=()), _context()
+    )
+    assert report.valid_for_consensus
+    assert QualityIssue.REPEATED_NGRAM not in report.issues
+    assert QualityIssue.SHORTEST_LOOP not in report.issues
+
+
+def test_repeating_output_is_retained_even_when_it_inflates_character_rate() -> None:
+    report = QualityFeatureExtractor().inspect(
+        "dense-loop", _candidate("あなたはだれですか。" * 40, "ja", tokens=()), _context()
+    )
+    assert QualityIssue.OUTPUT_TOO_DENSE in report.issues
+    assert QualityIssue.SHORTEST_LOOP in report.issues
+    assert report.valid_for_consensus
+    assert report.retry is not None and not report.retry.reject_candidate

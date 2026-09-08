@@ -11,10 +11,12 @@ from classscribe.asr.models import ASRCandidateEvidence
 from classscribe.quality.loop import inspect_decode_loop
 from classscribe.quality.models import (
     HARD_REJECTION_ISSUES,
+    REPETITION_ISSUES,
     QualityContext,
     QualityIssue,
     QualityReport,
     RetryDirective,
+    blocking_issues,
 )
 from classscribe.quality.text import normalized_edit_distance, tokenize_for_language
 from classscribe.timeline import SAMPLE_RATE, AudioSpan
@@ -39,10 +41,10 @@ _NUMERIC_ANOMALY = re.compile(
 _ISSUE_PENALTIES: dict[QualityIssue, float] = {
     QualityIssue.EMPTY_ON_SPEECH: 0.35,
     QualityIssue.SILENCE_HALLUCINATION: 1.0,
-    QualityIssue.REPEATED_NGRAM: 1.0,
-    QualityIssue.SHORTEST_LOOP: 1.0,
+    QualityIssue.REPEATED_NGRAM: 0.2,
+    QualityIssue.SHORTEST_LOOP: 0.3,
     QualityIssue.OUTPUT_TOO_DENSE: 1.0,
-    QualityIssue.PREFIX_STAGNATION: 1.0,
+    QualityIssue.PREFIX_STAGNATION: 0.2,
     QualityIssue.REPETITION_COMPRESSION: 0.3,
     QualityIssue.REPEATED_SENTENCE: 0.4,
     QualityIssue.REPLACEMENT_CHARACTER: 1.0,
@@ -101,8 +103,12 @@ class QualityFeatureExtractor:
             score = min(score, context.calibrated_candidate_quality)
             if context.calibrated_candidate_quality < 0.55:
                 unique_issues = (*unique_issues, QualityIssue.LOW_CALIBRATED_QUALITY)
-        valid = not any(issue in HARD_REJECTION_ISSUES for issue in unique_issues)
-        retry = self._retry(candidate.audio_span, unique_issues) if not valid else None
+        valid = not blocking_issues(unique_issues)
+        retry = (
+            self._retry(candidate.audio_span, unique_issues)
+            if not valid or REPETITION_ISSUES.intersection(unique_issues)
+            else None
+        )
         return QualityReport(
             candidate_id=candidate_id,
             model_id=candidate.model_id,
@@ -327,8 +333,12 @@ class QualityFeatureExtractor:
                 AudioSpan(midpoint, span.end_sample),
             ),
             switch_model=True,
-            reject_candidate=True,
-            reason=",".join(issue.value for issue in issues if issue in HARD_REJECTION_ISSUES),
+            reject_candidate=bool(blocking_issues(issues)),
+            reason=",".join(
+                issue.value
+                for issue in issues
+                if issue in HARD_REJECTION_ISSUES | REPETITION_ISSUES
+            ),
         )
 
 

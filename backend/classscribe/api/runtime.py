@@ -41,6 +41,10 @@ def build_default_service(config: AppConfig | None = None) -> ClassScribeService
     engine = create_sqlite_engine(paths.data / "classscribe.sqlite3")
     upgrade_schema(engine)
     sessions = make_session_factory(engine)
+    from classscribe.quality.recovery import recover_repetition_markers
+
+    with sessions.begin() as session:
+        recover_repetition_markers(session)
     manager = ModelManager(
         paths.cache / "models", recorder=SQLAlchemyInstallationRecorder(sessions)
     )

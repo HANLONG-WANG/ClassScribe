@@ -41,13 +41,20 @@ class QualityIssue(StrEnum):
     LOW_CALIBRATED_QUALITY = "low_calibrated_quality"
 
 
+REPETITION_ISSUES = frozenset(
+    {
+        QualityIssue.REPEATED_NGRAM,
+        QualityIssue.SHORTEST_LOOP,
+        QualityIssue.PREFIX_STAGNATION,
+        QualityIssue.REPETITION_COMPRESSION,
+        QualityIssue.REPEATED_SENTENCE,
+    }
+)
+
 HARD_REJECTION_ISSUES = frozenset(
     {
         QualityIssue.SILENCE_HALLUCINATION,
-        QualityIssue.REPEATED_NGRAM,
-        QualityIssue.SHORTEST_LOOP,
         QualityIssue.OUTPUT_TOO_DENSE,
-        QualityIssue.PREFIX_STAGNATION,
         QualityIssue.REPLACEMENT_CHARACTER,
         QualityIssue.DOUBLE_QUESTION,
         QualityIssue.ILLEGAL_CHARACTER,
@@ -57,6 +64,14 @@ HARD_REJECTION_ISSUES = frozenset(
         QualityIssue.EXCESSIVE_TIME_OVERLAP,
     }
 )
+
+
+def blocking_issues(issues: tuple[QualityIssue, ...]) -> frozenset[QualityIssue]:
+    blocked = HARD_REJECTION_ISSUES.intersection(issues)
+    # A decode loop itself can inflate the output rate. Keep it as review evidence.
+    if REPETITION_ISSUES.intersection(issues):
+        blocked = blocked - {QualityIssue.OUTPUT_TOO_DENSE}
+    return blocked
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +148,7 @@ class QualityReport:
     timing_features: dict[str, int | float | bool | str | None]
     multi_model_features: dict[str, int | float | bool | str | None]
     retry: RetryDirective | None
-    rule_version: str = "quality-gate-v1"
+    rule_version: str = "quality-gate-v2"
 
     def as_dict(self) -> dict[str, Any]:
         return {

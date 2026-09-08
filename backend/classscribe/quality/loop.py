@@ -30,6 +30,9 @@ def inspect_decode_loop(
     issues: list[QualityIssue] = []
     maximum_ngram_count = 0
     maximum_ngram_size = 0
+    repeated_fragment = ""
+    repeated_coverage = 0.0
+    suspicious_ngram = False
     for size in range(3, min(10, len(tokens)) + 1):
         counts = Counter(
             tuple(tokens[index : index + size]) for index in range(len(tokens) - size + 1)
@@ -38,12 +41,29 @@ def inspect_decode_loop(
         if size_maximum > maximum_ngram_count:
             maximum_ngram_count = size_maximum
             maximum_ngram_size = size
-    if maximum_ngram_count > max_ngram_occurrences:
+        for fragment, count in counts.items():
+            if count <= max_ngram_occurrences:
+                continue
+            # Short Japanese/Chinese topic words naturally recur in lectures.
+            # Require a substantial phrase covering most of the utterance.
+            starts = [
+                i for i in range(len(tokens) - size + 1) if tuple(tokens[i : i + size]) == fragment
+            ]
+            covered = len({j for i in starts for j in range(i, i + size)}) / len(tokens)
+            if size >= (6 if language in {"ja", "zh"} else 3) and covered >= 0.6:
+                suspicious_ngram = True
+                if covered > repeated_coverage:
+                    repeated_coverage = covered
+                    repeated_fragment = ("" if language in {"ja", "zh"} else " ").join(fragment)
+    if suspicious_ngram:
         issues.append(QualityIssue.REPEATED_NGRAM)
 
     shortest_period = _shortest_repeated_suffix(tokens)
     if shortest_period is not None:
         issues.append(QualityIssue.SHORTEST_LOOP)
+        repeated_fragment = ("" if language in {"ja", "zh"} else " ").join(
+            tokens[-shortest_period:]
+        )
 
     visible_characters = sum(not character.isspace() for character in text)
     characters_per_voiced_second = visible_characters / max(voiced_seconds, 0.1)
@@ -66,6 +86,8 @@ def inspect_decode_loop(
     return LoopInspection(
         issues=tuple(dict.fromkeys(issues)),
         metrics={
+            "repeated_fragment": repeated_fragment,
+            "repeated_coverage": round(repeated_coverage, 6),
             "token_count": len(tokens),
             "maximum_3_to_10_ngram_occurrences": maximum_ngram_count,
             "maximum_repeated_ngram_size": maximum_ngram_size,

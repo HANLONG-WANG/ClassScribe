@@ -3,25 +3,7 @@ import { useState } from "react";
 import { api, formatSamples } from "../api";
 import { useWorkbench } from "../store";
 
-interface Manuscript {
-  job_id: string;
-  source_name: string;
-  duration_samples: number;
-  language: string;
-  status: string;
-  created_at: string;
-}
-const statuses: Record<string, string> = {
-  pending: "等待处理",
-  cancelling: "正在取消",
-  completed: "已完成",
-  failed: "失败 · 可查看已有稿件",
-  cancelled: "已取消",
-  running: "处理中",
-  paused: "已暂停",
-  queued: "排队中",
-  created: "待处理",
-};
+import { type Manuscript, statuses } from "../manuscripts";
 
 export function TranscriptsPage() {
   const [offset, setOffset] = useState(0);

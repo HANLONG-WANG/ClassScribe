@@ -172,9 +172,9 @@ def test_new_standard_spelling_requires_explicit_deterministic_term_rule() -> No
 @pytest.mark.parametrize(
     ("language", "expected"),
     [
-        ("zh", "\uff3b听不清 00:00:04.000\u201300:00:12.000\uff3d"),
-        ("ja", "\uff3b聞き取り不明 00:00:04.000\u201300:00:12.000\uff3d"),
-        ("en", "[inaudible 00:00:04.000\u201300:00:12.000]"),
+        ("zh", "\uff3b无可用转录 00:00:04.000\u201300:00:12.000\uff3d"),
+        ("ja", "\uff3b利用可能な文字起こしなし 00:00:04.000\u201300:00:12.000\uff3d"),
+        ("en", "[no usable transcript 00:00:04.000\u201300:00:12.000]"),
     ],
 )
 def test_all_invalid_candidates_use_language_specific_timed_inaudible_marker(
@@ -319,3 +319,82 @@ def test_normalized_matching_does_not_change_winning_characters() -> None:
         (_candidate("a", "a", "第２回、です。", "ja"),),
     )
     assert restored == "第2回、です。"
+
+
+@pytest.mark.parametrize("count", [1, 2, 3])
+def test_all_repeating_candidates_keep_one_complete_hypothesis_and_review(count: int) -> None:
+    from dataclasses import replace
+
+    from classscribe.quality.models import QualityIssue
+
+    candidates = tuple(
+        replace(
+            c,
+            quality=replace(
+                c.quality, issues=(QualityIssue.REPEATED_NGRAM,), quality_gate_score=0.6 + i * 0.1
+            ),
+        )
+        for i, c in enumerate(
+            _candidate(
+                str(i),
+                chr(97 + i),
+                ("あなたはだれですか。" if i == 0 else "先生の説明です。") * 4,
+                "ja",
+            )
+            for i in range(count)
+        )
+    )
+    result = ConfusionNetwork().resolve(
+        candidates, canonical_span=SPAN, language="ja", inputs=_inputs()
+    )
+    assert result.text == candidates[-1].evidence.normalized_text
+    assert result.strategy == "best_candidate_repetition_review"
+    assert result.low_confidence
+    assert result.warnings == (
+        ("suspected_repetition",) if count == 1 else ("all_candidates_repetition",)
+    )
+    assert {
+        s["candidate_id"] for t in result.tokens for s in t.provenance["candidate_sources"]
+    } == {str(count - 1)}
+
+
+def test_clean_candidate_is_preferred_over_repeating_majority() -> None:
+    from dataclasses import replace
+
+    from classscribe.quality.models import QualityIssue
+
+    clean = _candidate("clean", "c", "正常な説明です。", "ja")
+    repeated = _candidate("loop", "a", "あなたはだれですか。" * 5, "ja")
+    repeated = replace(
+        repeated, quality=replace(repeated.quality, issues=(QualityIssue.SHORTEST_LOOP,))
+    )
+    second = replace(
+        repeated, candidate_id="loop2", quality=replace(repeated.quality, candidate_id="loop2")
+    )
+    result = ConfusionNetwork().resolve(
+        (repeated, second, clean), canonical_span=SPAN, language="ja", inputs=_inputs()
+    )
+    assert result.text == clean.evidence.normalized_text
+    assert not result.low_confidence
+    assert {
+        s["candidate_id"] for t in result.tokens for s in t.provenance["candidate_sources"]
+    } == {"clean"}
+
+
+def test_empty_candidate_cannot_win_over_repeating_candidate() -> None:
+    from dataclasses import replace
+
+    from classscribe.quality.models import QualityIssue
+
+    repeated = _candidate("loop", "a", "説明です。" * 4, "ja")
+    repeated = replace(
+        repeated, quality=replace(repeated.quality, issues=(QualityIssue.REPEATED_SENTENCE,))
+    )
+    result = ConfusionNetwork().resolve(
+        (repeated, _candidate("empty", "b", "", "ja")),
+        canonical_span=SPAN,
+        language="ja",
+        inputs=_inputs(),
+    )
+    assert result.text == repeated.evidence.normalized_text
+    assert result.low_confidence

@@ -386,7 +386,16 @@ class ClassScribeService:
     def list_jobs(self, *, limit: int = 30, offset: int = 0) -> dict[str, Any]:
         with self.sessions() as session:
             rows = session.execute(
-                select(Job, Recording)
+                select(
+                    Job,
+                    Recording,
+                    select(TranscriptSegment.id)
+                    .where(
+                        TranscriptSegment.job_id == Job.id,
+                        TranscriptSegment.is_active.is_(True),
+                    )
+                    .exists(),
+                )
                 .join(Recording, Job.recording_id == Recording.id)
                 .order_by(Job.created_at.desc(), Job.id.desc())
                 .offset(offset)
@@ -397,13 +406,14 @@ class ClassScribeService:
                     {
                         "job_id": job.id,
                         "source_name": recording.source_name,
+                        "has_transcript": has_transcript,
                         "duration_samples": recording.duration_samples,
                         "language": job.language_mode.value,
                         "status": job.status.value,
                         "created_at": job.created_at.isoformat()
                         + ("+00:00" if job.created_at.tzinfo is None else ""),
                     }
-                    for job, recording in rows
+                    for job, recording, has_transcript in rows
                 ],
                 "total": session.scalar(select(func.count()).select_from(Job)),
             }
@@ -1544,6 +1554,49 @@ class ClassScribeService:
                 .order_by(TokenSpan.start_sample, TokenSpan.id)
             ).all()
         )
+        from classscribe.quality.models import REPETITION_ISSUES
+
+        repetition_codes = {issue.value for issue in REPETITION_ISSUES}
+        candidates = tuple(
+            session.scalars(
+                select(ASRCandidate).where(
+                    ASRCandidate.segment_id == segment.id, ASRCandidate.deleted_at.is_(None)
+                )
+            )
+        )
+        repeated = [
+            c
+            for c in candidates
+            if c.is_valid
+            and repetition_codes.intersection(c.quality_features_json.get("issues", []))
+        ]
+        selected_ids = {
+            str(source.get("candidate_id"))
+            for token in tokens
+            for source in token.provenance_json.get("candidate_sources", [])
+            if isinstance(source, dict)
+        }
+        adopted_repeated = [c for c in repeated if c.is_adopted or c.id in selected_ids]
+        repetition_warning = None
+        if adopted_repeated:
+            usable = [c for c in candidates if c.is_valid and c.normalized_text.strip()]
+            repetition_warning = {
+                "all_candidates": len(usable) > 1 and len(repeated) == len(usable),
+                "candidates": [
+                    {
+                        "model_id": c.model_id,
+                        "fragment": c.quality_features_json.get("text_features", {}).get(
+                            "repeated_fragment", ""
+                        ),
+                        "issues": [
+                            i
+                            for i in c.quality_features_json.get("issues", [])
+                            if i in repetition_codes
+                        ],
+                    }
+                    for c in repeated
+                ],
+            }
         speaker_name = None
         if segment.speaker_id:
             mapping = session.scalar(
@@ -1567,6 +1620,7 @@ class ClassScribeService:
             "user_text": segment.user_text,
             "auto_final_text": segment.smart_corrected_text or segment.faithful_text,
             "quality_score": segment.quality_score,
+            "repetition_warning": repetition_warning,
             "low_confidence": segment.quality_score is None or segment.quality_score < 0.82,
             "review_status": segment.review_status.value,
             "timing_quality": segment.timing_quality.value,
