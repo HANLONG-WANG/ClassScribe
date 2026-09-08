@@ -27,14 +27,16 @@ def punctuate_japanese(
     length = len(strip_punctuation_and_spacing(text))
     rejected: list[str] = []
     marks: dict[int, str] = {}
-    source_parts: list[str] = []
+    source_parts: list[str] = ["native"] if any(c in _BOUNDARY_MARKS for c in text) else []
     if granite_proposal:
         source_chars = strip_punctuation_and_spacing(granite_proposal)
         target_chars = strip_punctuation_and_spacing(text)
         distance = normalized_edit_distance(tuple(source_chars), tuple(target_chars))
         if distance <= 0.25:
-            marks.update(_project_granite_boundaries(granite_proposal, length))
-            source_parts.append("granite_projection")
+            projected = _project_granite_boundaries(granite_proposal, length)
+            marks.update(projected)
+            if projected:
+                source_parts.append("granite_projection")
         else:
             rejected.append("granite_text_diverged")
     acoustic = acoustic_marks(

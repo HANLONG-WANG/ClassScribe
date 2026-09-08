@@ -200,3 +200,74 @@ def test_automatic_export_honors_layers_and_speakers(
                 "Hello world" if artifact.text_layer == "faithful" else "Corrected text"
             ) in content
             assert artifact.text_layer in artifact.file_name
+
+
+def test_qwen_native_punctuation_survives_production_postprocessing(
+    database: tuple[Engine, sessionmaker[Session], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from classscribe.asr.models import decode_policy
+    from classscribe.db.models import ASRCandidate
+    from classscribe.terminology.models import CourseTerm
+
+    value = make_runner(tmp_path, object())
+    monkeypatch.setattr(value, "_installed", lambda _: False)
+    monkeypatch.setattr(
+        value,
+        "_course_terms",
+        lambda *args: (
+            CourseTerm("授業動画", "じゅぎょうどうが", aliases=("動画",), language="ja"),
+        ),
+    )
+    raw = "では、動画を共有して授業を進めます。"
+    with database[1].begin() as session:
+        job, segment, checkpoint = setup_segment(session)
+        job.options_json = {"accuracy_mode": "strict_single"}
+        job.language_mode = segment.language = LanguageMode.JAPANESE
+        segment.raw_text = raw
+        segment.user_text = "手動編集。"
+        session.add(
+            TranscriptSegment(
+                job=job,
+                start_sample=segment.end_sample,
+                end_sample=64000,
+                language=LanguageMode.JAPANESE,
+                raw_text="",
+                faithful_text="",
+                smart_corrected_text="",
+            )
+        )
+        session.add(
+            ASRCandidate(
+                segment_id=segment.id,
+                model_id="qwen3_asr_1_7b",
+                model_revision="b" * 40,
+                raw_text=raw,
+                normalized_text=raw,
+                decode_config_json=decode_policy(segment.end_sample - segment.start_sample),
+            )
+        )
+        session.flush()
+        value._quality_and_review(session, job, checkpoint)
+        assert segment.faithful_text == raw
+        value._terminology(session, job, checkpoint)
+        value._punctuation(session, job, checkpoint)
+        assert segment.faithful_text == raw
+        assert segment.smart_corrected_text == "では、授業動画を共有して授業を進めます。"
+        assert segment.raw_text == raw
+        assert segment.user_text == "手動編集。"
+        value._punctuation(session, job, checkpoint)
+        assert segment.faithful_text == raw
+        session.flush()
+        events = list(
+            session.scalars(
+                select(DecisionEvent).where(
+                    DecisionEvent.segment_id == segment.id,
+                )
+            )
+        )
+        consensus = next(e for e in events if e.event_type == "automatic_consensus_adopted")
+        assert consensus.output_json["punctuation_sources"][0]["model_id"] == "qwen3_asr_1_7b"
+        punctuation = next(e for e in events if e.event_type == "strict_punctuation_applied")
+        assert punctuation.output_json["faithful_source"] == "native"

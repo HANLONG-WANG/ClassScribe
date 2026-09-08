@@ -94,7 +94,8 @@ class ConsensusResult:
     score_is_calibrated_probability: bool
     low_confidence: bool
     warnings: tuple[str, ...]
-    rule_version: str = "time-aligned-confusion-network-v1"
+    rule_version: str = "time-aligned-confusion-network-v2"
+    punctuation_sources: tuple[dict[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if self.language not in {"zh", "ja", "en"}:

@@ -975,6 +975,7 @@ class ProductionStageRunner:
                 input_json={"candidate_ids": [item.candidate_id for item in reviewed]},
                 output_json={
                     "faithful_text": result.text,
+                    "punctuation_sources": list(result.punctuation_sources),
                     "strategy": result.strategy,
                     "support": result.consensus_support_score,
                     "low_confidence": result.low_confidence,
@@ -1058,12 +1059,12 @@ class ProductionStageRunner:
         elif language == "ja":
             faithful = punctuate_japanese(
                 faithful_source,
-                granite_proposal=faithful_source,
+                granite_proposal=None,
                 acoustic_boundaries=acoustic,
             )
             smart = punctuate_japanese(
                 smart_source,
-                granite_proposal=smart_source,
+                granite_proposal=None,
                 acoustic_boundaries=self._acoustic_boundaries(session, segment, smart_source),
             )
         else:

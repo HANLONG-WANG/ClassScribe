@@ -229,3 +229,93 @@ def test_consensus_preserves_surface_case(words: tuple[str, ...]) -> None:
         (candidate,), canonical_span=SPAN, language="en", inputs=_inputs()
     )
     assert result.text == "OpenAI NASA"
+
+
+@pytest.mark.parametrize(
+    ("language", "text"),
+    [
+        ("ja", "では、PowerPoint を共有して授業を進めます。"),
+        ("ja", "「本当ですか\uff1f」と言いました。"),
+        ("zh", "今天\uff0c学习标点。"),
+        ("en", "Hello, world! We use (the same) words."),
+    ],
+)
+def test_single_candidate_preserves_native_surface(language: str, text: str) -> None:
+    result = ConfusionNetwork().resolve(
+        (_candidate("one", "a", text, language),),
+        canonical_span=SPAN,
+        language=language,
+        inputs=_inputs(),
+    )
+    assert result.text == text
+    assert result.punctuation_sources[0]["model_id"] == "a"
+    assert result.punctuation_sources[0]["boundary_count"] > 0
+
+
+def test_native_surface_survives_best_candidate_fallback() -> None:
+    from dataclasses import replace
+
+    candidate = _candidate("one", "a", "こんにちは、皆さん。", "ja")
+    candidate = replace(candidate, quality=replace(candidate.quality, quality_gate_score=0.3))
+    result = ConfusionNetwork().resolve(
+        (candidate,),
+        canonical_span=SPAN,
+        language="ja",
+        inputs=_inputs(),
+    )
+    assert result.strategy == "best_candidate_low_confidence"
+    assert result.text == "こんにちは、皆さん。"
+
+
+def test_invalid_candidate_cannot_restore_text_or_punctuation() -> None:
+    result = ConfusionNetwork().resolve(
+        (_candidate("bad", "a", "こんにちは、皆さん。", "ja", valid=False),),
+        canonical_span=SPAN,
+        language="ja",
+        inputs=_inputs(),
+    )
+    assert result.strategy == "inaudible_marker"
+    assert not result.punctuation_sources
+
+
+def test_native_timed_words_still_use_original_punctuation() -> None:
+    result = ConfusionNetwork().resolve(
+        (_candidate("one", "a", "Hello, world!", "en", ("Hello", "world")),),
+        canonical_span=SPAN,
+        language="en",
+        inputs=_inputs(),
+    )
+    assert result.text == "Hello, world!"
+    assert len(result.tokens) == 2
+
+
+def test_mixed_candidate_projection_uses_selected_sources_and_real_offsets() -> None:
+    from classscribe.consensus.models import FinalToken
+    from classscribe.consensus.punctuation import restore_native_punctuation
+
+    # The winning final character came from B, so A's sentence end cannot be copied.
+    tokens = tuple(
+        FinalToken(char, SPAN, 1.0, {"selected_candidate_id": "b" if i == 6 else "a"})
+        for i, char in enumerate("今日は長い授業")
+    )
+    restored, evidence = restore_native_punctuation(
+        "今日は長い授業",
+        tokens,
+        (_candidate("a", "a", "今日は、長い授業。", "ja"),),
+    )
+    assert restored == "今日は、長い授業"
+    assert evidence[0]["boundary_count"] == 1
+
+
+def test_normalized_matching_does_not_change_winning_characters() -> None:
+    from classscribe.consensus.models import FinalToken
+    from classscribe.consensus.punctuation import restore_native_punctuation
+
+    target = "第2回です"
+    tokens = (FinalToken(target, SPAN, 1.0, {"selected_candidate_id": "a"}),)
+    restored, _ = restore_native_punctuation(
+        target,
+        tokens,
+        (_candidate("a", "a", "第２回、です。", "ja"),),
+    )
+    assert restored == "第2回、です。"

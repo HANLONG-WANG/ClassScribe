@@ -164,6 +164,7 @@ class ConsensusRepository:
                     input_json=previous,
                     output_json={
                         "faithful_text": result.text,
+                        "punctuation_sources": list(result.punctuation_sources),
                         "strategy": result.strategy,
                         "consensus_support_score": result.consensus_support_score,
                         "score_is_calibrated_probability": False,

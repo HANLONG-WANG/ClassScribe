@@ -207,3 +207,15 @@ def test_existing_punctuation_wins_at_inferred_boundary() -> None:
     assert apply_boundary_marks("長い文章です。", {6: "。"}) == "長い文章です。"
     assert apply_boundary_marks("你好\uff0c世界。", {2: "\uff0c", 4: "。"}) == "你好\uff0c世界。"
     assert apply_boundary_marks("Hello! World", {5: "."}) == "Hello! World"
+
+
+def test_japanese_zero_boundaries_does_not_claim_granite_projection() -> None:
+    result = punctuate_japanese("今日は授業です", granite_proposal="今日は授業です")
+    assert result.source == "source_fallback"
+    assert result.metrics["boundary_count"] == 0
+
+
+def test_chinese_preserves_native_marks_over_different_model_proposal() -> None:
+    result = punctuate_chinese("今天、学习。", firered_proposal="今天学习！")  # noqa: RUF001
+    assert result.text == "今天、学习。"
+    assert result.source == "native"

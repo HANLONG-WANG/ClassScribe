@@ -20,7 +20,10 @@ def punctuate_chinese(
     if not text.strip():
         return PunctuationResult(text, "empty", True)
     rejected: list[str] = []
-    if firered_proposal is not None and character_invariant(text, firered_proposal):
+    if any(char in "\uff0c\u3002\uff01\uff1f\u3001\uff1b\uff1a" for char in text):
+        proposed = text
+        source = "native"
+    elif firered_proposal is not None and character_invariant(text, firered_proposal):
         proposed = firered_proposal
         source = "firered_punc"
     else:

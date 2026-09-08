@@ -42,4 +42,4 @@ class PunctuationResult:
     character_sequence_preserved: bool
     rejected_sources: tuple[str, ...] = ()
     metrics: dict[str, int | float | str | bool | None] = field(default_factory=dict)
-    rule_version: str = "strict-punctuation-v1"
+    rule_version: str = "strict-punctuation-v2"

@@ -17,6 +17,7 @@ from classscribe.consensus.models import (
     FinalToken,
     ReliabilityProfile,
 )
+from classscribe.consensus.punctuation import restore_native_punctuation
 from classscribe.quality.language import normalize_kana
 from classscribe.timeline import AudioSpan, format_sample_timestamp
 
@@ -116,6 +117,7 @@ class ConfusionNetwork:
                 overall,
             )
         text = _join_tokens(tuple(token.text for token in final), language)
+        text, punctuation_sources = restore_native_punctuation(text, tuple(final), usable)
         low_confidence = overall < 0.67
         return ConsensusResult(
             language=language,
@@ -127,6 +129,7 @@ class ConfusionNetwork:
             score_is_calibrated_probability=False,
             low_confidence=low_confidence,
             warnings=("low_consensus_support",) if low_confidence else (),
+            punctuation_sources=punctuation_sources,
         )
 
     @staticmethod
@@ -200,16 +203,20 @@ class ConfusionNetwork:
             )
             for column in trusted_columns
         )
+        text, punctuation_sources = restore_native_punctuation(
+            _join_tokens(tuple(token.text for token in tokens), language), tokens, (trusted,)
+        )
         return ConsensusResult(
             language=language,
             canonical_span=canonical_span,
-            text=_join_tokens(tuple(token.text for token in tokens), language),
+            text=text,
             tokens=tokens,
             strategy="best_candidate_low_confidence",
             consensus_support_score=round(support, 6),
             score_is_calibrated_probability=False,
             low_confidence=True,
             warnings=("no_reliable_consensus_used_best_acoustic_candidate",),
+            punctuation_sources=punctuation_sources,
         )
 
 
