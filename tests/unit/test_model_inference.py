@@ -376,8 +376,9 @@ def test_reuse_checks_revision_and_releases_stale_model(
         invoker.close_job("job")
 
 
-def test_cpu_vad_does_not_wait_for_or_preempt_the_gpu_slot(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("model_id,method", [("firered_vad", "vad"), ("firered_lid", "lid")])
+def test_classroom_auxiliary_models_share_and_handoff_the_gpu_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model_id: str, method: str
 ) -> None:
     import threading
 
@@ -385,7 +386,7 @@ def test_cpu_vad_does_not_wait_for_or_preempt_the_gpu_slot(
 
     registry = load_registry(Path("config/model-registry.v1.yaml"))
     gpu = registry.model("qwen3_asr_1_7b")
-    cpu = registry.model("firered_vad")
+    auxiliary = registry.model(model_id)
     gpu_started = threading.Event()
     release = threading.Event()
 
@@ -405,6 +406,7 @@ def test_cpu_vad_does_not_wait_for_or_preempt_the_gpu_slot(
 
     Process.load_ok = True
     monkeypatch.setattr(inference, "WorkerProcess", BusyProcess)
+    monkeypatch.setattr(inference, "nvidia_devices", lambda: (Path("/dev/nvidia0"),))
     handoffs: list[str] = []
     sandbox = Sandbox()
     invoker = SandboxedModelInvoker(
@@ -431,18 +433,29 @@ def test_cpu_vad_does_not_wait_for_or_preempt_the_gpu_slot(
             async with asyncio.timeout(2):
                 while not gpu_started.is_set():
                     await asyncio.sleep(0.01)
-            result = await asyncio.wait_for(
-                invoker(cpu, RPCRequest("cpu", "job", 5000, Priority.BACKGROUND, "vad", params)),
-                timeout=2,
-            )
-            assert result.ok
-            assert sandbox.arguments["gpu_devices"] == ()
-            assert handoffs == ["gpu"]
-            cpu_process = invoker._sessions["cpu"].process
             gpu_process = invoker._sessions["gpu"].process
-            invoker.release_cpu("job")
-            assert not cpu_process.running
-            assert gpu_process.running
+            auxiliary_task = asyncio.create_task(
+                invoker(
+                    auxiliary,
+                    RPCRequest("auxiliary", "job", 5000, Priority.BACKGROUND, method, params),
+                )
+            )
+            await asyncio.sleep(0.05)
+            assert not auxiliary_task.done()
+            assert invoker.uses_gpu()
+            assert handoffs == ["gpu"]
+            assert invoker._sessions["gpu"].process is gpu_process
+            release.set()
+            result = await asyncio.wait_for(auxiliary_task, timeout=2)
+            assert result.ok
+            assert not gpu_process.running
+            assert cast(Process, gpu_process).calls[-1].method == "unload"
+            assert sandbox.arguments["gpu_devices"] == (Path("/dev/nvidia0"),)
+            assert handoffs == ["gpu", "gpu"]
+            auxiliary_process = invoker._sessions["gpu"].process
+            assert cast(Process, auxiliary_process).calls[0].params["device"] == "cuda:0"
+            assert "cpu" not in invoker._sessions
+
         finally:
             release.set()
             await task

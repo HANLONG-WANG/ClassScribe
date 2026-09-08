@@ -29,6 +29,19 @@ _VAD_MODEL = "firered_vad"
 _LID_MODEL = "firered_lid"
 
 
+def _auxiliary_use_gpu(params: Mapping[str, Any]) -> bool:
+    """Honor CPU dictation routes and fail explicitly requested CUDA loads closed."""
+    device = str(params.get("device", "auto"))
+    if device == "cpu":
+        return False
+    import torch  # type: ignore[import-not-found]
+
+    available = bool(torch.cuda.is_available())
+    if device.startswith("cuda") and not available:
+        raise AdapterError(RPCErrorCode.MODEL_LOAD_FAILED, "FireRed CUDA device is unavailable")
+    return available
+
+
 class FireRedAdapter(StatefulAdapter):
     def __init__(self) -> None:
         super().__init__(
@@ -130,7 +143,7 @@ class FireRedAdapter(StatefulAdapter):
                     )
 
                     config = FireRedStreamVadConfig(
-                        use_gpu=False,
+                        use_gpu=_auxiliary_use_gpu(params),
                         smooth_window_size=5,
                         speech_threshold=0.4,
                         pad_start_frame=5,
@@ -146,7 +159,7 @@ class FireRedAdapter(StatefulAdapter):
                 )
 
                 config = FireRedVadConfig(
-                    use_gpu=False,
+                    use_gpu=_auxiliary_use_gpu(params),
                     smooth_window_size=5,
                     speech_threshold=0.4,
                     min_speech_frame=20,
@@ -203,7 +216,8 @@ class FireRedAdapter(StatefulAdapter):
                     "isolated FireRed worker lacks the LID runtime",
                 ) from exc
             return FireRedLid.from_pretrained(
-                str(model_path), FireRedLidConfig(use_gpu=False, use_half=False)
+                str(model_path),
+                FireRedLidConfig(use_gpu=_auxiliary_use_gpu(params), use_half=False),
             )
 
         try:
@@ -418,7 +432,7 @@ class FireRedAdapter(StatefulAdapter):
 
         def load_model() -> Any:
             try:
-                import torch  # type: ignore[import-not-found]
+                import torch
                 from fireredasr2s.fireredasr2 import (  # type: ignore[import-not-found]
                     FireRedAsr2,
                     FireRedAsr2Config,

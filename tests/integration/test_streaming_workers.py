@@ -472,9 +472,17 @@ def test_nemotron_worker_rejects_archive_target_outside_nemo_asr(
         )
 
 
+@pytest.mark.parametrize(
+    "device,available", [("cpu", True), ("cuda:0", True), ("auto", False), ("auto", True)]
+)
 def test_firered_worker_uses_official_batch_vad_lid_and_stream_vad_apis(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, device: str, available: bool
 ) -> None:
+    torch = _Torch("torch")
+    monkeypatch.setattr(
+        torch, "cuda", SimpleNamespace(is_available=lambda: available, empty_cache=lambda: None)
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
     vad_module = types.ModuleType("fireredasr2s.fireredvad")
     lid_module = types.ModuleType("fireredasr2s.fireredlid")
     numpy_module = types.ModuleType("numpy")
@@ -556,6 +564,7 @@ def test_firered_worker_uses_official_batch_vad_lid_and_stream_vad_apis(
             {
                 "model_id": "firered_vad",
                 "model_revision": REVISION,
+                "device": device,
                 "model_path": str(vad_root),
             },
             event,
@@ -580,6 +589,7 @@ def test_firered_worker_uses_official_batch_vad_lid_and_stream_vad_apis(
             {
                 "model_id": "firered_lid",
                 "model_revision": REVISION,
+                "device": device,
                 "model_path": str(lid_root),
             },
             event,
@@ -614,6 +624,7 @@ def test_firered_worker_uses_official_batch_vad_lid_and_stream_vad_apis(
             {
                 "model_id": "firered_vad",
                 "model_revision": REVISION,
+                "device": device,
                 "model_path": str(vad_root),
                 "streaming": True,
             },
@@ -636,6 +647,10 @@ def test_firered_worker_uses_official_batch_vad_lid_and_stream_vad_apis(
         await streaming.dispatch("stream_close", {"stream_id": "v"}, event)
 
     asyncio.run(scenario())
+    expected_gpu = device != "cpu" and available
+    for name in ("vad_config", "lid_config", "stream_config"):
+        assert captured[name]["use_gpu"] is expected_gpu
+    assert captured["lid_config"]["use_half"] is False
 
 
 @pytest.mark.parametrize("label,confidence", [("pa", 0.243), ("ko", 0.99)])
@@ -694,6 +709,41 @@ def test_lid_malformed_confidence_is_still_an_error(tmp_path: Path, confidence: 
                     "start_sample": 0,
                     "end_sample": 16000,
                     "sample_rate": 16000,
+                },
+                asyncio.Event(),
+            )
+        )
+
+
+@pytest.mark.parametrize("model_id", ["firered_vad", "firered_lid"])
+def test_firered_auxiliary_explicit_cuda_does_not_fall_back_to_cpu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, model_id: str
+) -> None:
+    from workers.firered.adapter import create_adapter
+
+    torch = _Torch("torch")
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    module = types.ModuleType(
+        "fireredasr2s.fireredvad" if model_id == "firered_vad" else "fireredasr2s.fireredlid"
+    )
+    module.__dict__.update(
+        FireRedVad=SimpleNamespace(from_pretrained=lambda *args: None),
+        FireRedVadConfig=object,
+        FireRedLid=SimpleNamespace(from_pretrained=lambda *args: None),
+        FireRedLidConfig=object,
+    )
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+    for name in ("cmvn.ark", "model.pth.tar", "dict.txt"):
+        (tmp_path / name).write_bytes(b"fixture")
+    with pytest.raises(AdapterError, match="CUDA device is unavailable"):
+        asyncio.run(
+            create_adapter().dispatch(
+                "load",
+                {
+                    "model_id": model_id,
+                    "model_revision": REVISION,
+                    "model_path": str(tmp_path),
+                    "device": "cuda:0",
                 },
                 asyncio.Event(),
             )

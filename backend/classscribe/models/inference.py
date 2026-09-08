@@ -1,4 +1,4 @@
-"""Offline model sessions, with one GPU slot and an independent CPU slot."""
+"""Offline classroom model sessions sharing one GPU slot."""
 
 from __future__ import annotations
 
@@ -29,7 +29,6 @@ from classscribe.models.worker_process import (
 from classscribe.worker_sandbox import WorkerSandbox
 
 _T = TypeVar("_T")
-_CPU_MODELS = frozenset({"firered_vad", "firered_lid"})
 
 
 @dataclass
@@ -52,7 +51,8 @@ class SandboxedModelInvoker:
 
     Unleased callers retain the one-shot load/infer/unload contract. A job lease
     must be closed in a finally block. No process, audio binding or model state is
-    reused across jobs. CPU VAD/LID never acquire the GPU slot or preempt IBus.
+    reused across jobs. All classroom models, including VAD/LID, acquire the GPU
+    slot and coordinate GPU handoff with IBus.
     """
 
     def __init__(
@@ -191,7 +191,7 @@ class SandboxedModelInvoker:
             self._finished()
 
     async def _execute(self, entry: ModelEntry, request: RPCRequest) -> RPCResponse:
-        lane = "cpu" if entry.id in _CPU_MODELS else "gpu"
+        lane = "gpu"
         report_activity(
             "waiting_resource",
             model_id=entry.id,
@@ -312,7 +312,7 @@ class SandboxedModelInvoker:
                 if lane == "cpu"
                 else (
                     "cuda:0"
-                    if entry.worker == "qwen"
+                    if (entry.worker == "qwen" or entry.id in {"firered_vad", "firered_lid"})
                     and any(item.name.removeprefix("nvidia").isdigit() for item in devices)
                     else "auto"
                 )
