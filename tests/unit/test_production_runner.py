@@ -190,3 +190,19 @@ def test_english_coarse_timing_preserves_words_in_subtitles() -> None:
         tuple(ExportToken(token.text, token.span) for token in timing.tokens),
     )
     assert build_subtitle_cues((segment,), ExportLayer.FAITHFUL)[0].lines == ("Hello NASA!",)
+
+
+def test_classroom_model_disclosure_does_not_load_or_hash_models(
+    database: tuple[Engine, sessionmaker[Session], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, sessions, _ = database
+    value = runner(tmp_path, set())
+    monkeypatch.setattr(
+        value.manager,
+        "resolve_for_runtime",
+        lambda *_: pytest.fail("preview must not read model weights"),
+    )
+    with sessions() as session:
+        assert value.classroom_model_order("ja", session) == value.registry.rankings["classroom.ja"]

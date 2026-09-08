@@ -179,6 +179,11 @@ export interface ModelComponentSource {
 }
 
 export interface ModelInfo {
+  modes?: string[];
+  capabilities?: Record<string, boolean>;
+  safe_window_seconds?: number;
+  known_defects?: string[];
+  disable_reason?: string | null;
   install_stage?: string;
   id: string;
   name: string;

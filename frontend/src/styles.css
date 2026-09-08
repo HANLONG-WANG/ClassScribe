@@ -232,8 +232,12 @@ pre {
 
 .upload-form {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1.5rem;
   padding: 1.5rem;
+}
+.upload-form .form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr));
 }
 .drop-zone {
   display: grid;
@@ -683,6 +687,44 @@ details summary {
   padding: 1.1rem;
   overflow-wrap: anywhere;
 }
+.model-guidance {
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--line);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+.model-guidance p {
+  margin-bottom: 0.5rem;
+}
+.mode-model-guide {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f1f3ef;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.mode-model-guide h2 {
+  font-size: 1rem;
+}
+.mode-model-guide h3 {
+  font-size: 0.85rem;
+}
+.mode-model-routes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+  gap: 0.8rem;
+  margin-bottom: 1rem;
+}
+.mode-model-routes article {
+  min-width: 0;
+  padding: 0.8rem;
+  border-radius: 8px;
+  background: var(--paper);
+}
 .card-top h2 {
   display: inline;
   margin-left: 0.45rem;
@@ -1001,5 +1043,149 @@ details summary {
   .segment-row:hover,
   .segment-row.selected {
     background: var(--paper);
+  }
+}
+
+.model-picker {
+  display: grid;
+  min-width: 0;
+  gap: 0.42rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.model-picker-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.68rem 0.75rem;
+  text-align: left;
+}
+.model-picker-trigger > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #17211d0a;
+}
+.model-picker-panel {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  width: min(700px, calc(100vw - 24px));
+  max-height: min(480px, calc(100dvh - 24px));
+  overflow: hidden;
+  border: 1px solid #becac2;
+  border-radius: 14px;
+  background: var(--paper);
+  box-shadow: 0 16px 50px #17211d33;
+}
+.model-picker-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+  padding: 0.9rem 1rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+}
+.model-picker-header h2 {
+  margin: 0 0 0.2rem;
+  font-size: 0.95rem;
+}
+.model-picker-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+.model-picker-header button {
+  padding: 0.2rem 0.55rem;
+  font-size: 1.2rem;
+}
+.model-picker-options {
+  min-height: 0;
+  padding: 0.8rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+.model-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+.model-picker-card {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.75rem;
+  text-align: left;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.model-picker-card[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: #fcf0e9;
+}
+.model-picker-card:focus-visible,
+.model-picker-trigger:focus-visible,
+.model-picker-header button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.model-picker-auto {
+  width: 100%;
+  margin-bottom: 0.6rem;
+}
+.model-picker-card-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.model-picker-card-title strong {
+  font-size: 0.84rem;
+}
+.model-picker-card-title > span {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+.model-picker-meta {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.67rem;
+}
+.model-picker-meta [data-ready="true"] {
+  color: var(--green);
+}
+.model-picker-meta [data-ready="false"] {
+  color: #89511b;
+}
+.model-picker-summary {
+  font-weight: 400;
+}
+.model-picker-capabilities {
+  color: #40584c;
+  font-size: 0.67rem;
+}
+.model-picker-empty {
+  padding: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+@media (max-width: 520px) {
+  .model-picker-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

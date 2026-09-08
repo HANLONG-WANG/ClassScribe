@@ -28,7 +28,7 @@ from classscribe.api.schemas import (
     SegmentPatch,
     SegmentSplit,
 )
-from classscribe.classroom import ClassroomPipeline
+from classscribe.classroom import ClassroomPipeline, ProductionStageRunner
 from classscribe.contracts import LanguageMode
 from classscribe.db.models import (
     AppSetting,
@@ -587,6 +587,11 @@ class ClassScribeService:
                         ),
                         "languages": list(entry.languages),
                         "tasks": list(entry.tasks),
+                        "modes": list(entry.modes),
+                        "capabilities": entry.responses.model_dump(),
+                        "safe_window_seconds": entry.safe_operating_window_seconds,
+                        "known_defects": list(entry.known_defects),
+                        "disable_reason": entry.disable_reason,
                         "enabled": entry.enabled,
                         "experimental": entry.experimental,
                         "install_stage": (
@@ -858,10 +863,19 @@ class ClassScribeService:
                 else:
                     continue
                 override = overrides.get((language, scenario))
+                effective_models = (
+                    list(self.pipeline.runner.classroom_model_order(language, session))
+                    if scenario == "classroom"
+                    and self.pipeline is not None
+                    and isinstance(self.pipeline.runner, ProductionStageRunner)
+                    else list(ranking)
+                )
                 result.append(
                     {
                         "language": language,
                         "scenario": scenario,
+                        "effective_models": effective_models,
+                        "bootstrap_models": list(ranking),
                         "models": (
                             override.config_json.get("models", [])
                             if override is not None

@@ -1528,6 +1528,10 @@ class ProductionStageRunner:
         profile = self._local_profile(session, language)
         return profile[0] if profile is not None else bootstrap
 
+    def classroom_model_order(self, language: str, session: Session) -> tuple[str, ...]:
+        """Expose the effective ranking for UI disclosure without loading or hashing models."""
+        return self._ordered_model_ids({"model_selection": "auto_best"}, language, session)
+
     def _local_profile(
         self, session: Session | None, language: str
     ) -> tuple[tuple[str, ...], BenchmarkRun, Mapping[str, Mapping[str, Any]]] | None:

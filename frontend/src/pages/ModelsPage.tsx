@@ -10,6 +10,12 @@ import {
   uploadRecording,
 } from "../api";
 import { inspectHealthWav } from "../healthWav";
+import {
+  capabilityLabels,
+  languageLabels,
+  modelGuidance,
+  taskLabels,
+} from "../modelGuidance";
 
 interface InstallPlan extends ApiObject {
   supported_languages?: string[];
@@ -450,11 +456,72 @@ export function ModelsPage() {
             </p>
             <div className="tag-row">
               {model.languages.map((item) => (
-                <span key={item}>{item}</span>
+                <span key={item}>{languageLabels[item] ?? item}</span>
               ))}
               {model.tasks.map((item) => (
-                <span key={item}>{item}</span>
+                <span key={item}>{taskLabels[item] ?? item}</span>
               ))}
+            </div>
+            <div className="model-guidance">
+              <p>
+                <strong>适用场景：</strong>
+                {modelGuidance[model.id]?.purpose ??
+                  "以本卡片列出的任务能力和本机基准结果为准。"}
+              </p>
+              <p>
+                <strong>使用限制：</strong>
+                {modelGuidance[model.id]?.limits ??
+                  "尚未提供此模型的专用场景说明。"}
+              </p>
+              {model.modes && (
+                <p>
+                  <strong>运行方式：</strong>
+                  {model.modes
+                    .map(
+                      (mode) =>
+                        ({
+                          batch: "离线批量",
+                          streaming: "流式",
+                          final_decode: "最终重解码",
+                        })[mode] ?? mode,
+                    )
+                    .join("、")}
+                </p>
+              )}
+              {model.capabilities && (
+                <p>
+                  <strong>注册能力：</strong>
+                  {Object.entries(model.capabilities)
+                    .filter(([, supported]) => supported)
+                    .map(([key]) => capabilityLabels[key] ?? key)
+                    .join("、") || "无附加输出能力"}
+                </p>
+              )}
+              {model.safe_window_seconds !== undefined && (
+                <p>
+                  <strong>配置安全窗口：</strong>
+                  {model.safe_window_seconds} 秒／片段；长录音由流水线切片处理。
+                </p>
+              )}
+              <small>
+                用途依据开发计划；注册能力不代表本机精度排名。
+                {!model.worker_implemented
+                  ? "当前 Worker 尚未实现。"
+                  : !model.enabled
+                    ? "当前未启用，不能作为普通自动候选。"
+                    : "实际可用性以安装和健康检查结果为准。"}
+              </small>
+              {model.known_defects?.length || model.disable_reason ? (
+                <details>
+                  <summary>查看注册表限制与禁用原因</summary>
+                  {model.disable_reason && <p>{model.disable_reason}</p>}
+                  <ul>
+                    {model.known_defects?.map((defect) => (
+                      <li key={defect}>{defect}</li>
+                    ))}
+                  </ul>
+                </details>
+              ) : null}
             </div>
             <dl>
               <div>

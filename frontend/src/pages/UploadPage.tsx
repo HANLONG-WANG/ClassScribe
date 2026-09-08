@@ -9,6 +9,9 @@ import {
   uploadRecording,
 } from "../api";
 import { useWorkbench } from "../store";
+import { bodyModel } from "../modelGuidance";
+import { ClassroomModelGuide } from "./ClassroomModelGuide";
+import { ModelPicker } from "./ModelPicker";
 
 type Language = "zh" | "ja" | "en" | "auto_mixed";
 type Accuracy = "fast" | "balanced" | "highest" | "strict_single";
@@ -122,7 +125,18 @@ export function UploadPage() {
             <select
               value={language}
               onChange={(event) => {
-                setLanguage(event.target.value as Language);
+                const next = event.target.value as Language;
+                setLanguage(next);
+                const selected = models.data?.find(
+                  (item) => item.id === primaryModel,
+                );
+                if (
+                  selected &&
+                  !(next === "auto_mixed" ? ["zh", "ja", "en"] : [next]).every(
+                    (code) => bodyModel(selected, code),
+                  )
+                )
+                  setPrimaryModel("");
               }}
             >
               <option value="auto_mixed">自动 / 混合</option>
@@ -162,24 +176,18 @@ export function UploadPage() {
               <option value="5+">5+</option>
             </select>
           </label>
-          <label>
-            <span>主模型</span>
-            <select
-              value={primaryModel}
-              onChange={(event) => {
-                setPrimaryModel(event.target.value);
-              }}
-            >
-              <option value="">自动最佳</option>
-              {(models.data ?? [])
-                .filter((item) => item.enabled)
-                .map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name} · {item.revision.slice(0, 7)}
-                  </option>
-                ))}
-            </select>
-          </label>
+          <ModelPicker
+            value={primaryModel}
+            onChange={setPrimaryModel}
+            loading={models.isPending}
+            error={models.error?.message}
+            models={(models.data ?? []).filter((item) =>
+              (language === "auto_mixed"
+                ? ["zh", "ja", "en"]
+                : [language]
+              ).every((code) => bodyModel(item, code)),
+            )}
+          />
         </div>
 
         <fieldset>
@@ -189,6 +197,14 @@ export function UploadPage() {
               (mode) => (
                 <label className="choice-card" key={mode}>
                   <input
+                    aria-label={
+                      {
+                        fast: "快速",
+                        balanced: "平衡",
+                        highest: "最高精度",
+                        strict_single: "严格单模型",
+                      }[mode]
+                    }
                     checked={accuracy === mode}
                     name="accuracy"
                     onChange={() => {
@@ -206,11 +222,23 @@ export function UploadPage() {
                       }[mode]
                     }
                   </span>
+                  <small>
+                    {mode === "strict_single"
+                      ? "指定正文模型，不调用备用 ASR；辅助模型仍使用。"
+                      : "按语言选择主模型，质量异常时调用备用模型复核。"}
+                  </small>
                 </label>
               ),
             )}
           </div>
         </fieldset>
+
+        <ClassroomModelGuide
+          models={models.data ?? []}
+          language={language}
+          primaryModel={primaryModel}
+          strict={accuracy === "strict_single"}
+        />
 
         <fieldset>
           <legend>自动输出</legend>
