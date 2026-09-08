@@ -24,6 +24,7 @@ from classscribe.api.schemas import (
     ModelInstallRequest,
     ModelRevisionRequest,
     ProfileUpdate,
+    QueueOrder,
     SegmentMerge,
     SegmentPatch,
     SegmentSplit,
@@ -75,6 +76,14 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
     async def get_recording(recording_id: str) -> dict[str, object]:
         return service.recording(recording_id)
 
+    @router.put("/recordings/{recording_id}/upload")
+    async def stream_recording(
+        recording_id: str,
+        request: Request,
+        source_name: str = Depends(uploaded_filename),
+    ) -> dict[str, object]:
+        return await service.upload_recording(recording_id, source_name, request.stream())
+
     @router.get("/recordings/{recording_id}/media")
     async def get_recording_media(recording_id: str) -> Response:
         path, source_name = service.recording_file(recording_id)
@@ -90,6 +99,22 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, object]:
         return service.list_jobs(limit=limit, offset=offset)
+
+    @router.get("/queue")
+    async def queue() -> dict[str, object]:
+        return service.queue()
+
+    @router.post("/queue/pause")
+    async def pause_queue() -> dict[str, object]:
+        return service.control_queue(True)
+
+    @router.post("/queue/resume")
+    async def resume_queue() -> dict[str, object]:
+        return service.control_queue(False)
+
+    @router.post("/queue/reorder")
+    async def reorder_queue(value: QueueOrder) -> dict[str, object]:
+        return service.reorder_queue(value.job_ids)
 
     @router.get("/jobs/{job_id}")
     async def get_job(job_id: str) -> dict[str, object]:

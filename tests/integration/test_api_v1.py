@@ -5,6 +5,7 @@ import hashlib
 import json
 import wave
 import zipfile
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -1728,3 +1729,88 @@ def test_job_history_route_validates_pagination_and_requires_auth(tmp_path: Path
         assert response.status in {401, 403}
 
     asyncio.run(check())
+
+
+def test_stream_upload_idempotence_cleanup_and_job_queue_order(tmp_path: Path) -> None:
+    from uuid import uuid4
+
+    from classscribe.api.schemas import JobCreate
+    from classscribe.db.models import Job, Recording
+    from sqlalchemy import func, select
+
+    service, sessions = service_fixture(tmp_path)
+    service.allow_pending_jobs_without_pipeline = True
+    identifier = str(uuid4())
+    stream = BytesIO()
+    with wave.open(stream, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(b"\x00\x00" * 16000)
+    data = stream.getvalue()
+
+    async def chunks() -> AsyncIterator[bytes]:
+        for offset in range(0, len(data), 1024):
+            yield data[offset : offset + 1024]
+
+    recording = asyncio.run(service.upload_recording(identifier, "lecture.wav", chunks()))
+    assert recording["duration_samples"] == 16000
+    assert (
+        asyncio.run(service.upload_recording(identifier, "lecture.wav", chunks()))["id"]
+        == identifier
+    )
+    first = JobCreate(
+        recording_id=identifier, language=LanguageMode.JAPANESE, submission_key=str(uuid4())
+    )
+    first_result = service.create_job(first)
+    assert service.create_job(first)["job_id"] == first_result["job_id"]
+    second = service.create_job(first.model_copy(update={"submission_key": str(uuid4())}))
+    with sessions() as session:
+        assert session.scalar(select(func.count()).select_from(Recording)) == 1
+        assert session.scalar(select(func.count()).select_from(Job)) == 2
+    assert [item["job_id"] for item in service.queue()["items"]] == [
+        first_result["job_id"],
+        second["job_id"],
+    ]
+    service.reorder_queue([second["job_id"], first_result["job_id"]])
+    assert service.queue()["items"][0]["job_id"] == second["job_id"]
+
+    async def broken() -> AsyncIterator[bytes]:
+        yield b"partial"
+        raise RuntimeError("disconnected")
+
+    broken_id = str(uuid4())
+    with pytest.raises(RuntimeError, match="disconnected"):
+        asyncio.run(service.upload_recording(broken_id, "lecture.wav", broken()))
+    assert not list(service.paths.data_path("recordings", broken_id, "source").iterdir())
+
+
+def test_stream_upload_route_accepts_binary_media_without_browser_metadata(tmp_path: Path) -> None:
+    from uuid import uuid4
+
+    service, _ = service_fixture(tmp_path)
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(b"\x00\x00" * 16000)
+    identifier = str(uuid4())
+    response = asyncio.run(
+        request(
+            app,
+            "PUT",
+            f"/api/v1/recordings/{identifier}/upload",
+            headers={
+                **auth(token, csrf, write=True),
+                "X-ClassScribe-Filename": "lecture.wav",
+                "Content-Type": "application/octet-stream",
+            },
+            body=buffer.getvalue(),
+        )
+    )
+    assert response.status == 200
+    assert response.json()["id"] == identifier
+    assert response.json()["duration_samples"] == 16000

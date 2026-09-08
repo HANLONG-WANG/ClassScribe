@@ -15,6 +15,7 @@ class APIModel(BaseModel):
 
 
 class JobCreate(APIModel):
+    submission_key: str | None = None
     recording_id: str
     language: LanguageMode
     glossary_id: str | None = None
@@ -153,3 +154,7 @@ class ModelInstallConfirmation(APIModel):
 
 class ModelRevisionRequest(APIModel):
     revision: str = Field(pattern=r"^[0-9a-f]{40}$")
+
+
+class QueueOrder(APIModel):
+    job_ids: list[str] = Field(max_length=10000)

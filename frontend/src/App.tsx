@@ -3,6 +3,7 @@ import { flushTranscriptSave, useTranscriptSaves } from "./transcriptSaves";
 import { ExportsPage } from "./pages/ExportsPage";
 import { GlossaryPage } from "./pages/GlossaryPage";
 import { IBusPage } from "./pages/IBusPage";
+import { QueuePage } from "./pages/QueuePage";
 import { JobPage } from "./pages/JobPage";
 import { ModelsPage } from "./pages/ModelsPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -13,7 +14,7 @@ import { type Page, useWorkbench } from "./store";
 
 const navigation: { id: Page; label: string; mark: string }[] = [
   { id: "upload", label: "导入", mark: "↑" },
-  { id: "job", label: "任务", mark: "◌" },
+  { id: "queue", label: "任务队列", mark: "◌" },
   { id: "transcripts", label: "转录稿", mark: "≡" },
   { id: "exports", label: "导出", mark: "↓" },
   { id: "glossary", label: "词典", mark: "Aa" },
@@ -51,6 +52,7 @@ export function App() {
             <button
               aria-current={
                 page === item.id ||
+                (page === "job" && item.id === "queue") ||
                 (page === "transcript" && item.id === "transcripts")
                   ? "page"
                   : undefined
@@ -108,6 +110,7 @@ export function App() {
 function PageContent({ page }: { page: Page }) {
   if (page === "upload") return <UploadPage />;
   if (page === "job") return <JobPage />;
+  if (page === "queue") return <QueuePage />;
   if (page === "transcript") return <TranscriptPage />;
   if (page === "transcripts") return <TranscriptsPage />;
   if (page === "models") return <ModelsPage />;

@@ -464,8 +464,7 @@ def test_retry_queued_during_model_cleanup_is_not_lost(
             assert pipeline.snapshot(job_id)["status"] == "pending"
             old_tasks = set(pipeline._tasks)
             pipeline.schedule(job_id)
-            duplicate = next(task for task in pipeline._tasks if task not in old_tasks)
-            await asyncio.wait_for(duplicate, timeout=2)
+            assert pipeline._tasks == old_tasks  # duplicate wakeup shares the dispatcher
             released.set()
             await asyncio.gather(*tuple(old_tasks))
             assert pipeline.snapshot(job_id)["status"] == "completed"

@@ -3,6 +3,7 @@ import { create } from "zustand";
 export type Page =
   | "upload"
   | "job"
+  | "queue"
   | "transcript"
   | "transcripts"
   | "models"

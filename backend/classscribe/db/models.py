@@ -164,6 +164,8 @@ class Job(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
     options_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    queue_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0", index=True)
+    submission_key: Mapped[str | None] = mapped_column(String(36), unique=True, index=True)
 
     recording: Mapped[Recording] = relationship(back_populates="jobs")
     checkpoints: Mapped[list[JobCheckpoint]] = relationship(

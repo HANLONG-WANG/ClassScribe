@@ -1293,3 +1293,31 @@ details summary {
   gap: 8px;
   align-items: center;
 }
+
+.batch-files {
+  padding-left: 24px;
+}
+.batch-files li,
+.batch-import-row {
+  margin-block: 12px;
+  overflow-wrap: anywhere;
+}
+.batch-files li span {
+  margin-right: 12px;
+}
+.batch-import-row {
+  border-bottom: 1px solid #e3e8e4;
+  padding-bottom: 16px;
+}
+.batch-import-row strong,
+.batch-import-row > span {
+  display: block;
+  margin-bottom: 8px;
+}
+.queue-card {
+  padding: 22px;
+  overflow-wrap: anywhere;
+}
+.queue-card .toolbar {
+  flex-wrap: wrap;
+}

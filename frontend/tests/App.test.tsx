@@ -69,6 +69,10 @@ describe("classroom workbench", () => {
             : input instanceof URL
               ? input.href
               : input.url;
+        if (url.endsWith("/queue"))
+          return Promise.resolve(
+            new Response(JSON.stringify({ paused: false, items: [] })),
+          );
         if (
           url.endsWith("/models") ||
           url.endsWith("/glossaries") ||
@@ -132,11 +136,11 @@ describe("classroom workbench", () => {
   it("starts at the complete upload workflow and states the local boundary", () => {
     renderApp();
     expect(
-      screen.getByRole("heading", { name: "导入一堂课" }),
+      screen.getByRole("heading", { name: "批量导入课堂" }),
     ).toBeInTheDocument();
     expect(screen.getByText("离线推理")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "语言" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "开始自动转录" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "加入转录队列" })).toBeDisabled();
   });
 
   it("navigates to both classroom and live IBus product surfaces", async () => {
@@ -150,9 +154,9 @@ describe("classroom workbench", () => {
     expect(screen.getByText("日本語")).toBeInTheDocument();
     expect(screen.getByText("最高精度")).toBeInTheDocument();
     expect(screen.getByText("GlobalShortcuts registered")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /任务$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /任务队列$/ }));
     expect(
-      screen.getByRole("heading", { name: "还没有课堂任务" }),
+      screen.getByRole("heading", { name: "转录队列" }),
     ).toBeInTheDocument();
   });
 

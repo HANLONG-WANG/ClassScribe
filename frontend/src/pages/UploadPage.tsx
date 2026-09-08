@@ -1,13 +1,13 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { type ChangeEvent, type SyntheticEvent, useState } from "react";
 
+import { api, type Glossary, type ModelInfo } from "../api";
 import {
-  api,
-  type Glossary,
-  type Job,
-  type ModelInfo,
-  uploadRecording,
-} from "../api";
+  addImports,
+  useBatchImports,
+  retryImport,
+  stopImports,
+} from "../batchImports";
 import { useWorkbench } from "../store";
 import { bodyModel } from "../modelGuidance";
 import { ClassroomModelGuide } from "./ClassroomModelGuide";
@@ -16,23 +16,10 @@ import { ModelPicker } from "./ModelPicker";
 type Language = "zh" | "ja" | "en" | "auto_mixed";
 type Accuracy = "fast" | "balanced" | "highest" | "strict_single";
 
-async function inspectMedia(file: File) {
-  const context = new AudioContext();
-  try {
-    const buffer = await context.decodeAudioData(await file.arrayBuffer());
-    return {
-      durationSamples: Math.round(buffer.duration * 16000),
-      channels: buffer.numberOfChannels,
-      sampleRate: buffer.sampleRate,
-    };
-  } finally {
-    void context.close();
-  }
-}
-
 export function UploadPage() {
-  const setCurrentJob = useWorkbench((state) => state.setCurrentJob);
-  const [file, setFile] = useState<File | null>(null);
+  const setPage = useWorkbench((state) => state.setPage);
+  const [files, setFiles] = useState<File[]>([]);
+  const imports = useBatchImports((state) => state.items);
   const [language, setLanguage] = useState<Language>("auto_mixed");
   const [accuracy, setAccuracy] = useState<Accuracy>("balanced");
   const [speakerCount, setSpeakerCount] = useState("auto");
@@ -51,36 +38,12 @@ export function UploadPage() {
     queryKey: ["models"],
     queryFn: () => api<ModelInfo[]>("/models"),
   });
-  const create = useMutation({
-    mutationFn: async () => {
-      if (file === null) throw new Error("请选择音频或视频文件");
-      const metadata = await inspectMedia(file);
-      const recording = await uploadRecording(file, metadata);
-      return api<Job>("/jobs", {
-        method: "POST",
-        body: JSON.stringify({
-          recording_id: recording.id,
-          language,
-          glossary_id: glossaryId || null,
-          speaker_count: speakerCount,
-          model_selection: primaryModel ? "manual_primary" : "auto_best",
-          primary_model_id: primaryModel || null,
-          accuracy_mode: accuracy,
-          outputs,
-          include_faithful: includeFaithful,
-          include_smart: includeSmart,
-          include_speakers: includeSpeakers,
-          include_subtitles: outputs.includes("srt") || outputs.includes("vtt"),
-        }),
-      });
-    },
-    onSuccess: (job) => {
-      setCurrentJob(job.job_id);
-    },
-  });
-
   function chooseFile(event: ChangeEvent<HTMLInputElement>) {
-    setFile(event.target.files?.item(0) ?? null);
+    setFiles((current) => [
+      ...current,
+      ...Array.from(event.target.files ?? []),
+    ]);
+    event.target.value = "";
   }
 
   function toggleOutput(format: string) {
@@ -93,7 +56,21 @@ export function UploadPage() {
 
   function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!create.isPending) create.mutate();
+    if (!files.length) return;
+    addImports(files, {
+      language,
+      glossary_id: glossaryId || null,
+      speaker_count: speakerCount,
+      model_selection: primaryModel ? "manual_primary" : "auto_best",
+      primary_model_id: primaryModel || null,
+      accuracy_mode: accuracy,
+      outputs,
+      include_faithful: includeFaithful,
+      include_smart: includeSmart,
+      include_speakers: includeSpeakers,
+      include_subtitles: outputs.includes("srt") || outputs.includes("vtt"),
+    });
+    setFiles([]);
   }
 
   return (
@@ -101,23 +78,86 @@ export function UploadPage() {
       <header className="page-header">
         <div>
           <p className="eyebrow">Classroom workspace</p>
-          <h1 id="upload-title">导入一堂课</h1>
+          <h1 id="upload-title">批量导入课堂</h1>
           <p>文件留在本机。任务会自动完成到导出，不要求先进入校对页。</p>
         </div>
         <span className="privacy-badge">离线推理</span>
       </header>
 
+      <p>
+        已入队的课堂在关闭浏览器后继续处理；尚未上传完成的文件需要保持此浏览器开启。
+      </p>
+      <button
+        type="button"
+        onClick={() => {
+          setPage("queue");
+        }}
+      >
+        查看转录队列
+      </button>
       <form className="panel upload-form" onSubmit={submit}>
-        <label className={`drop-zone ${file ? "has-file" : ""}`}>
-          <input accept="audio/*,video/*" onChange={chooseFile} type="file" />
+        <label
+          className={`drop-zone ${files.length ? "has-file" : ""}`}
+          onDragOver={(event) => {
+            event.preventDefault();
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            setFiles((current) => [
+              ...current,
+              ...Array.from(event.dataTransfer.files),
+            ]);
+          }}
+        >
+          <input
+            accept="audio/*,video/*"
+            onChange={chooseFile}
+            type="file"
+            multiple
+          />
           <span className="drop-icon">＋</span>
-          <strong>{file?.name ?? "拖放音频或视频，或点此选择"}</strong>
-          <small>
-            {file
-              ? `${(file.size / 1_048_576).toFixed(1)} MB`
-              : "最长约 90 分钟"}
-          </small>
+          <strong>
+            {files.length
+              ? `已选择 ${String(files.length)} 个文件`
+              : "拖放音频或视频，或点此多选"}
+          </strong>
+          <small>按列表顺序逐个上传；本批次共用下方设置。</small>
         </label>
+        <ol className="batch-files">
+          {files.map((file, index) => (
+            <li key={`${String(index)}-${file.name}`}>
+              <span>
+                {file.name} · {(file.size / 1048576).toFixed(1)} MB
+              </span>
+              <button
+                type="button"
+                disabled={index === 0}
+                onClick={() => {
+                  setFiles((current) => {
+                    const next = [...current];
+                    const item = next[index];
+                    const previous = next[index - 1];
+                    if (item && previous) {
+                      next[index - 1] = item;
+                      next[index] = previous;
+                    }
+                    return next;
+                  });
+                }}
+              >
+                上移
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFiles((current) => current.filter((_, i) => i !== index));
+                }}
+              >
+                移除
+              </button>
+            </li>
+          ))}
+        </ol>
 
         <div className="form-grid">
           <label>
@@ -293,22 +333,67 @@ export function UploadPage() {
         {accuracy === "strict_single" && !primaryModel && (
           <p className="error-callout">严格单模型测试需要指定主模型。</p>
         )}
-        {create.error && (
-          <p className="error-callout">{create.error.message}</p>
-        )}
         <button
           className="primary-button"
           disabled={
-            !file ||
+            !files.length ||
             outputs.length === 0 ||
-            create.isPending ||
             (accuracy === "strict_single" && !primaryModel)
           }
           type="submit"
         >
-          {create.isPending ? "正在安全导入…" : "开始自动转录"}
+          加入转录队列
         </button>
       </form>
+      {imports.length > 0 && (
+        <div className="panel page-stack">
+          <h2>导入进度</h2>
+          <button type="button" onClick={stopImports}>
+            停止未完成的导入
+          </button>
+          {imports.map((item) => (
+            <div key={item.id} className="batch-import-row">
+              <strong>{item.name}</strong>
+              <span>
+                {
+                  {
+                    waiting: "待上传",
+                    uploading: "上传 / 校验中",
+                    submitting: "正在入队",
+                    done: "已入队",
+                    error: "导入失败",
+                  }[item.status]
+                }{" "}
+                · {item.progress}%
+              </span>
+              {item.error && <p role="alert">{item.error}</p>}
+              {item.status === "error" && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      retryImport(item.id);
+                    }}
+                  >
+                    重试此文件
+                  </button>
+                  <label>
+                    重新选择原文件
+                    <input
+                      type="file"
+                      accept="audio/*,video/*"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) retryImport(item.id, file);
+                      }}
+                    />
+                  </label>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

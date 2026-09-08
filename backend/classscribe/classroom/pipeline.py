@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from pathlib import Path
+from typing import IO, Any, Protocol
 from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from classscribe.activity import ActivityReporter, activity_scope
+from classscribe.classroom import queue as queue_state
 from classscribe.db.models import (
     CheckpointStatus,
     Job,
@@ -225,6 +228,8 @@ class ClassroomPipeline:
         self.broker = broker or PipelineEventBroker()
         self.preemption = preemption or SafeBoundaryPause()
         self._tasks: set[asyncio.Task[None]] = set()
+        self._dispatcher: asyncio.Task[None] | None = None
+        self._queue_file: IO[bytes] | None = None
         self._active_jobs: set[str] = set()
         self._rerun_jobs: set[str] = set()
         self._active_lock = threading.Lock()
@@ -268,12 +273,22 @@ class ClassroomPipeline:
         """Run once before serving requests; never scan beneath an active executor."""
         if self._startup_recovered or self._tasks:
             return
+        self._ensure_queue_owner()
         job_ids = self.recover()
         self._startup_recovered = True
         for job_id in job_ids:
             self.schedule(job_id)
 
     def recover(self) -> tuple[str, ...]:
+        with self.sessions() as session:
+            uninitialized = [
+                (job.id, dict(job.options_json))
+                for job in session.scalars(
+                    select(Job).where(Job.status == JobStatus.PENDING, ~Job.checkpoints.any())
+                )
+            ]
+        for identifier, options in uninitialized:
+            self.initialize(identifier, options)
         with self.sessions.begin() as session:
             plans = self.state.recovery_scan(session)
         for plan in plans:
@@ -338,7 +353,9 @@ class ClassroomPipeline:
                 return
 
     def check_boundary(self, job_id: str) -> None:
-        if self._shutting_down or self.preemption.requested(job_id):
+        with self.sessions() as session:
+            queue_paused = queue_state.paused(session)
+        if self._shutting_down or queue_paused or self.preemption.requested(job_id):
             raise CheckpointInterrupted()
         with self.sessions() as session:
             status = session.get_one(Job, job_id).status
@@ -352,6 +369,9 @@ class ClassroomPipeline:
         hook = getattr(self.runner, "close", None)
         if hook is not None:
             await asyncio.to_thread(hook)
+        if self._queue_file is not None:
+            self._queue_file.close()
+            self._queue_file = None
 
     def run_next(self, job_id: str) -> bool:
         with self.sessions.begin() as session:
@@ -364,7 +384,7 @@ class ClassroomPipeline:
                 self.state.acknowledge_cancel(job)
                 self.broker.publish(job_id, "job_cancelled", stage=job.stage.value)
                 return False
-            if self._shutting_down:
+            if self._shutting_down or queue_state.paused(session):
                 if job.status is JobStatus.RUNNING:
                     job.status = JobStatus.PENDING
                 self.broker.publish(job_id, "job_shutdown_yield", stage=job.stage.value)
@@ -497,13 +517,63 @@ class ClassroomPipeline:
             return False
         return True
 
+    def _ensure_queue_owner(self) -> None:
+        if self._queue_file is not None:
+            return
+        with self.sessions() as session:
+            database = str(session.get_bind().engine.url.database)
+        handle = Path(database + ".queue.lock").open("ab")  # noqa: SIM115 - held until close
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.close()
+            raise ClassScribeError(
+                ErrorCode.JOB_STATE_CONFLICT, "another classroom executor is running"
+            ) from None
+        self._queue_file = handle
+
     def schedule(self, job_id: str) -> None:
+        """Wake one FIFO dispatcher; database state is the source of truth."""
+        if self._shutting_down:
+            return
+        self._ensure_queue_owner()
+        if self._dispatcher is not None and not self._dispatcher.done():
+            return
         loop = asyncio.get_running_loop()
 
         async def execute() -> None:
-            await asyncio.to_thread(self.run_until_blocked, job_id)
+            while not self._shutting_down:
+                with self.sessions() as session:
+                    if queue_state.paused(session) or self.preemption.blocks_new_dispatch:
+                        return
+                    next_job = session.scalar(
+                        select(Job)
+                        .where(
+                            Job.status.in_((JobStatus.PENDING, JobStatus.CANCELLING)),
+                        )
+                        .order_by(Job.queue_order, Job.created_at, Job.id)
+                    )
+                    if next_job is None:
+                        return
+                    identifier, options = next_job.id, dict(next_job.options_json)
+                try:
+                    self.initialize(identifier, options)
+                    with self.sessions.begin() as session:
+                        claimed = session.get_one(Job, identifier)
+                        if claimed.status is JobStatus.PENDING:
+                            self.state.start(claimed)
+                    await asyncio.to_thread(self.run_until_blocked, identifier)
+                except Exception as exc:
+                    with self.sessions.begin() as session:
+                        failed = session.get_one(Job, identifier)
+                        failed.status = JobStatus.FAILED
+                        failed.error_code = "QUEUE_EXECUTION_FAILED"
+                        failed.error_detail = str(exc)
+                        queue_state.set_paused(session, True)
+                    self.broker.publish(identifier, "job_failed", reason=str(exc))
 
-        task = loop.create_task(execute(), name=f"classscribe-job-{job_id}")
+        task = loop.create_task(execute(), name="classscribe-classroom-queue")
+        self._dispatcher = task
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
@@ -528,13 +598,19 @@ class ClassroomPipeline:
     def pause(self, job_id: str) -> None:
         with self.sessions.begin() as session:
             job = session.get_one(Job, job_id)
-            self.state.pause(job)
+            if job.status is JobStatus.PENDING:
+                job.status = JobStatus.PAUSED
+            else:
+                self.state.pause(job)
         self.broker.publish(job_id, "job_paused", reason="user_requested")
 
     def resume(self, job_id: str) -> None:
         with self.sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             job = session.get_one(Job, job_id)
             self.state.resume(job)
+            job.status = JobStatus.PENDING
+            queue_state.append(session, job)
         self.broker.publish(job_id, "job_resumed")
 
     def cancel(self, job_id: str) -> None:
@@ -545,6 +621,7 @@ class ClassroomPipeline:
 
     def retry_segment(self, job_id: str, segment_id: str) -> int:
         with self.sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             job = session.get_one(Job, job_id)
             segment = session.get(TranscriptSegment, segment_id)
             if segment is None or segment.job_id != job_id or not segment.is_active:
@@ -565,6 +642,7 @@ class ClassroomPipeline:
             job.status = JobStatus.PENDING
             job.error_code = None
             job.error_detail = None
+            queue_state.append(session, job)
         self.broker.publish(job_id, "segment_retry_queued", segment_id=segment_id)
         return len(checkpoints)
 
@@ -625,10 +703,12 @@ class ClassroomPipeline:
                 event_kind = "job_dispatch_resumed"
                 if job.status is JobStatus.PAUSED:
                     self.state.resume(job)
+                    job.status = JobStatus.PENDING
                     event_kind = "job_resumed"
             self.broker.publish(job_id, event_kind, reason="ibus_dictation_finished")
             self.schedule(job_id)
             resumed.append(job_id)
+        self.schedule("")
         return tuple(resumed)
 
     def snapshot(self, job_id: str) -> dict[str, Any]:

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import tempfile
 import wave
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterable, Callable, Mapping
 from datetime import UTC, datetime
 from io import BytesIO
 from itertools import pairwise
@@ -28,7 +30,9 @@ from classscribe.api.schemas import (
     SegmentPatch,
     SegmentSplit,
 )
+from classscribe.audio.media import FFmpegMediaPipeline
 from classscribe.classroom import ClassroomPipeline, ProductionStageRunner
+from classscribe.classroom import queue as queue_state
 from classscribe.contracts import LanguageMode
 from classscribe.db.models import (
     AppSetting,
@@ -139,6 +143,75 @@ class ClassScribeService:
         self.upload_limits = upload_limits or UploadLimits()
         self.audit = AuditService()
 
+    async def upload_recording(
+        self,
+        identifier: str,
+        source_name: str,
+        chunks: AsyncIterable[bytes],
+    ) -> dict[str, Any]:
+        identifier = _id(identifier, "recording_id")
+        if Path(source_name).name != source_name or not source_name:
+            raise ClassScribeError(ErrorCode.INVALID_FILE_ID, "invalid filename")
+        self.upload_limits.validate(
+            source_name=source_name, size_bytes=0, duration_samples=0, channels=1, sample_rate=16000
+        )
+        with self.sessions() as session:
+            existing = session.get(Recording, identifier)
+            if existing is not None:
+                return _recording_payload(existing)
+        directory = self.paths.data_path("recordings", identifier, "source")
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        digest, size = hashlib.sha256(), 0
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                dir=directory, suffix=Path(source_name).suffix, delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                async for chunk in chunks:
+                    size += len(chunk)
+                    if size > self.upload_limits.max_bytes:
+                        raise ClassScribeError(
+                            ErrorCode.UPLOAD_TOO_LARGE, "upload exceeds byte limit"
+                        )
+                    handle.write(chunk)
+                    digest.update(chunk)
+                handle.flush()
+                os.fsync(handle.fileno())
+            metadata = FFmpegMediaPipeline().probe(temporary)
+            duration = int(metadata.duration_seconds * 16000)
+            self.upload_limits.validate(
+                source_name=source_name,
+                size_bytes=size,
+                duration_samples=duration,
+                channels=metadata.channels,
+                sample_rate=metadata.sample_rate,
+            )
+            with self.sessions.begin() as session:
+                session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+                existing = session.get(Recording, identifier)
+                if existing is not None:
+                    return _recording_payload(existing)
+                target = directory / ("source" + Path(source_name).suffix.lower())
+                os.replace(temporary, target)
+                target.chmod(0o400)
+                recording = Recording(
+                    id=identifier,
+                    source_name=source_name,
+                    source_sha256=digest.hexdigest(),
+                    source_path=str(target),
+                    duration_samples=duration,
+                    sample_rate=metadata.sample_rate,
+                    channels=metadata.channels,
+                    audio_qc_json={"upload_validated": True, "source_bytes": size},
+                )
+                session.add(recording)
+                session.flush()
+                return _recording_payload(recording)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+
     def create_recording(
         self,
         *,
@@ -224,6 +297,19 @@ class ClassScribeService:
         glossary_id = _optional_id(value.glossary_id, "glossary_id")
         options = value.model_dump(mode="json")
         with self.sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            submission_key = _optional_id(value.submission_key, "submission_key")
+            if submission_key:
+                existing = session.scalar(select(Job).where(Job.submission_key == submission_key))
+                if existing is not None:
+                    if existing.options_json != options:
+                        raise ClassScribeError(
+                            ErrorCode.JOB_STATE_CONFLICT,
+                            "submission key already used with different options",
+                        )
+                    if self.pipeline is not None:
+                        self.pipeline.schedule(existing.id)
+                    return _job_payload(existing)
             if session.get(Recording, recording_id) is None:
                 raise _not_found("recording")
             if glossary_id is not None and session.get(Glossary, glossary_id) is None:
@@ -235,7 +321,9 @@ class ClassScribeService:
                 language_mode=value.language,
                 profile_id=value.accuracy_mode,
                 options_json=options,
+                submission_key=submission_key,
             )
+            queue_state.append(session, job)
             session.add(job)
             session.flush()
             job_id = job.id
@@ -243,6 +331,57 @@ class ClassScribeService:
             self.pipeline.initialize(job_id, options)
             self.pipeline.schedule(job_id)
         return self.job(job_id)
+
+    def queue(self) -> dict[str, Any]:
+        with self.sessions() as session:
+            rows = session.execute(
+                select(Job, Recording)
+                .join(Recording)
+                .where(
+                    Job.status.notin_((JobStatus.COMPLETED, JobStatus.CANCELLED)),
+                )
+                .order_by(Job.queue_order, Job.created_at, Job.id)
+            ).all()
+            return {
+                "paused": queue_state.paused(session),
+                "items": [
+                    {
+                        "job_id": job.id,
+                        "source_name": recording.source_name,
+                        "status": job.status.value,
+                        "progress": job.progress,
+                        "stage": job.stage.value,
+                        "queue_order": job.queue_order,
+                        "error_detail": job.error_detail,
+                    }
+                    for job, recording in rows
+                ],
+            }
+
+    def control_queue(self, paused: bool) -> dict[str, Any]:
+        with self.sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            queue_state.set_paused(session, paused)
+        if not paused:
+            self._pipeline().schedule("")
+        return self.queue()
+
+    def reorder_queue(self, identifiers: list[str]) -> dict[str, Any]:
+        identifiers = [_id(value, "job_id") for value in identifiers]
+        with self.sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            pending = list(session.scalars(select(Job).where(Job.status == JobStatus.PENDING)))
+            if len(set(identifiers)) != len(identifiers) or set(identifiers) != {
+                job.id for job in pending
+            }:
+                raise ClassScribeError(
+                    ErrorCode.JOB_STATE_CONFLICT, "queue changed; refresh before reordering"
+                )
+            by_id = {job.id: job for job in pending}
+            positions = sorted(job.queue_order for job in pending)
+            for identifier, position in zip(identifiers, positions, strict=True):
+                by_id[identifier].queue_order = position
+        return self.queue()
 
     def list_jobs(self, *, limit: int = 30, offset: int = 0) -> dict[str, Any]:
         with self.sessions() as session:
@@ -309,11 +448,13 @@ class ClassScribeService:
         identifier = _id(job_id, "job_id")
         pipeline = self._pipeline()
         with self.sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             job = session.get(Job, identifier)
             if job is None:
                 raise _not_found("job")
             if job.status is JobStatus.FAILED:
                 pipeline.state.retry(job)
+                queue_state.append(session, job)
             elif job.status is not JobStatus.PENDING:
                 raise ClassScribeError(
                     ErrorCode.JOB_STATE_CONFLICT, "only failed/pending jobs can be retried"
