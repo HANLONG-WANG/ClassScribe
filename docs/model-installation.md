@@ -95,6 +95,9 @@ changed 文件，UI 必须在升级确认前展示。旧 revision 保留用于�
 
 ## 运行期离线失败
 
+创建课堂任务前只检查安装元数据、选模兼容性和运行工具，不读取模型权重或计算模型 SHA-256。
+后台任务真正加载模型前仍执行完整校验；文件损坏等问题在任务执行阶段明确报错。
+
 `resolve_for_runtime()` 只有本地读取与哈希验证路径，没有 downloader 参数或网络客户端。
 每次使用都会验证 active 指针、审计记录、manifest、全部文件与 aggregate hash。缺少 active、
 文件不全、内容被改、control path 是 symlink 或审计损坏时返回

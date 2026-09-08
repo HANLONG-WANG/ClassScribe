@@ -179,10 +179,16 @@ class ProductionStageRunner:
         if language == LanguageMode.AUTO_MIXED.value:
             required.add("firered_lid")
             for code in ("zh", "ja", "en"):
-                required.add(self._primary_entry(parameters, code, session).id)
+                required.add(self._primary_entry(parameters, code, session, verify_files=False).id)
         else:
-            required.add(self._primary_entry(parameters, language, session).id)
-        unavailable = [model_id for model_id in sorted(required) if not self._installed(model_id)]
+            required.add(self._primary_entry(parameters, language, session, verify_files=False).id)
+        # Request-time planning reads installation records only. The invoker verifies
+        # model files immediately before loading them in the background pipeline.
+        unavailable = [
+            model_id
+            for model_id in sorted(required)
+            if not self._installed(model_id, verify_files=False)
+        ]
         if unavailable:
             raise ClassScribeError(
                 ErrorCode.MODEL_NOT_FULLY_INSTALLED,
@@ -1466,6 +1472,8 @@ class ProductionStageRunner:
         parameters: Mapping[str, Any],
         language: str,
         session: Session | None = None,
+        *,
+        verify_files: bool = True,
     ) -> ModelEntry:
         if language not in {"zh", "ja", "en"}:
             raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "body ASR language is unresolved")
@@ -1492,7 +1500,10 @@ class ProductionStageRunner:
             raise ClassScribeError(
                 ErrorCode.JOB_STATE_CONFLICT, f"no compatible {language} body ASR is configured"
             )
-        return next((item for item in compatible if self._installed(item.id)), compatible[0])
+        return next(
+            (item for item in compatible if self._installed(item.id, verify_files=verify_files)),
+            compatible[0],
+        )
 
     def _fallback_entries(
         self,
@@ -1664,9 +1675,12 @@ class ProductionStageRunner:
             calibrated_tokens,
         )
 
-    def _installed(self, model_id: str) -> bool:
+    def _installed(self, model_id: str, *, verify_files: bool = True) -> bool:
         try:
-            self.manager.resolve_for_runtime(model_id)
+            if verify_files:
+                self.manager.resolve_for_runtime(model_id)
+            else:
+                self.manager.installed_revision_metadata(model_id)
         except (ClassScribeError, OSError, ValueError):
             return False
         return True

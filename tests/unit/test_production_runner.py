@@ -20,6 +20,9 @@ class InstalledModels:
         self.identifiers = identifiers
 
     def resolve_for_runtime(self, model_id: str) -> Path:
+        return self.installed_revision_metadata(model_id)
+
+    def installed_revision_metadata(self, model_id: str) -> Path:
         if model_id not in self.identifiers:
             raise FileNotFoundError(model_id)
         return self.root / model_id
@@ -206,3 +209,29 @@ def test_classroom_model_disclosure_does_not_load_or_hash_models(
     )
     with sessions() as session:
         assert value.classroom_model_order("ja", session) == value.registry.rankings["classroom.ja"]
+
+
+@pytest.mark.parametrize("language", ["zh", "ja", "en", "auto_mixed"])
+@pytest.mark.parametrize("manual", [False, True])
+def test_job_creation_preflight_never_scans_model_weights(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    language: str,
+    manual: bool,
+) -> None:
+    monkeypatch.setattr(
+        "classscribe.classroom.production.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
+    value = runner(tmp_path, {"firered_vad", "firered_lid", "moss_td_0_9b", "qwen3_asr_1_7b"})
+    monkeypatch.setattr(
+        value.manager,
+        "resolve_for_runtime",
+        lambda *_: pytest.fail("task creation must not hash model files"),
+    )
+    parameters = {
+        "language": language,
+        "model_selection": "manual_primary" if manual else "auto_best",
+    }
+    if manual:
+        parameters["primary_model_id"] = "qwen3_asr_1_7b"
+    value.preflight(parameters)
