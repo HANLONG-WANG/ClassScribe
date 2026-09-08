@@ -158,6 +158,7 @@ class ClassroomPipeline:
         self.broker = broker or PipelineEventBroker()
         self.preemption = preemption or SafeBoundaryPause()
         self._tasks: set[asyncio.Task[None]] = set()
+        self._startup_recovered = False
         self._preempted_jobs: set[str] = set()
         self._deferred_jobs: set[str] = set()
         self._preempted_lock = threading.Lock()
@@ -185,6 +186,15 @@ class ClassroomPipeline:
                 ),
             )
         self.broker.publish(job_id, "pipeline_initialized", stage=JobStage.CREATED.value)
+
+    def start_recovered_jobs(self) -> None:
+        """Run once before serving requests; never scan beneath an active executor."""
+        if self._startup_recovered or self._tasks:
+            return
+        job_ids = self.recover()
+        self._startup_recovered = True
+        for job_id in job_ids:
+            self.schedule(job_id)
 
     def recover(self) -> tuple[str, ...]:
         with self.sessions.begin() as session:

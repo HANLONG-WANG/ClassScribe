@@ -68,7 +68,10 @@ class RPCFrameVAD:
         response = await self._call(
             "stream_push", {"stream_id": self.stream_id, "pcm_s16le": pcm_s16le}
         )
-        return response.result.get("voiced") is True
+        voiced = response.result.get("voiced")
+        if not isinstance(voiced, bool):
+            raise RuntimeError("streaming VAD response lacks boolean voiced")
+        return voiced
 
     async def close(self) -> None:
         if self.stream_id:

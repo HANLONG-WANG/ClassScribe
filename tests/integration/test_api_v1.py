@@ -232,9 +232,7 @@ def registry_fixture_manifest(
 
 
 def test_model_install_preflight_uses_only_injected_bundle_manifest(tmp_path: Path) -> None:
-    manifest_bytes = (
-        Path("config/model-manifests/v1/whisper_tiny_reference.json").read_bytes()
-    )
+    manifest_bytes = Path("config/model-manifests/v1/whisper_tiny_reference.json").read_bytes()
     manifest = ModelManifest.from_dict(json.loads(manifest_bytes))
     index = ManifestBundleIndex.model_validate(
         {
@@ -275,9 +273,7 @@ def test_model_install_preflight_uses_only_injected_bundle_manifest(tmp_path: Pa
     replacement = manifest.as_dict()
     replacement["repository"] = "attacker/replacement"
     replacement["revision"] = "0" * 40
-    rejected = asyncio.run(
-        request_preflight(json.dumps({"manifest": replacement}).encode())
-    )
+    rejected = asyncio.run(request_preflight(json.dumps({"manifest": replacement}).encode()))
     assert rejected.status == 422
     assert "extra_forbidden" in rejected.content.decode()
     manifest_response = asyncio.run(
@@ -297,14 +293,13 @@ def test_model_install_preflight_uses_only_injected_bundle_manifest(tmp_path: Pa
     assert "confirmation_token" not in manifest_response.content.decode()
     assert "HF_TOKEN" not in manifest_response.content.decode()
     assert str(tmp_path).encode() not in manifest_response.content
-    models_response = asyncio.run(
-        request(app, "GET", "/api/v1/models", headers=auth(token, csrf))
-    )
+    models_response = asyncio.run(request(app, "GET", "/api/v1/models", headers=auth(token, csrf)))
     models_by_id = {item["id"]: item for item in models_response.json()}
     assert models_by_id["whisper_tiny_reference"]["manifest_available"] is True
-    assert models_by_id["whisper_tiny_reference"]["manifest_sha256"] == hashlib.sha256(
-        manifest_bytes
-    ).hexdigest()
+    assert (
+        models_by_id["whisper_tiny_reference"]["manifest_sha256"]
+        == hashlib.sha256(manifest_bytes).hexdigest()
+    )
     assert (
         models_by_id["whisper_tiny_reference"]["estimated_download_bytes"]
         == manifest.estimated_download_bytes
@@ -324,8 +319,7 @@ def test_model_install_preflight_uses_only_injected_bundle_manifest(tmp_path: Pa
     assert models_by_id["whisper_tiny_reference"]["worker_implemented"] is True
     assert models_by_id["whisper_tiny_reference"]["installable"] is False
     assert (
-        models_by_id["whisper_tiny_reference"]["install_block_reason"]
-        == "registry_policy_disabled"
+        models_by_id["whisper_tiny_reference"]["install_block_reason"] == "registry_policy_disabled"
     )
     assert models_by_id["moss_td_0_9b"]["installable"] is False
     assert models_by_id["moss_td_0_9b"]["install_block_reason"] == "manifest_unavailable"
@@ -666,9 +660,7 @@ def test_recordings_collection_supports_health_audio_selection_without_paths(
     token, csrf = "t" * 43, "c" * 43
     app = create_app(api_token=token, csrf_token=csrf, service=service)
 
-    response = asyncio.run(
-        request(app, "GET", "/api/v1/recordings", headers=auth(token, csrf))
-    )
+    response = asyncio.run(request(app, "GET", "/api/v1/recordings", headers=auth(token, csrf)))
 
     assert response.status == 200
     rows = {item["id"]: item for item in response.json()}
@@ -1331,6 +1323,7 @@ def test_recording_transcript_glossary_export_and_security_flow(tmp_path: Path) 
         downloaded = await request(app, "GET", export["download_url"], headers=auth(token, csrf))
         assert downloaded.status == 200
         assert "人工知能について説明します" in downloaded.content.decode()
+        assert "先生" in downloaded.content.decode()
 
         benchmark = await request(
             app,
@@ -1342,3 +1335,41 @@ def test_recording_transcript_glossary_export_and_security_flow(tmp_path: Path) 
         assert benchmark.status == 202 and benchmark.json()["status"] == "running"
 
     asyncio.run(scenario())
+
+
+def test_edit_history_repeated_undo_redo_and_new_branch(tmp_path: Path) -> None:
+    from classscribe.api.schemas import SegmentPatch
+    from classscribe.db.models import Job, Recording
+
+    service, sessions = service_fixture(tmp_path)
+    with sessions.begin() as session:
+        job = Job(
+            recording=Recording(
+                source_name="a",
+                source_sha256="a" * 64,
+                source_path="a",
+                duration_samples=16000,
+                sample_rate=16000,
+                channels=1,
+            ),
+            language_mode=LanguageMode.ENGLISH,
+            profile_id="en",
+        )
+        segment = TranscriptSegment(
+            job=job, start_sample=0, end_sample=16000, language=LanguageMode.ENGLISH, user_text="A"
+        )
+        session.add(segment)
+        session.flush()
+        identifier = segment.id
+    value = service.patch_segment(identifier, SegmentPatch(version=1, text="B"))
+    value = service.undo_segment(identifier, value["version"])
+    assert value["user_text"] == "A"
+    value = service.redo_segment(identifier, value["version"])
+    assert value["user_text"] == "B"
+    value = service.undo_segment(identifier, value["version"])
+    assert value["user_text"] == "A"
+    value = service.patch_segment(identifier, SegmentPatch(version=value["version"], text="C"))
+    with pytest.raises(ClassScribeError, match="nothing to redo"):
+        service.redo_segment(identifier, value["version"])
+    value = service.undo_segment(identifier, value["version"])
+    assert value["user_text"] == "A"

@@ -50,7 +50,9 @@ class TerminologyRepository:
             glossary = session.get(Glossary, glossary_id)
             if glossary is None:
                 raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "glossary does not exist")
-            return self._upsert_terms(session, glossary, terms, default_language)
+            return self._upsert_terms(
+                session, glossary, terms, default_language, preserve_confirmed=True
+            )
 
     def apply_correction(self, segment_id: str, result: CorrectionResult) -> None:
         with self._sessions.begin() as session:
@@ -96,6 +98,8 @@ class TerminologyRepository:
         glossary: Glossary,
         terms: tuple[CourseTerm, ...],
         default_language: str,
+        *,
+        preserve_confirmed: bool = False,
     ) -> int:
         count = 0
         for term in terms:
@@ -107,6 +111,8 @@ class TerminologyRepository:
                     GlossaryTerm.canonical == term.canonical,
                 )
             )
+            if preserve_confirmed and record is not None and record.user_confirmed:
+                continue
             if record is None:
                 record = GlossaryTerm(
                     glossary_id=glossary.id,

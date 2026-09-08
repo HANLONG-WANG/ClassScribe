@@ -65,12 +65,39 @@ class SchedulerLeaseClient:
 
     def __init__(self, socket_path: Path) -> None:
         self.socket_path = socket_path
+        self._renewals: dict[str, asyncio.Task[None]] = {}
+        self._lost: dict[str, asyncio.Event] = {}
 
     async def begin(self, session_id: str) -> None:
-        await self._request("begin_dictation", session_id)
+        self._lost[session_id] = asyncio.Event()
+        self._renewals[session_id] = asyncio.create_task(self._renew(session_id))
+        try:
+            await self._request("begin_dictation", session_id)
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await self.end(session_id)
+            raise
 
     async def end(self, session_id: str) -> None:
+        task = self._renewals.pop(session_id, None)
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._lost.pop(session_id, None)
         await self._request("end_dictation", session_id)
+
+    async def _renew(self, session_id: str) -> None:
+        while True:
+            await asyncio.sleep(10)
+            try:
+                await self._request("renew_dictation", session_id)
+            except Exception:
+                self._lost[session_id].set()
+                return
+
+    async def wait_lost(self, session_id: str) -> None:
+        await self._lost[session_id].wait()
 
     async def prepare_accuracy(self, session_id: str, language: str) -> None:
         await self._request("prepare_accuracy", session_id, language=language)
@@ -129,22 +156,41 @@ class DictationService:
         self._available_models_provider = available_models_provider
         self._loop: asyncio.AbstractEventLoop | None = None
         self._queue: asyncio.Queue[bytes | Exception | None] = asyncio.Queue(maxsize=256)
+        self._audio_generation: object | None = None
         self._consumer: asyncio.Task[None] | None = None
         self._candidate_timer: asyncio.Task[None] | None = None
         self._overflow_task: asyncio.Task[None] | None = None
+        self._lease_watchdog: asyncio.Task[None] | None = None
+        self._pending_lease_ends: set[str] = set()
+        self._lease_cleanup: asyncio.Task[None] | None = None
         self._session_id: str | None = None
         self._lock = asyncio.Lock()
+        self._arming: asyncio.Task[DictationStatus] | None = None
+
+    def arm(self) -> DictationStatus:
+        """Acknowledge ARMING immediately; resource preparation runs asynchronously."""
+        if self.controller.current.state is not DictationState.IDLE:
+            return self.controller.current
+        session_id = str(uuid4())
+        status = self.controller.prepare(session_id)
+        self._arming = asyncio.create_task(
+            self._start_prepared(session_id), name="dictation-arming"
+        )
+        return status
 
     async def start(self) -> DictationStatus:
+        self.arm()
+        task = self._arming
+        return await task if task is not None else self.controller.current
+
+    async def _start_prepared(self, session_id: str) -> DictationStatus:
         async with self._lock:
-            if self.controller.current.state is not DictationState.IDLE:
-                return self.controller.current
+            await self._cancel_consumer()
+            self._queue = asyncio.Queue(maxsize=256)
             self._loop = asyncio.get_running_loop()
-            session_id = str(uuid4())
             try:
-                self.controller.prepare(session_id)
-                await self.lease.begin(session_id)
                 self._session_id = session_id
+                await self.lease.begin(session_id)
                 await self.vad.open(session_id)
                 status = await self.controller.activate()
                 if status.state is DictationState.IDLE:
@@ -153,10 +199,25 @@ class DictationService:
                     await self._release_lease()
                     return status
                 self._consumer = asyncio.create_task(self._consume(), name="dictation-audio")
-                self.source.start(self._from_audio_thread, self._from_audio_error_thread)
+                generation = object()
+                self._audio_generation = generation
+                self.source.start(
+                    lambda frame: self._from_audio_thread(frame, generation),
+                    lambda error: self._from_audio_error_thread(error, generation),
+                )
+                if callable(getattr(self.lease, "wait_lost", None)):
+                    self._lease_watchdog = asyncio.create_task(self._watch_lease(session_id))
                 return status
+            except asyncio.CancelledError:
+                self._stop_source()
+                await self._abort_recognizer()
+                with contextlib.suppress(Exception):
+                    await self.vad.close()
+                await self._release_lease()
+                await self.controller.cancel()
+                raise
             except Exception as exc:
-                self.source.stop()
+                self._stop_source()
                 await self._abort_recognizer()
                 with contextlib.suppress(Exception):
                     await self.vad.close()
@@ -164,10 +225,12 @@ class DictationService:
                 return self.controller.fail(f"microphone/GPU unavailable: {type(exc).__name__}")
 
     async def stop(self) -> DictationStatus:
+        if self.controller.current.state is DictationState.ARMING:
+            return await self.cancel()
         async with self._lock:
             if self.controller.current.state is DictationState.IDLE:
                 return self.controller.current
-            self.source.stop()
+            self._stop_source()
             try:
                 await self._drain_consumer()
                 await self.vad.close()
@@ -201,8 +264,14 @@ class DictationService:
             return status
 
     async def cancel(self) -> DictationStatus:
+        task = self._arming
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._arming = None
         async with self._lock:
-            self.source.stop()
+            self._stop_source()
             if self._candidate_timer is not None:
                 self._candidate_timer.cancel()
                 self._candidate_timer = None
@@ -227,18 +296,29 @@ class DictationService:
     async def close(self) -> None:
         with contextlib.suppress(Exception):
             await self.cancel()
+        if self._lease_cleanup is not None:
+            self._lease_cleanup.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._lease_cleanup
+        await self._retry_lease_ends()
 
-    def _from_audio_thread(self, frame: bytes) -> None:
+    def _stop_source(self) -> None:
+        self._audio_generation = None
+        self.source.stop()
+
+    def _from_audio_thread(self, frame: bytes, generation: object) -> None:
         loop = self._loop
         if loop is not None:
-            loop.call_soon_threadsafe(self._enqueue, frame)
+            loop.call_soon_threadsafe(self._enqueue, frame, generation)
 
-    def _from_audio_error_thread(self, error: Exception) -> None:
+    def _from_audio_error_thread(self, error: Exception, generation: object) -> None:
         loop = self._loop
         if loop is not None:
-            loop.call_soon_threadsafe(self._enqueue, error)
+            loop.call_soon_threadsafe(self._enqueue, error, generation)
 
-    def _enqueue(self, frame: bytes | Exception) -> None:
+    def _enqueue(self, frame: bytes | Exception, generation: object) -> None:
+        if generation is not self._audio_generation:
+            return
         if self._queue.full():
             if self._overflow_task is None or self._overflow_task.done():
                 self._overflow_task = asyncio.create_task(self._overflow())
@@ -247,7 +327,7 @@ class DictationService:
 
     async def _overflow(self) -> None:
         try:
-            self.source.stop()
+            self._stop_source()
             self.controller.fail("microphone consumer overflow")
             await self._abort_recognizer()
             await self._cancel_consumer()
@@ -289,11 +369,14 @@ class DictationService:
                             f"microphone/VAD stream failed: {type(exc).__name__}"
                         )
                 if status.state is DictationState.IDLE and status.message:
-                    self.source.stop()
+                    self._stop_source()
                     await self._abort_recognizer()
                     with contextlib.suppress(Exception):
                         await self.vad.close()
                     await self._release_lease()
+                    while not self._queue.empty():
+                        self._queue.get_nowait()
+                        self._queue.task_done()
                     return
             finally:
                 self._queue.task_done()
@@ -325,12 +408,38 @@ class DictationService:
             self._queue.get_nowait()
             self._queue.task_done()
 
+    async def _watch_lease(self, session_id: str) -> None:
+        await self.lease.wait_lost(session_id)  # type: ignore[attr-defined]
+        await self.cancel()
+        self.controller.fail("core GPU lease lost")
+
     async def _release_lease(self) -> None:
+        watchdog = self._lease_watchdog
+        self._lease_watchdog = None
+        if watchdog is not None and watchdog is not asyncio.current_task():
+            watchdog.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watchdog
         session_id = self._session_id
         self._session_id = None
         if session_id is not None:
-            with contextlib.suppress(Exception):
+            self._pending_lease_ends.add(session_id)
+        await self._retry_lease_ends()
+        if self._pending_lease_ends and (self._lease_cleanup is None or self._lease_cleanup.done()):
+            self._lease_cleanup = asyncio.create_task(self._cleanup_leases())
+
+    async def _retry_lease_ends(self) -> None:
+        for session_id in tuple(self._pending_lease_ends):
+            try:
                 await self.lease.end(session_id)
+            except Exception:
+                continue
+            self._pending_lease_ends.discard(session_id)
+
+    async def _cleanup_leases(self) -> None:
+        while self._pending_lease_ends:
+            await asyncio.sleep(1)
+            await self._retry_lease_ends()
 
     async def _abort_recognizer(self) -> None:
         with contextlib.suppress(Exception):
@@ -341,6 +450,7 @@ class DictationControlServer:
     def __init__(self, socket_path: Path, service: DictationService) -> None:
         self.socket_path = socket_path
         self.service = service
+        self.instance_id = str(uuid4())
         self._server: asyncio.AbstractServer | None = None
 
     async def start(self) -> None:
@@ -406,14 +516,14 @@ class DictationControlServer:
         if isinstance(since, bool) or not isinstance(since, int) or since < 0:
             raise ValueError("since_revision must be a non-negative integer")
         if action == "begin":
-            await self.service.start()
+            self.service.arm()
         elif action == "release":
             await self.service.stop()
         elif action == "cancel":
             await self.service.cancel()
         elif action == "toggle":
             if self.service.controller.current.state is DictationState.IDLE:
-                await self.service.start()
+                self.service.arm()
             else:
                 await self.service.stop()
         elif action == "configure":
@@ -430,6 +540,7 @@ class DictationControlServer:
             raise ValueError("unsupported dictation action")
         controller = self.service.controller
         return {
+            "instance_id": self.instance_id,
             "current": controller.current.as_dict(),
             "events": [item.as_dict() for item in controller.events_after(since)],
             "config": controller.config.as_dict(),

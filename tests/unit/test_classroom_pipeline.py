@@ -233,3 +233,40 @@ def test_dictation_arming_waits_for_safe_boundary_and_defers_new_jobs(
         assert pipeline.snapshot(second_id)["status"] == "completed"
 
     asyncio.run(scenario())
+
+
+def test_application_lifespan_recovers_once_and_preserves_pause(
+    database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from classscribe.api.app import create_app
+
+    _, factory, _ = database
+    pending = make_job(factory)
+    paused = make_job(factory)
+    pipeline = ClassroomPipeline(factory, ComposableStageRunner({}))
+    pipeline.initialize(pending, {})
+    pipeline.initialize(paused, {})
+    with factory.begin() as session:
+        session.get_one(Job, paused).status = JobStatus.PAUSED
+        job = session.get_one(Job, pending)
+        job.status = JobStatus.RUNNING
+        job.checkpoints[0].status = CheckpointStatus.RUNNING
+        job.checkpoints[0].attempt_count = 1
+        checkpoint_id = job.checkpoints[0].id
+    scheduled: list[str] = []
+    pipeline.schedule = scheduled.append  # type: ignore[method-assign,assignment]
+    app = create_app(service=cast(Any, SimpleNamespace(pipeline=pipeline)))
+
+    async def scenario() -> None:
+        for _ in range(2):
+            async with app.router.lifespan_context(app):
+                pass
+
+    asyncio.run(scenario())
+    assert scheduled == [pending]
+    with factory() as session:
+        assert session.get_one(Job, paused).status is JobStatus.PAUSED
+        assert session.get_one(JobCheckpoint, checkpoint_id).status is CheckpointStatus.RETRYABLE

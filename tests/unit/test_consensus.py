@@ -220,3 +220,12 @@ def test_candidates_from_different_canonical_intervals_are_rejected() -> None:
             language="en",
             inputs=_inputs(),
         )
+
+
+@pytest.mark.parametrize("words", [(), ("OpenAI", "NASA")])
+def test_consensus_preserves_surface_case(words: tuple[str, ...]) -> None:
+    candidate = _candidate("case", "a", "OpenAI NASA", "en", words)
+    result = ConfusionNetwork().resolve(
+        (candidate,), canonical_span=SPAN, language="en", inputs=_inputs()
+    )
+    assert result.text == "OpenAI NASA"

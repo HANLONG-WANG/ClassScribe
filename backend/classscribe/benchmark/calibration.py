@@ -7,6 +7,7 @@ import json
 import math
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from itertools import groupby
 from typing import Literal, cast
 
 CalibrationSplit = Literal["train", "validation", "test"]
@@ -148,8 +149,9 @@ def _fit_isotonic(
 ) -> dict[str, object]:
     ordered = sorted(zip(samples, labels, strict=True), key=lambda item: item[0].raw_score)
     blocks: list[list[float]] = []
-    for sample, label in ordered:
-        blocks.append([sample.raw_score, sample.raw_score, label, 1.0])
+    for score, group in groupby(ordered, key=lambda item: item[0].raw_score):
+        labels_at_score = [label for _, label in group]
+        blocks.append([score, score, sum(labels_at_score), float(len(labels_at_score))])
         while len(blocks) >= 2 and blocks[-2][2] / blocks[-2][3] > blocks[-1][2] / blocks[-1][3]:
             right = blocks.pop()
             left = blocks.pop()

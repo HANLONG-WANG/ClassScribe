@@ -12,7 +12,7 @@ from classscribe.consensus.models import (
     ConsensusCandidate,
     ReliabilityProfile,
 )
-from classscribe.quality.text import tokenize_for_language
+from classscribe.quality.text import surface_tokens
 from classscribe.timeline import AudioSpan
 
 
@@ -100,7 +100,7 @@ def _candidate_tokens(
     result: list[_CandidateToken] = []
     if candidate.evidence.tokens:
         for source_index, token in enumerate(candidate.evidence.tokens):
-            pieces = tokenize_for_language(token.text, language) or (token.text,)
+            pieces = surface_tokens(token.text, language) or (token.text,)
             spans = _partition(token.span, len(pieces))
             result.extend(
                 _CandidateToken(
@@ -113,7 +113,7 @@ def _candidate_tokens(
                 for piece_index, piece in enumerate(pieces)
             )
         return tuple(result)
-    pieces = tokenize_for_language(candidate.evidence.normalized_text, language)
+    pieces = surface_tokens(candidate.evidence.normalized_text, language)
     spans = _partition(candidate.evidence.core_span, len(pieces))
     return tuple(
         _CandidateToken(piece, piece.casefold(), spans[index], index, "constrained_interval")

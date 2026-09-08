@@ -259,3 +259,23 @@ def test_readable_paragraph_view_uses_semantic_boundaries_without_changing_times
     assert len(records) == 2
     assert records[0]["start_sample"] == 16000
     assert records[1]["start_sample"] == 96000
+
+
+def test_active_text_without_tokens_exports_with_segment_timing() -> None:
+    from classscribe.exports.models import ExportLayer, ExportSegment
+    from classscribe.exports.subtitles import build_subtitle_cues
+
+    segment = ExportSegment(
+        "derived",
+        AudioSpan(16000, 48000),
+        "en",
+        "Split text",
+        "Split text",
+        "Split text",
+        "Split text",
+        (),
+    )
+    for layer in ExportLayer:
+        (cue,) = build_subtitle_cues((segment,), layer)
+        assert cue.lines == ("Split text",)
+        assert (cue.start_sample, cue.end_sample) == (16000, 48000)

@@ -20,6 +20,7 @@ from classscribe_protocol import (
     DictationLanguage,
     DictationState,
     DictationStatus,
+    RPCRequest,
     RPCResponse,
 )
 
@@ -370,6 +371,8 @@ class _Control:
     def __init__(self) -> None:
         self.revision = 0
         self.fail = False
+        self.instance_id = "fixture"
+        self.current = DictationStatus(None, 0, DictationState.IDLE).as_dict()
 
     def request(self, action: str, params: Mapping[str, object] | None = None) -> dict[str, Any]:
         del params
@@ -377,17 +380,26 @@ class _Control:
             raise RuntimeError("down")
         events = []
         if action == "begin":
-            events = [self._status(DictationState.LISTENING)]
+            events = [self._status(DictationState.ARMING), self._status(DictationState.LISTENING)]
         elif action == "release":
             events = [
                 self._status(DictationState.COMMITTING, commit_text="done"),
                 self._status(DictationState.IDLE),
             ]
-        return {"ok": True, "events": events, "config": DictationConfig().as_dict()}
+        return {
+            "ok": True,
+            "events": events,
+            "current": self.current,
+            "instance_id": self.instance_id,
+            "config": DictationConfig().as_dict(),
+        }
 
     def _status(self, state: DictationState, **changes: Any) -> dict[str, Any]:
         self.revision += 1
-        return DictationStatus(None, self.revision, state, **changes).as_dict()
+        self.current = DictationStatus(
+            "session" if state is not DictationState.IDLE else None, self.revision, state, **changes
+        ).as_dict()
+        return self.current
 
 
 def test_thin_engine_passes_normal_keys_and_never_crashes_on_daemon_failure() -> None:
@@ -533,6 +545,9 @@ def test_core_lifespan_hands_gpu_between_classroom_and_resident_workers(
     events: list[str] = []
 
     class Pipeline:
+        def start_recovered_jobs(self) -> None:
+            events.append("jobs-recovered")
+
         async def arm_dictation_at_safe_boundary(self) -> tuple[str, ...]:
             events.append("classroom-paused")
             return ("job",)
@@ -589,6 +604,7 @@ def test_core_lifespan_hands_gpu_between_classroom_and_resident_workers(
     asyncio.run(scenario())
     assert events == [
         "resident-started",
+        "jobs-recovered",
         "classroom-paused",
         "resident-loaded",
         "resident-unloaded",
@@ -808,5 +824,229 @@ def test_accuracy_confirmation_uses_a_separate_preloaded_worker() -> None:
         assert candidates == ("高精度",)
         assert accuracy.methods == ["transcribe_pcm"]
         assert "stream_flush" not in primary.methods
+
+    asyncio.run(scenario())
+
+
+def test_stable_prefix_does_not_skip_unstable_word() -> None:
+    prefix = StablePrefix(stable_after_seconds=1)
+    words = (TimedToken("A", 0, 100, stable=False), TimedToken("B", 100, 200))
+    assert prefix.update(words, absolute_sample=32000) == ()
+    assert prefix.finalize(()) == words
+
+
+def test_vad_rejects_missing_voiced_instead_of_silent_audio() -> None:
+    from classscribe_dictationd.runtime import RPCFrameVAD
+
+    class Client:
+        async def call(self, request: RPCRequest) -> RPCResponse:
+            return RPCResponse(
+                request.request_id,
+                request.job_id,
+                True,
+                "vad",
+                "a" * 40,
+                result={"accepted_samples": 320},
+            )
+
+    vad = RPCFrameVAD(Path("/unused"))
+    vad.client = cast(Any, Client())
+
+    async def scenario() -> None:
+        await vad.open("s")
+        with pytest.raises(RuntimeError, match="boolean voiced"):
+            await vad.voiced(b"\0" * 640)
+
+    asyncio.run(scenario())
+
+
+def test_failed_audio_queue_and_late_callback_do_not_enter_next_session() -> None:
+    class Recognizer(_Recognizer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_once = True
+            self.frames: list[bytes] = []
+
+        async def push(self, frame: bytes, *, absolute_start_sample: int) -> tuple[TimedToken, ...]:
+            if self.fail_once:
+                self.fail_once = False
+                raise RuntimeError("ASR failed")
+            self.frames.append(frame)
+            return ()
+
+    async def scenario() -> None:
+        source = _AudioSource()
+        recognizer = Recognizer()
+        service = DictationService(DictationController(recognizer), source, _Lease())
+        await service.start()
+        old_callback = source.callback
+        for _ in range(3):
+            old_callback(b"\x01\x00" * 320)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await asyncio.wait_for(service._queue.join(), 1)
+        await service.start()
+        old_callback(b"\x02\x00" * 320)
+        source.callback(b"\x03\x00" * 320)
+        await asyncio.sleep(0)
+        await service.stop()
+        assert recognizer.frames == [b"\x03\x00" * 320]
+
+    asyncio.run(scenario())
+
+
+def test_begin_acknowledges_arming_and_release_cancels_slow_prepare(tmp_path: Path) -> None:
+    from classscribe_dictationd.daemon import DictationControlServer
+
+    class SlowLease(_Lease):
+        async def begin(self, session_id: str) -> None:
+            self.begun.append(session_id)
+            await asyncio.Event().wait()
+
+    async def scenario() -> None:
+        source = _AudioSource()
+        lease = SlowLease()
+        service = DictationService(DictationController(_Recognizer()), source, lease)
+        server = DictationControlServer(tmp_path / "control.sock", service)
+        response = await asyncio.wait_for(server._dispatch("begin", {}), 0.1)
+        assert cast(dict[str, Any], response["current"])["state"] == "arming"
+        await asyncio.sleep(0)
+        await asyncio.wait_for(server._dispatch("release", {}), 0.1)
+        assert service.controller.current.state is DictationState.IDLE
+        assert lease.begun == lease.ended
+        assert service._consumer is None
+
+    asyncio.run(scenario())
+
+
+def test_begin_timeout_does_not_forget_held_key_release() -> None:
+    class TimeoutControl(_Control):
+        def __init__(self) -> None:
+            super().__init__()
+            self.actions: list[str] = []
+
+        def request(
+            self, action: str, params: Mapping[str, object] | None = None
+        ) -> dict[str, Any]:
+            self.actions.append(action)
+            if action == "begin":
+                raise TimeoutError()
+            return super().request(action, params)
+
+    client = TimeoutControl()
+    engine = EngineController(client, _Bridge())
+    engine.handle_key(ACTIVATION_KEY)
+    engine.handle_key(ACTIVATION_KEY, released=True)
+    assert "release" in client.actions
+
+
+def test_new_engine_syncs_cursor_without_replaying_history() -> None:
+    class HistoricalControl(_Control):
+        def __init__(self) -> None:
+            super().__init__()
+            self.history = [
+                self._status(DictationState.ARMING),
+                self._status(DictationState.COMMITTING, commit_text="old"),
+                self._status(DictationState.IDLE),
+            ]
+
+        def request(
+            self, action: str, params: Mapping[str, object] | None = None
+        ) -> dict[str, Any]:
+            response = super().request(action, params)
+            if action == "status":
+                response["events"] = self.history
+            return response
+
+    client = HistoricalControl()
+    bridge = _Bridge()
+    engine = EngineController(client, bridge)
+    engine.poll()
+    assert bridge.commits == []
+    engine.handle_key(ACTIVATION_KEY)
+    engine.handle_key(ACTIVATION_KEY, released=True)
+    assert bridge.commits == ["done"]
+    engine.focus_out()
+    engine._apply(
+        DictationStatus("session", 999, DictationState.COMMITTING, commit_text="wrong context")
+    )
+    assert bridge.commits == ["done"]
+
+
+def test_daemon_generation_change_resets_old_cursor_without_replay() -> None:
+    client = _Control()
+    client.revision = 500
+    client.current = client._status(DictationState.IDLE)
+    bridge = _Bridge()
+    engine = EngineController(client, bridge)
+    engine.poll()
+    assert engine.revision == 501
+    client.instance_id = "restarted"
+    client.revision = 0
+    client.current = client._status(DictationState.IDLE)
+    engine.poll()
+    assert engine.revision == 1
+    engine.handle_key(ACTIVATION_KEY)
+    engine.handle_key(ACTIVATION_KEY, released=True)
+    assert bridge.commits == ["done"]
+
+
+@pytest.mark.parametrize("slow_prepare", [False, True])
+def test_abandoned_core_lease_expires_even_during_prepare(
+    tmp_path: Path, slow_prepare: bool
+) -> None:
+    async def scenario() -> None:
+        manager = GPULeaseManager()
+        finished = asyncio.Event()
+
+        async def begin() -> None:
+            if slow_prepare:
+                await asyncio.Event().wait()
+
+        server = GPULeaseIPCServer(
+            tmp_path / "lease.sock",
+            manager,
+            lease_timeout_seconds=0.06,
+            on_begin=begin,
+            on_end=finished.set,
+        )
+        await server.start()
+        reader, writer = await asyncio.open_unix_connection(server.socket_path)
+        writer.write(b'{"action":"begin_dictation","session_id":"crashed"}\n')
+        await writer.drain()
+        if not slow_prepare:
+            assert json.loads(await reader.readline())["ok"]
+        writer.close()
+        await writer.wait_closed()
+        try:
+            await asyncio.wait_for(finished.wait(), 1)
+            assert not manager.dictation_active
+            assert not server._sessions
+        finally:
+            await server.close()
+
+    asyncio.run(scenario())
+
+
+def test_failed_lease_end_is_retained_and_retried() -> None:
+    class FlakyLease(_Lease):
+        failures = 1
+
+        async def end(self, session_id: str) -> None:
+            if self.failures:
+                self.failures -= 1
+                raise ConnectionError("core unavailable")
+            await super().end(session_id)
+
+    async def scenario() -> None:
+        lease = FlakyLease()
+        service = DictationService(DictationController(_Recognizer()), _AudioSource(), lease)
+        await service.start()
+        await service.cancel()
+        assert service._pending_lease_ends == set(lease.begun)
+        await service._retry_lease_ends()
+        assert not service._pending_lease_ends
+        assert lease.begun == lease.ended
+        await service.close()
 
     asyncio.run(scenario())

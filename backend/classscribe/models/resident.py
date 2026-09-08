@@ -393,6 +393,7 @@ class DictationWorkerSupervisor:
                         "model_revision": entry.revision,
                         "model_path": "/model",
                         "device": "auto" if expose_gpu else "cpu",
+                        **({"streaming": True} if entry.id == "firered_vad" else {}),
                     },
                 )
             )

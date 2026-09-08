@@ -26,6 +26,7 @@ from classscribe.api.routes import create_api_router
 from classscribe.api.runtime import LazyService
 from classscribe.api.security import LocalSecurityMiddleware
 from classscribe.api.service import ClassScribeService
+from classscribe.config import AppConfig
 from classscribe.diagnostics import (
     DiagnosticCollector,
     DiagnosticSnapshot,
@@ -51,6 +52,7 @@ def health_status() -> dict[str, str | int]:
 
 def create_app(
     *,
+    config: AppConfig | None = None,
     api_token: str | None = None,
     csrf_token: str | None = None,
     diagnostic_provider: Callable[[], DiagnosticSnapshot] | None = None,
@@ -59,17 +61,17 @@ def create_app(
     runtime_paths: AppPaths | None = None,
     static_directory: Path | None = None,
 ) -> FastAPI:
-    api_service = service or LazyService()
+    api_service = service or LazyService(config)
 
     @asynccontextmanager
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
         lease_server: GPULeaseIPCServer | None = None
         resident_workers: Any | None = None
+        concrete = api_service.get() if isinstance(api_service, LazyService) else api_service
+        pipeline = concrete.pipeline
         if enable_scheduler_ipc:
             paths = runtime_paths or AppPaths.from_environment()
             paths.ensure()
-            concrete = api_service.get() if isinstance(api_service, LazyService) else api_service
-            pipeline = concrete.pipeline
             resident_workers = concrete.resident_workers
             if resident_workers is not None:
                 await resident_workers.start()
@@ -104,6 +106,8 @@ def create_app(
                 on_prepare_accuracy=prepare_accuracy,
             )
             await lease_server.start()
+        if pipeline is not None:
+            pipeline.start_recovered_jobs()
         try:
             yield
         finally:

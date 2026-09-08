@@ -1,3 +1,5 @@
+import { useQueryClient } from "@tanstack/react-query";
+import { flushTranscriptSave, useTranscriptSaves } from "./transcriptSaves";
 import { ExportsPage } from "./pages/ExportsPage";
 import { GlossaryPage } from "./pages/GlossaryPage";
 import { IBusPage } from "./pages/IBusPage";
@@ -20,6 +22,11 @@ const navigation: { id: Page; label: string; mark: string }[] = [
 ];
 
 export function App() {
+  const client = useQueryClient();
+  const drafts = useTranscriptSaves((state) => state.drafts);
+  const unsaved = Object.entries(drafts).filter(
+    ([, draft]) => draft.status !== "saved",
+  );
   const page = useWorkbench((state) => state.page);
   const setPage = useWorkbench((state) => state.setPage);
   return (
@@ -62,6 +69,27 @@ export function App() {
         </div>
       </aside>
       <main className="workspace">
+        {unsaved.length > 0 && (
+          <div role="status">
+            {unsaved.some(([, draft]) => draft.status === "error")
+              ? "文本保存失败，草稿已保留"
+              : "文本待保存或保存中…"}
+            {unsaved
+              .filter(([, draft]) => draft.status === "error")
+              .map(([id, draft]) => (
+                <button
+                  key={id}
+                  title={draft.error}
+                  onClick={() => {
+                    void flushTranscriptSave(id, client);
+                  }}
+                  type="button"
+                >
+                  重试保存
+                </button>
+              ))}
+          </div>
+        )}
         <PageContent page={page} />
         <footer>
           ClassScribe 不承诺零 CER/WER；低置信度会标记，但不会阻塞自动导出。

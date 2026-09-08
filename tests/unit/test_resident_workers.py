@@ -491,9 +491,11 @@ def test_resident_start_builds_only_available_routes_and_records_auxiliary_failu
     assert unavailable.errors == ("Bubblewrap is unavailable",)
 
 
+@pytest.mark.parametrize("model_id", ["qwen3_asr_1_7b", "firered_vad"])
 def test_resident_entry_loads_and_unloads_in_sandbox(
     database: tuple[Engine, sessionmaker[Session], Path],
     tmp_path: Path,
+    model_id: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import classscribe.models.resident as resident
@@ -556,7 +558,7 @@ def test_resident_entry_loads_and_unloads_in_sandbox(
 
     _, sessions, _ = database
     registry = load_registry(Path("config/model-registry.v1.yaml"))
-    qwen = registry.model("qwen3_asr_1_7b")
+    qwen = registry.model(model_id)
     paths = AppPaths.from_environment({}, home=tmp_path / "home")
     paths.ensure()
     manager = InstalledModels(tmp_path / "models", {qwen.id: qwen.revision})
@@ -585,6 +587,7 @@ def test_resident_entry_loads_and_unloads_in_sandbox(
     process = Process.instances[0]
     assert [request.method for request in process.calls] == ["load", "unload"]
     assert process.calls[0].params["device"] == "auto"
+    assert process.calls[0].params.get("streaming", False) is (model_id == "firered_vad")
     assert process.stopped
     assert sandbox.arguments["gpu_devices"] == (Path("/dev/nvidia0"),)
     assert not supervisor._processes

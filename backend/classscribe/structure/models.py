@@ -79,6 +79,27 @@ class StructureResult:
     source_revision: str
 
 
+def task_speaker_config(config: ClassroomConfig, choice: str | None) -> ClassroomConfig:
+    if choice is None:
+        return config
+    values = config.model_dump()
+    if choice == "auto":
+        values["expected_speakers"] = "auto"
+    else:
+        bounds = {"1": (1, 1), "2": (2, 2), "3-4": (3, 4), "5+": (5, 12)}
+        if choice not in bounds:
+            raise ValueError("unsupported task speaker count")
+        minimum, maximum = bounds[choice]
+        values.update(
+            expected_speakers=minimum if minimum == maximum else "auto",
+            prior_min=minimum,
+            prior_typical=minimum,
+            max_speakers=maximum,
+            speaker_context="ordinary_class" if maximum <= 2 else "group_discussion",
+        )
+    return ClassroomConfig.model_validate(values)
+
+
 def speaker_policy_payload(config: ClassroomConfig) -> dict[str, object]:
     """Serialize the ordinary-class/group-discussion speaker prior without hiding bounds."""
 

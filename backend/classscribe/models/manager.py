@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -10,7 +11,8 @@ import secrets
 import shutil
 import tempfile
 import wave
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -108,9 +110,8 @@ class ManifestComponentSource:
     files: tuple[ManifestComponentSourceFile, ...]
 
     def __post_init__(self) -> None:
-        if (
-            self.repository.count("/") != 1
-            or any(character.isspace() for character in self.repository)
+        if self.repository.count("/") != 1 or any(
+            character.isspace() for character in self.repository
         ):
             raise ValueError("component source repository must use owner/name")
         if not COMMIT_RE.fullmatch(self.revision):
@@ -499,79 +500,96 @@ class ModelManager:
                 ErrorCode.MODEL_INSTALL_NOT_USER_INITIATED,
                 "the upstream access terms must be explicitly accepted for this installation",
             )
-        health_audio_metadata = self._validate_health_audio(health_audio)
-        model_root = self.root / manifest.model_id
-        revisions_root = model_root / "revisions"
-        self._ensure_directory(model_root)
-        self._ensure_directory(revisions_root)
-        target = revisions_root / manifest.revision
-        if target.exists() or target.is_symlink():
-            raise ClassScribeError(
-                ErrorCode.MODEL_INTEGRITY_FAILED, "revision is already installed"
-            )
-        staging = Path(tempfile.mkdtemp(prefix=f"{manifest.model_id}-", dir=self.root / ".staging"))
-        staging.chmod(0o700)
-        payload = staging / "payload"
-        payload.mkdir(mode=0o700)
-        previous_active = self._active_revision(manifest.model_id)
-        installed_at = self._now()
-        try:
-            receipt = downloader.download(
-                repository=manifest.repository,
-                revision=manifest.revision,
-                destination=payload,
-                files=manifest.files,
-            )
-            if receipt.resolved_revision != manifest.revision:
+        with self._model_mutation(manifest.model_id):
+            health_audio_metadata = self._validate_health_audio(health_audio)
+            model_root = self.root / manifest.model_id
+            revisions_root = model_root / "revisions"
+            self._ensure_directory(model_root)
+            self._ensure_directory(revisions_root)
+            target = revisions_root / manifest.revision
+            if target.exists() or target.is_symlink():
                 raise ClassScribeError(
-                    ErrorCode.MODEL_REVISION_NOT_PINNED,
-                    "download source resolved a revision different from the pinned commit",
+                    ErrorCode.MODEL_INTEGRITY_FAILED, "revision is already installed"
                 )
-            aggregate = self._verify_payload(payload, manifest)
-            audit = {
-                "format_version": 1,
-                "installed_at": installed_at.isoformat(),
-                "source": receipt.source,
-                "downloaded_bytes": receipt.downloaded_bytes,
-                "aggregate_sha256": aggregate,
-                "manifest": manifest.as_dict(),
-                "health_audio": health_audio_metadata,
-            }
-            self._atomic_json(payload / AUDIT_FILENAME, audit)
-            os.replace(payload, target)
-            health = health_check(target, health_audio, runtime_environment())
-            if not health.healthy:
-                raise ClassScribeError(ErrorCode.MODEL_HEALTH_CHECK_FAILED, health.detail)
-            audit["health_check"] = {
-                "healthy": health.healthy,
-                "detail": health.detail,
-                "measured_vram_mb": health.measured_vram_mb,
-                "environment": dict(health.environment),
-            }
-            self._atomic_json(target / AUDIT_FILENAME, audit)
-            if self._recorder is not None:
-                self._recorder.record(manifest, target, aggregate, health, installed_at)
-            self._activate(manifest.model_id, manifest.revision)
-            return InstallationResult(
-                model_id=manifest.model_id,
-                revision=manifest.revision,
-                local_path=target,
-                aggregate_sha256=aggregate,
-                health=health,
+            staging = Path(
+                tempfile.mkdtemp(prefix=f"{manifest.model_id}-", dir=self.root / ".staging")
             )
-        except Exception:
-            if target.exists() and not target.is_symlink():
-                shutil.rmtree(target)
-            current_active = self._active_revision(manifest.model_id)
-            if current_active != previous_active:
-                if previous_active is None:
-                    (model_root / ACTIVE_FILENAME).unlink(missing_ok=True)
-                else:
-                    self._activate(manifest.model_id, previous_active)
-            raise
+            staging.chmod(0o700)
+            payload = staging / "payload"
+            payload.mkdir(mode=0o700)
+            previous_active = self._active_revision(manifest.model_id)
+            installed_at = self._now()
+            owns_target = False
+            try:
+                receipt = downloader.download(
+                    repository=manifest.repository,
+                    revision=manifest.revision,
+                    destination=payload,
+                    files=manifest.files,
+                )
+                if receipt.resolved_revision != manifest.revision:
+                    raise ClassScribeError(
+                        ErrorCode.MODEL_REVISION_NOT_PINNED,
+                        "download source resolved a revision different from the pinned commit",
+                    )
+                aggregate = self._verify_payload(payload, manifest)
+                audit = {
+                    "format_version": 1,
+                    "installed_at": installed_at.isoformat(),
+                    "source": receipt.source,
+                    "downloaded_bytes": receipt.downloaded_bytes,
+                    "aggregate_sha256": aggregate,
+                    "manifest": manifest.as_dict(),
+                    "health_audio": health_audio_metadata,
+                }
+                self._atomic_json(payload / AUDIT_FILENAME, audit)
+                os.replace(payload, target)
+                owns_target = True
+                health = health_check(target, health_audio, runtime_environment())
+                if not health.healthy:
+                    raise ClassScribeError(ErrorCode.MODEL_HEALTH_CHECK_FAILED, health.detail)
+                audit["health_check"] = {
+                    "healthy": health.healthy,
+                    "detail": health.detail,
+                    "measured_vram_mb": health.measured_vram_mb,
+                    "environment": dict(health.environment),
+                }
+                self._atomic_json(target / AUDIT_FILENAME, audit)
+                if self._recorder is not None:
+                    self._recorder.record(manifest, target, aggregate, health, installed_at)
+                self._activate(manifest.model_id, manifest.revision)
+                return InstallationResult(
+                    model_id=manifest.model_id,
+                    revision=manifest.revision,
+                    local_path=target,
+                    aggregate_sha256=aggregate,
+                    health=health,
+                )
+            except Exception:
+                if owns_target and target.exists() and not target.is_symlink():
+                    shutil.rmtree(target)
+                current_active = self._active_revision(manifest.model_id)
+                if current_active != previous_active:
+                    if previous_active is None:
+                        (model_root / ACTIVE_FILENAME).unlink(missing_ok=True)
+                    else:
+                        self._activate(manifest.model_id, previous_active)
+                raise
+            finally:
+                if staging.exists() and not staging.is_symlink():
+                    shutil.rmtree(staging)
+
+    @contextmanager
+    def _model_mutation(self, model_id: str) -> Iterator[None]:
+        self._validate_identifier(model_id)
+        root = self.root / model_id
+        self._ensure_directory(root)
+        descriptor = os.open(root / ".mutation.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            yield
         finally:
-            if staging.exists() and not staging.is_symlink():
-                shutil.rmtree(staging)
+            os.close(descriptor)
 
     def resolve_for_runtime(self, model_id: str) -> Path:
         """Resolve and revalidate the active revision without any downloader/network path."""
@@ -582,6 +600,9 @@ class ModelManager:
             raise ClassScribeError(
                 ErrorCode.MODEL_NOT_FULLY_INSTALLED, f"model {model_id} has no active revision"
             )
+        return self._validate_installed_revision(model_id, revision)
+
+    def _validate_installed_revision(self, model_id: str, revision: str) -> Path:
         target = self.root / model_id / "revisions" / revision
         if target.is_symlink() or (target / AUDIT_FILENAME).is_symlink():
             raise ClassScribeError(
@@ -591,6 +612,13 @@ class ModelManager:
         try:
             audit = json.loads((target / AUDIT_FILENAME).read_text(encoding="utf-8"))
             manifest = ModelManifest.from_dict(audit["manifest"])
+            if manifest.model_id != model_id or manifest.revision != revision:
+                raise ValueError("installed manifest identity differs from requested revision")
+            if (
+                not isinstance(audit.get("health_check"), dict)
+                or audit["health_check"].get("healthy") is not True
+            ):
+                raise ValueError("revision has no successful health check")
             aggregate = self._verify_payload(target, manifest, allow_audit=True)
             if aggregate != audit["aggregate_sha256"]:
                 raise ValueError("aggregate checksum mismatch")
@@ -610,35 +638,29 @@ class ModelManager:
     def rollback(self, model_id: str, revision: str) -> Path:
         self._validate_identifier(model_id)
         self._validate_revision(revision)
-        target = self.root / model_id / "revisions" / revision
-        if (
-            target.is_symlink()
-            or (target / AUDIT_FILENAME).is_symlink()
-            or not (target / AUDIT_FILENAME).is_file()
-        ):
-            raise ClassScribeError(
-                ErrorCode.MODEL_NOT_FULLY_INSTALLED, "rollback revision is not fully installed"
-            )
-        self._activate(model_id, revision)
-        return self.resolve_for_runtime(model_id)
+        with self._model_mutation(model_id):
+            target = self._validate_installed_revision(model_id, revision)
+            self._activate(model_id, revision)
+            return target
 
     def delete_revision(self, model_id: str, revision: str) -> None:
         self._validate_identifier(model_id)
         self._validate_revision(revision)
-        if self._active_revision(model_id) == revision:
-            raise ClassScribeError(
-                ErrorCode.MODEL_REVISION_ACTIVE,
-                "activate another revision before deleting this one",
-            )
-        target = self.root / model_id / "revisions" / revision
-        if target.is_symlink():
-            raise ClassScribeError(
-                ErrorCode.MODEL_INTEGRITY_FAILED, "revision may not be symlinked"
-            )
-        if target.exists():
-            shutil.rmtree(target)
-        if self._recorder is not None:
-            self._recorder.remove(model_id, revision)
+        with self._model_mutation(model_id):
+            if self._active_revision(model_id) == revision:
+                raise ClassScribeError(
+                    ErrorCode.MODEL_REVISION_ACTIVE,
+                    "activate another revision before deleting this one",
+                )
+            target = self.root / model_id / "revisions" / revision
+            if target.is_symlink():
+                raise ClassScribeError(
+                    ErrorCode.MODEL_INTEGRITY_FAILED, "revision may not be symlinked"
+                )
+            if target.exists():
+                shutil.rmtree(target)
+            if self._recorder is not None:
+                self._recorder.remove(model_id, revision)
 
     def diff_upgrade(self, model_id: str, candidate: ModelManifest) -> ManifestDiff:
         current = self.resolve_for_runtime(model_id)

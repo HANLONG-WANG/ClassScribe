@@ -14,6 +14,7 @@ from classscribe.asr.models import (
     CandidateRole,
     PronunciationHint,
     build_asr_request,
+    is_structure_model,
     parse_asr_response,
 )
 from classscribe.audio.segmentation import TranscriptChunk
@@ -58,7 +59,7 @@ class BodyASRPlanner:
         planned: list[PlannedCandidate] = []
         review_rank = 0
         for registry_rank, entry in enumerate(entries):
-            structural = "diarization" in entry.tasks and "timestamps" in entry.tasks
+            structural = is_structure_model(entry)
             if structural:
                 role = CandidateRole.STRUCTURE
             elif entry.experimental:

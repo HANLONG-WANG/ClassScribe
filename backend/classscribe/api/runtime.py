@@ -7,8 +7,9 @@ from typing import Any
 
 from classscribe.api.service import ClassScribeService
 from classscribe.classroom import ClassroomPipeline, ProductionStageRunner
-from classscribe.config import load_config
-from classscribe.db import create_schema, create_sqlite_engine, make_session_factory
+from classscribe.config import AppConfig, load_config
+from classscribe.db import create_sqlite_engine, make_session_factory
+from classscribe.db.session import upgrade_schema
 from classscribe.models import (
     DictationWorkerSupervisor,
     HuggingFaceDownloader,
@@ -26,7 +27,7 @@ from classscribe.resources import resource_path, resource_root
 from classscribe.security import RestrictedCredentialEnvironment
 
 
-def build_default_service() -> ClassScribeService:
+def build_default_service(config: AppConfig | None = None) -> ClassScribeService:
     registry_path = resource_path("config/model-registry.v1.yaml")
     registry = load_registry(registry_path)
     model_licenses = load_model_licenses(resource_path("config/model-licenses.v1.json"))
@@ -38,7 +39,7 @@ def build_default_service() -> ClassScribeService:
     paths = AppPaths.from_environment()
     paths.ensure()
     engine = create_sqlite_engine(paths.data / "classscribe.sqlite3")
-    create_schema(engine)
+    upgrade_schema(engine)
     sessions = make_session_factory(engine)
     manager = ModelManager(
         paths.cache / "models", recorder=SQLAlchemyInstallationRecorder(sessions)
@@ -48,7 +49,7 @@ def build_default_service() -> ClassScribeService:
         RestrictedCredentialEnvironment(credential_path).load() if credential_path.exists() else {}
     )
     provisioner = WorkerEnvironmentProvisioner(resource_root(), paths.cache / "worker-environments")
-    config = load_config(paths.config / "config.yaml")
+    config = config or load_config(paths.config / "config.yaml")
     resident_workers = DictationWorkerSupervisor(
         paths, config, registry, manager, provisioner, sessions
     )
@@ -78,7 +79,8 @@ def build_default_service() -> ClassScribeService:
 
 
 class LazyService:
-    def __init__(self) -> None:
+    def __init__(self, config: AppConfig | None = None) -> None:
+        self._config = config
         self._service: ClassScribeService | None = None
         self._lock = threading.Lock()
 
@@ -86,7 +88,7 @@ class LazyService:
         if self._service is None:
             with self._lock:
                 if self._service is None:
-                    self._service = build_default_service()
+                    self._service = build_default_service(self._config)
         return self._service
 
     def __getattr__(self, name: str) -> Any:

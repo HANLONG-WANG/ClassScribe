@@ -100,3 +100,10 @@ def test_immutable_resource_override_is_absolute_bounded_and_non_symlink(tmp_pat
     linked.symlink_to(root, target_is_directory=True)
     with pytest.raises(ValueError, match="non-symlink"):
         resource_root({"CLASSSCRIBE_RESOURCE_ROOT": str(linked)})
+
+
+def test_desktop_socket_matches_core_runtime_fallback(tmp_path: Path) -> None:
+    from classscribe_protocol.dictation_ipc import default_dictation_socket
+
+    for env in ({"XDG_STATE_HOME": str(tmp_path)}, {"XDG_RUNTIME_DIR": str(tmp_path)}):
+        assert default_dictation_socket(env).parent == AppPaths.from_environment(env).runtime

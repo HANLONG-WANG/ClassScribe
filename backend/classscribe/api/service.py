@@ -710,8 +710,7 @@ class ClassScribeService:
             if source_license is None or (
                 source.license_id != source_license.license_id
                 or source.license_url != source_license.license_url
-                or source.requires_terms_acceptance
-                is not source_license.requires_terms_acceptance
+                or source.requires_terms_acceptance is not source_license.requires_terms_acceptance
             ):
                 raise ClassScribeError(
                     ErrorCode.MODEL_INTEGRITY_FAILED,
@@ -1352,45 +1351,50 @@ class ClassScribeService:
                     .order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
                 ).all()
             )
+            undo_stack: list[DecisionEvent] = []
+            redo_stack: list[tuple[DecisionEvent, DecisionEvent]] = []
+            for event in reversed(events):
+                if event.event_type == "segment_text_edited":
+                    undo_stack.append(event)
+                    redo_stack.clear()
+                elif event.event_type == "segment_edit_undone":
+                    original = next(
+                        (
+                            item
+                            for item in undo_stack
+                            if item.id == event.input_json.get("edit_event_id")
+                        ),
+                        None,
+                    )
+                    if original is not None:
+                        undo_stack.remove(original)
+                        redo_stack.append((original, event))
+                elif event.event_type == "segment_edit_redone":
+                    pair = next(
+                        (
+                            item
+                            for item in redo_stack
+                            if item[1].id == event.input_json.get("undo_event_id")
+                        ),
+                        None,
+                    )
+                    if pair is not None:
+                        redo_stack.remove(pair)
+                        undo_stack.append(pair[0])
             action_type = "segment_edit_redone" if redo else "segment_edit_undone"
             if redo:
-                source = next(
-                    (
-                        item
-                        for item in events
-                        if item.event_type == "segment_edit_undone"
-                        and not any(
-                            later.event_type == "segment_edit_redone"
-                            and later.input_json.get("undo_event_id") == item.id
-                            for later in events
-                        )
-                    ),
-                    None,
-                )
-                if source is None:
+                if not redo_stack:
                     raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "nothing to redo")
+                source, undone = redo_stack[-1]
                 layer_name = str(source.input_json["layer"])
-                text = str(source.input_json["redo_text"])
-                reference = source.id
+                text = undone.input_json["redo_text"]
+                reference = undone.id
             else:
-                already_undone = {
-                    str(item.input_json.get("edit_event_id"))
-                    for item in events
-                    if item.event_type == "segment_edit_undone"
-                }
-                source = next(
-                    (
-                        item
-                        for item in events
-                        if item.event_type == "segment_text_edited"
-                        and item.id not in already_undone
-                    ),
-                    None,
-                )
-                if source is None:
+                if not undo_stack:
                     raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "nothing to undo")
+                source = undo_stack[-1]
                 layer_name = str(source.input_json["layer"])
-                text = str(source.input_json["text"] or "")
+                text = source.input_json["text"]
                 reference = source.id
             previous = getattr(segment, layer_name)
             setattr(segment, layer_name, text)
@@ -1454,6 +1458,12 @@ class ClassScribeService:
                     .order_by(TranscriptSegment.start_sample, TranscriptSegment.id)
                 ).all()
             )
+            names = {
+                item.speaker_global_id: item.display_name
+                for item in session.scalars(
+                    select(SpeakerDisplayName).where(SpeakerDisplayName.job_id == job_id)
+                )
+            }
             result: list[ExportSegment] = []
             for segment in segments:
                 tokens = tuple(
@@ -1488,7 +1498,9 @@ class ClassScribeService:
                         tokens,
                         smart_tokens=tokens,
                         user_tokens=tokens if segment.user_text else (),
-                        speaker=segment.speaker_id,
+                        speaker=names.get(segment.speaker_id, segment.speaker_id)
+                        if segment.speaker_id
+                        else None,
                     )
                 )
             return tuple(result)

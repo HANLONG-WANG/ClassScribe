@@ -10,7 +10,7 @@ import {
 } from "../api";
 import { useWorkbench } from "../store";
 
-type Language = "zh" | "ja" | "en" | "auto";
+type Language = "zh" | "ja" | "en" | "auto_mixed";
 type Accuracy = "fast" | "balanced" | "highest" | "strict_single";
 
 async function inspectMedia(file: File) {
@@ -30,7 +30,7 @@ async function inspectMedia(file: File) {
 export function UploadPage() {
   const setCurrentJob = useWorkbench((state) => state.setCurrentJob);
   const [file, setFile] = useState<File | null>(null);
-  const [language, setLanguage] = useState<Language>("auto");
+  const [language, setLanguage] = useState<Language>("auto_mixed");
   const [accuracy, setAccuracy] = useState<Accuracy>("balanced");
   const [speakerCount, setSpeakerCount] = useState("auto");
   const [glossaryId, setGlossaryId] = useState("");
@@ -125,7 +125,7 @@ export function UploadPage() {
                 setLanguage(event.target.value as Language);
               }}
             >
-              <option value="auto">自动 / 混合</option>
+              <option value="auto_mixed">自动 / 混合</option>
               <option value="zh">中文</option>
               <option value="ja">日本語</option>
               <option value="en">English</option>

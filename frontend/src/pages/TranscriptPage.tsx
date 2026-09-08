@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import WaveSurfer from "wavesurfer.js";
 
 import {
@@ -12,6 +12,7 @@ import {
   type Transcript,
 } from "../api";
 import { type TextLayer, useWorkbench } from "../store";
+import { scheduleTranscriptSave, useTranscriptSaves } from "../transcriptSaves";
 
 function segmentText(segment: Segment, layer: TextLayer) {
   if (layer === "raw") return segment.raw_text;
@@ -68,6 +69,11 @@ export function TranscriptPage() {
   const setLowOnly = useWorkbench((state) => state.setLowConfidenceOnly);
   const wave = useRef<WaveSurfer | null>(null);
   const client = useQueryClient();
+  const [mediaDuration, setMediaDuration] = useState(1);
+  const onWaveReady = useCallback((instance: WaveSurfer) => {
+    wave.current = instance;
+    setMediaDuration(Math.max(1, Math.round(instance.getDuration() * 16000)));
+  }, []);
 
   const job = useQuery({
     queryKey: ["job", jobId],
@@ -76,6 +82,7 @@ export function TranscriptPage() {
   });
   const transcript = useQuery({
     queryKey: ["transcript", jobId, lowOnly],
+    placeholderData: (previous) => previous,
     queryFn: () =>
       api<Transcript>(
         `/jobs/${String(jobId)}/transcript?low_confidence_only=${String(lowOnly)}`,
@@ -101,12 +108,16 @@ export function TranscriptPage() {
     ]);
   };
   const patch = useMutation({
-    mutationFn: (value: {
+    mutationFn: ({
+      id,
+      ...value
+    }: {
+      id: string;
       version: number;
       text?: string;
       speaker_name?: string;
     }) =>
-      api<Segment>(`/segments/${String(selectedId)}`, {
+      api<Segment>(`/segments/${id}`, {
         method: "PATCH",
         body: JSON.stringify({ ...value, layer: "user" }),
       }),
@@ -149,11 +160,11 @@ export function TranscriptPage() {
   if (!job.data || !transcript.data)
     return <p className="loading">正在加载可追溯转录稿…</p>;
   const segments = transcript.data.segments;
-  const duration = Math.max(1, ...segments.map((item) => item.end_sample));
+  const duration = mediaDuration;
 
   function seek(segment: Segment) {
     selectSegment(segment.id);
-    wave.current?.seekTo(segment.start_sample / duration);
+    wave.current?.setTime(segment.start_sample / 16000);
   }
 
   return (
@@ -180,13 +191,7 @@ export function TranscriptPage() {
         </label>
       </header>
       <div className="panel timeline-panel">
-        <Waveform
-          duration={duration}
-          job={job.data}
-          onReady={(instance) => {
-            wave.current = instance;
-          }}
-        />
+        <Waveform duration={duration} job={job.data} onReady={onWaveReady} />
         <TimelineTrack
           label="说话人"
           segments={segments}
@@ -267,8 +272,9 @@ export function TranscriptPage() {
             history.mutate({ action, version });
           }}
           onPatch={(value) => {
-            patch.mutate(value);
+            if (detail.data) patch.mutate({ ...value, id: detail.data.id });
           }}
+          saveError={patch.error?.message}
           onRerun={() => {
             rerun.mutate();
           }}
@@ -319,6 +325,7 @@ function SegmentInspector({
   onRerun,
   adopt,
   savePending,
+  saveError,
 }: {
   segment: Segment | undefined;
   candidates: Candidate[];
@@ -331,38 +338,27 @@ function SegmentInspector({
   onRerun: () => void;
   adopt: (id: string) => void;
   savePending: boolean;
+  saveError: string | undefined;
 }) {
-  const [draft, setDraft] = useState("");
-  const [speaker, setSpeaker] = useState("");
-  const timer = useRef<number | null>(null);
-  useEffect(() => {
-    setDraft(segment?.user_text ?? segment?.smart_corrected_text ?? "");
-    setSpeaker(segment?.speaker_name ?? "");
-  }, [
-    segment?.id,
-    segment?.speaker_name,
-    segment?.smart_corrected_text,
-    segment?.user_text,
-  ]);
-  useEffect(
-    () => () => {
-      if (timer.current !== null) window.clearTimeout(timer.current);
-    },
-    [],
+  const client = useQueryClient();
+  const savedDraft = useTranscriptSaves((state) =>
+    segment ? state.drafts[segment.id] : undefined,
   );
+  const draft =
+    savedDraft?.status !== "saved" && savedDraft
+      ? savedDraft.text
+      : (segment?.user_text ?? segment?.smart_corrected_text ?? "");
+  const [speaker, setSpeaker] = useState("");
+  useEffect(() => {
+    setSpeaker(segment?.speaker_name ?? "");
+  }, [segment?.id, segment?.speaker_name]);
   if (!segment)
     return (
       <aside className="inspector panel">
         <p className="muted">选择一句以查看候选、质量与来源。</p>
       </aside>
     );
-  function scheduleSave(text: string) {
-    setDraft(text);
-    if (timer.current !== null) window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => {
-      onPatch({ version: segment?.version ?? 1, text });
-    }, 700);
-  }
+  const textBusy = savedDraft !== undefined && savedDraft.status !== "saved";
   return (
     <aside className="inspector panel">
       <div className="inspector-heading">
@@ -373,7 +369,15 @@ function SegmentInspector({
             {formatSamples(segment.end_sample)}
           </strong>
         </div>
-        <span>{savePending ? "保存中…" : "已自动保存"}</span>
+        <span>
+          {saveError || savedDraft?.status === "error"
+            ? "保存失败，草稿已保留"
+            : savePending || savedDraft?.status === "saving"
+              ? "保存中…"
+              : savedDraft?.status === "waiting"
+                ? "等待保存…"
+                : "已自动保存"}
+        </span>
       </div>
       <label>
         <span>说话人姓名</span>
@@ -385,6 +389,7 @@ function SegmentInspector({
             value={speaker}
           />
           <button
+            disabled={textBusy || savePending}
             onClick={() => {
               onPatch({ version: segment.version, speaker_name: speaker });
             }}
@@ -398,14 +403,16 @@ function SegmentInspector({
         <span>用户文本</span>
         <textarea
           onChange={(event) => {
-            scheduleSave(event.target.value);
+            scheduleTranscriptSave(segment, event.target.value, client);
           }}
           rows={7}
           value={draft}
         />
       </label>
+      {saveError && <p role="alert">{saveError}</p>}
       <div className="toolbar compact">
         <button
+          disabled={textBusy || savePending}
           onClick={() => {
             history("undo", segment.version);
           }}
@@ -414,6 +421,7 @@ function SegmentInspector({
           撤销
         </button>
         <button
+          disabled={textBusy || savePending}
           onClick={() => {
             history("redo", segment.version);
           }}
@@ -442,7 +450,9 @@ function SegmentInspector({
               {Object.keys(candidate.quality).join(" · ") || "无质量警告"}
             </small>
             <button
-              disabled={!candidate.valid || candidate.adopted}
+              disabled={
+                textBusy || savePending || !candidate.valid || candidate.adopted
+              }
               onClick={() => {
                 adopt(candidate.id);
               }}

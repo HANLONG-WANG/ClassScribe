@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from difflib import SequenceMatcher
 from enum import StrEnum
@@ -191,6 +192,7 @@ class GlobalSpeakerTracker:
         observations: tuple[EmbeddingObservation, ...],
         constraints: tuple[OverlapSpeakerConstraint, ...] = (),
         additional_local_labels: tuple[str, ...] = (),
+        timeline_evidence: Mapping[str, tuple[AudioSpan, ...]] | None = None,
     ) -> StitchWindowResult:
         if any(item.window_ordinal != window_ordinal for item in segments):
             raise ValueError("all segments must belong to the stitched window")
@@ -208,6 +210,7 @@ class GlobalSpeakerTracker:
                 segments,
                 observations,
                 minimum_quality=self.minimum_signal_quality,
+                timeline_spans=(timeline_evidence or {}).get(label, ()),
             )
             for label in local_labels
         }
@@ -514,6 +517,7 @@ def _aggregate_local(
     observations: tuple[EmbeddingObservation, ...],
     *,
     minimum_quality: float,
+    timeline_spans: tuple[AudioSpan, ...] = (),
 ) -> _LocalCentroid:
     matching_segments = tuple(item for item in segments if item.speaker_local == label)
     matching_observations = tuple(
@@ -523,8 +527,10 @@ def _aggregate_local(
         and not item.overlap
         and item.signal_quality >= minimum_quality
     )
-    all_spans = tuple(item.span for item in matching_segments) or tuple(
-        item.span for item in matching_observations
+    all_spans = (
+        tuple(item.span for item in matching_segments)
+        + tuple(item.span for item in matching_observations)
+        + timeline_spans
     )
     if not all_spans:
         raise ValueError(f"speaker {label} has no timeline evidence")

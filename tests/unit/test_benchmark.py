@@ -619,3 +619,14 @@ def test_phase12_acceptance_requires_real_complete_external_evidence() -> None:
     assert incomplete.status == "incomplete"
     assert not incomplete.checks["desktop_matrix"]
     assert not incomplete.checks["manifest_hash_matches"]
+
+
+def test_isotonic_ties_are_order_independent() -> None:
+    from classscribe.benchmark.calibration import CalibrationSample, _fit_isotonic
+
+    samples = (CalibrationSample("train", 0.5, 0),) * 2
+    assert (
+        _fit_isotonic(samples, (0.0, 1.0))
+        == _fit_isotonic(samples, (1.0, 0.0))
+        == {"thresholds": [0.5], "values": [0.5]}
+    )

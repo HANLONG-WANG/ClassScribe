@@ -150,3 +150,24 @@ def test_structure_overlap_segment_cannot_claim_exclusive_speaker() -> None:
     )
     assert result.segments[0].overlap is True
     assert result.segments[0].exclusive is False
+
+
+def test_task_speaker_count_overrides_structure_policy() -> None:
+    from classscribe.config import ClassroomConfig
+    from classscribe.structure.models import speaker_policy_payload, task_speaker_config
+
+    base = ClassroomConfig()
+    for choice, expected, low, high in (
+        ("1", 1, 1, 1),
+        ("2", 2, 2, 2),
+        ("3-4", "auto", 3, 4),
+        ("5+", "auto", 5, 12),
+        ("auto", "auto", 1, 12),
+    ):
+        policy = speaker_policy_payload(task_speaker_config(base, choice))
+        assert (policy["expected_speakers"], policy["prior_min"], policy["max_speakers"]) == (
+            expected,
+            low,
+            high,
+        )
+    assert base.expected_speakers == "auto"

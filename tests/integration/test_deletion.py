@@ -104,3 +104,35 @@ def test_clear_all_requires_exact_confirmation_and_stays_within_app_roots(tmp_pa
     assert sentinel.read_text(encoding="utf-8") == "keep"
     persistent_roots = (paths.config, paths.data, paths.cache, paths.state)
     assert all(not any(root.iterdir()) for root in persistent_roots)
+
+
+def test_recording_directory_is_shared_and_restored_on_rollback(
+    database: tuple[Engine, sessionmaker[Session], Path], tmp_path: Path
+) -> None:
+    _, factory, _ = database
+    paths = AppPaths.from_environment({}, home=tmp_path / "home")
+    paths.ensure()
+    first, _, _, _ = create_job_data(paths, factory)
+    with factory.begin() as session:
+        recording_id = session.get_one(Job, first).recording_id
+        second = Job(recording_id=recording_id, language_mode=LanguageMode.ENGLISH, profile_id="en")
+        session.add(second)
+        session.flush()
+        second_id = second.id
+    root = paths.data_path("recordings", recording_id)
+    root.mkdir(parents=True)
+    (root / "source.upload").write_bytes(b"original")
+    (root / "master.wav").write_bytes(b"canonical")
+    service = DeletionService(paths)
+    with factory.begin() as session:
+        service.delete_job(session, first)
+    assert root.exists()
+    with pytest.raises(RuntimeError), factory.begin() as session:
+        service.delete_job(session, second_id)
+        raise RuntimeError("transaction failed")
+    assert (root / "source.upload").read_bytes() == b"original"
+    with factory.begin() as session:
+        assert session.get(Job, second_id) is not None
+        service.delete_job(session, second_id)
+    assert not root.exists()
+    assert not list(root.parent.glob(".delete-*"))

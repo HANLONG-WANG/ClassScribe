@@ -59,7 +59,17 @@ def build_subtitle_cues(
     for segment in segments:
         text, _ = segment.text_for(layer)
         tokens = segment.tokens_for(layer)
+        if not text.strip():
+            continue
         if not tokens:
+            cues.append(
+                SubtitleCue(
+                    segment.span.start_sample,
+                    segment.span.end_sample,
+                    _wrap_text(text, segment.language),
+                    (segment.segment_id,),
+                )
+            )
             continue
         units = _protected_units(tokens)
         maximum = 16 if segment.language == "en" else 36

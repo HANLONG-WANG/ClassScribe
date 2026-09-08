@@ -221,6 +221,16 @@ class StructurePipeline:
                 observations,
                 constraints,
                 tuple(sorted(set(pyannote_to_structure.values()))),
+                timeline_evidence={
+                    mapped: tuple(
+                        item.span
+                        for item in (*pyannote.regular_spans, *pyannote.exclusive_spans)
+                        if pyannote_to_structure.get(item.speaker_local) == mapped
+                    )
+                    for mapped in set(pyannote_to_structure.values())
+                }
+                if pyannote is not None
+                else {},
             )
             speaker_spans = (
                 speaker_timeline_from_diarization(pyannote, pyannote_to_structure, stitched.mapping)

@@ -334,3 +334,25 @@ def test_all_required_indexes_are_present(
         "ix_asr_candidates_active",
         "ix_asr_candidates_model",
     }
+
+
+def test_production_upgrade_uses_authoritative_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from classscribe.db.session import create_sqlite_engine, upgrade_schema
+
+    path = tmp_path / "old.sqlite3"
+    config = Config()
+    config.set_main_option(
+        "script_location", str(Path("backend/classscribe/db/migrations").resolve())
+    )
+    config.attributes["database_url"] = f"sqlite:///{path}"
+    command.upgrade(config, "eeec80ee63cf")
+    monkeypatch.setenv("CLASSSCRIBE_DATABASE_URL", f"sqlite:///{tmp_path / 'wrong.sqlite3'}")
+    engine = create_sqlite_engine(path)
+    upgrade_schema(engine)
+    assert "options_json" in {c["name"] for c in inspect(engine).get_columns("jobs")}
+    assert "is_active" in {c["name"] for c in inspect(engine).get_columns("transcript_segments")}
+    assert not (tmp_path / "wrong.sqlite3").exists()
+    upgrade_schema(engine)
+    engine.dispose()

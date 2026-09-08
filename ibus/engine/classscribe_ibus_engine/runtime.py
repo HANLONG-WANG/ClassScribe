@@ -68,7 +68,17 @@ def run_ibus(socket_path: Path) -> None:
             self.controller = EngineController(DictationIPCClient(socket_path), Bridge(self))
             self._property_values: dict[str, str | bool] = {}
             self._register_properties(IBus)
+            self.controller.focus_out()
             GLib.timeout_add(75, self.controller.poll)
+
+        def do_focus_in(self) -> None:
+            self.controller.focus_in()
+
+        def do_focus_out(self) -> None:
+            self.controller.focus_out()
+
+        def do_disable(self) -> None:
+            self.controller.focus_out()
 
         def do_process_key_event(self, keyval: int, keycode: int, state: int) -> bool:
             del keycode

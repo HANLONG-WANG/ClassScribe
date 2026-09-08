@@ -143,3 +143,33 @@ def test_four_text_layers_terms_punctuation_timing_and_audit_are_persisted(
             .where(DecisionEvent.segment_id == segment_id)
         )
         assert event_count == 3
+
+
+def test_document_suggestion_preserves_confirmed_term(
+    database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    from classscribe.terminology.models import ConfirmationStatus, TermSource
+
+    _, sessions, _ = database
+    repository = TerminologyRepository(sessions)
+    term = CourseTerm("OpenAI", "reading", ("alias",), language="en", weight=0.9)
+    glossary_id = repository.store_course(CourseConfig("ai", "en", "AI", (), (term,)))
+    suggestion = CourseTerm(
+        "OpenAI",
+        "OpenAI",
+        language="en",
+        weight=0.2,
+        confirmation=ConfirmationStatus.SUGGESTED,
+        source=TermSource.AUTOMATIC_SUGGESTION,
+    )
+    assert repository.record_suggestions(glossary_id, (suggestion,), default_language="en") == 0
+    with sessions() as session:
+        record = session.scalar(select(GlossaryTerm).where(GlossaryTerm.glossary_id == glossary_id))
+        assert record is not None
+        assert (record.reading, record.aliases, record.weight, record.user_confirmed) == (
+            "reading",
+            ["alias"],
+            0.9,
+            True,
+        )
+        assert record.source == term.source.value

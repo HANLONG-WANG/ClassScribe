@@ -132,11 +132,12 @@ class StablePrefix:
     ) -> tuple[TimedToken, ...]:
         combined = merge_timed_tokens(self.committed, _refresh_pending(self.pending, candidates))
         boundary = max(0, absolute_sample - self.stable_after_samples)
-        newly_stable = tuple(
-            item
-            for item in combined[len(self.committed) :]
-            if item.stable and item.end_sample <= boundary
-        )
+        prefix: list[TimedToken] = []
+        for item in combined[len(self.committed) :]:
+            if not item.stable or item.end_sample > boundary:
+                break
+            prefix.append(item)
+        newly_stable = tuple(prefix)
         self.committed = merge_timed_tokens(self.committed, newly_stable)
         # An old token that the model still marks unstable must stay pending;
         # crossing the time horizon alone is never permission to discard it.

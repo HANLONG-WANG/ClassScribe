@@ -6,8 +6,9 @@ import shutil
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.orm import Session
 
 from classscribe.db.models import Job, Recording
@@ -77,12 +78,36 @@ class DeletionService:
         other_jobs = session.scalar(
             select(func.count()).select_from(Job).where(Job.recording_id == job.recording_id)
         )
+        roots = [job_root]
         if recording is not None and other_jobs == 0:
+            parse_uuid(recording.id, field="recording_id")
+            roots.append(self.paths.data_path("recordings", recording.id))
             session.delete(recording)
-        removed = (str(job_root),) if job_root.exists() else ()
-        if job_root.exists():
-            shutil.rmtree(job_root)
-        return DeletionReport(DeletionLevel.JOB, removed, ())
+        staged: list[tuple[Path, Path]] = []
+
+        def restore(_session: Session) -> None:
+            for original, temporary in reversed(staged):
+                if temporary.exists():
+                    temporary.rename(original)
+            staged.clear()
+
+        def cleanup(_session: Session) -> None:
+            for _, temporary in staged:
+                shutil.rmtree(temporary)
+            staged.clear()
+
+        event.listen(session, "after_commit", cleanup, once=True)
+        event.listen(session, "after_rollback", restore, once=True)
+        try:
+            for root in roots:
+                if root.exists():
+                    temporary = root.with_name(f".delete-{uuid4()}")
+                    root.rename(temporary)
+                    staged.append((root, temporary))
+        except OSError:
+            restore(session)
+            raise
+        return DeletionReport(DeletionLevel.JOB, tuple(str(root) for root, _ in staged), ())
 
     def clear_all(self, *, confirmation: str) -> DeletionReport:
         if confirmation != DELETE_ALL_CONFIRMATION:

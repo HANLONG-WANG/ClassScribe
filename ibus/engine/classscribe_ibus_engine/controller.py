@@ -49,6 +49,10 @@ class EngineController:
         self.revision = 0
         self.state = DictationState.IDLE
         self._pressed = False
+        self._subscribed = False
+        self._instance_id: str | None = None
+        self._session_id: str | None = None
+        self._focused = True
 
     def handle_key(self, keyval: int, *, released: bool = False) -> bool:
         if keyval == ESCAPE_KEY and self.state is not DictationState.IDLE and not released:
@@ -76,7 +80,8 @@ class EngineController:
         return True
 
     def poll(self) -> bool:
-        self._command("status")
+        if self._focused:
+            self._command("status")
         return True
 
     def set_property(self, key: str, value: str | bool) -> None:
@@ -100,10 +105,50 @@ class EngineController:
         updated = DictationConfig.from_mapping(values)
         self._command("configure", {"config": updated.as_dict()})
 
+    def focus_in(self) -> None:
+        self._focused = True
+        self._subscribed = False
+        self._session_id = None
+        self.poll()
+
+    def focus_out(self) -> None:
+        self._focused = False
+        if self._session_id is not None:
+            self._command("cancel")
+        self._session_id = None
+        self._subscribed = False
+        self._pressed = False
+        self.bridge.update_preedit("", 0)
+        self.bridge.update_lookup((), False)
+
+    def _synchronize(self, response: Mapping[str, Any]) -> None:
+        current = response.get("current")
+        if not isinstance(current, Mapping):
+            raise ValueError("dictation snapshot is missing")
+        status = DictationStatus.from_mapping(current)
+        self._instance_id = str(response.get("instance_id", "legacy"))
+        self.revision = status.revision
+        self.state = status.state
+        self._session_id = None
+        self._subscribed = True
+        self.bridge.update_preedit("", 0)
+        self.bridge.update_lookup((), False)
+        if status.properties:
+            self.bridge.update_properties(status.properties)
+
     def _command(self, action: str, params: Mapping[str, object] | None = None) -> None:
-        payload = {"since_revision": self.revision, **dict(params or {})}
         try:
+            if not self._subscribed or action in {"begin", "toggle"}:
+                snapshot = self.client.request("status", {"since_revision": self.revision})
+                if (
+                    not self._subscribed
+                    or str(snapshot.get("instance_id", "legacy")) != self._instance_id
+                ):
+                    self._synchronize(snapshot)
+            payload = {"since_revision": self.revision, **dict(params or {})}
             response = self.client.request(action, payload)
+            if str(response.get("instance_id", "legacy")) != self._instance_id:
+                self._synchronize(response)
             raw_config = response.get("config")
             if isinstance(raw_config, Mapping):
                 self.config = DictationConfig.from_mapping(raw_config)
@@ -123,7 +168,6 @@ class EngineController:
                 self._apply(DictationStatus.from_mapping(value))
         except Exception as exc:
             self.state = DictationState.IDLE
-            self._pressed = False
             self.bridge.update_preedit("", 0)
             self.bridge.update_lookup((), False)
             self.bridge.show_status(f"ClassScribe unavailable: {type(exc).__name__}")
@@ -133,6 +177,11 @@ class EngineController:
             return
         self.revision = status.revision
         self.state = status.state
+        if status.state is DictationState.ARMING and self._focused:
+            self._session_id = status.session_id
+        owns_session = (
+            self._focused and self._session_id is not None and status.session_id == self._session_id
+        )
         if status.properties:
             self.bridge.update_properties(status.properties)
         if status.state in {DictationState.ERROR, DictationState.IDLE} and status.message:
@@ -144,22 +193,30 @@ class EngineController:
         if status.state is DictationState.ERROR:
             self.bridge.update_preedit("", 0)
             self.bridge.update_lookup((), False)
-            self._pressed = False
+            self._session_id = None
             return
-        if status.commit_text and status.state in {
-            DictationState.INTERIM_UPDATE,
-            DictationState.LISTENING,
-            DictationState.COMMITTING,
-        }:
+        if (
+            owns_session
+            and status.commit_text
+            and status.state
+            in {
+                DictationState.INTERIM_UPDATE,
+                DictationState.LISTENING,
+                DictationState.COMMITTING,
+            }
+        ):
             self.bridge.commit(status.commit_text)
-        if status.state is DictationState.CANDIDATE_SELECT:
+        if owns_session and status.state is DictationState.CANDIDATE_SELECT:
             self.bridge.update_lookup(status.candidates, True)
         elif status.state is DictationState.COMMITTING:
             self.bridge.update_lookup((), False)
             self.bridge.update_preedit("", 0)
-        elif status.state in {DictationState.LISTENING, DictationState.INTERIM_UPDATE}:
+        elif owns_session and status.state in {
+            DictationState.LISTENING,
+            DictationState.INTERIM_UPDATE,
+        }:
             self.bridge.update_preedit(status.preedit, status.stable_characters)
         elif status.state is DictationState.IDLE:
             self.bridge.update_preedit("", 0)
             self.bridge.update_lookup((), False)
-            self._pressed = False
+            self._session_id = None

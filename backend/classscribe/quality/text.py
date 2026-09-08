@@ -11,6 +11,11 @@ _WORD = re.compile(r"[A-Za-z]+(?:['\u2019-][A-Za-z]+)*|\d+(?:[.,]\d+)?|[^\W_]", 
 
 
 def tokenize_for_language(text: str, language: str) -> tuple[str, ...]:
+    return tuple(token.casefold() for token in surface_tokens(text, language))
+
+
+def surface_tokens(text: str, language: str) -> tuple[str, ...]:
+    """Preserve display spelling while comparison callers normalize separately."""
     normalized = unicodedata.normalize("NFKC", text)
     if language in {"zh", "ja"}:
         result: list[str] = []
@@ -18,19 +23,19 @@ def tokenize_for_language(text: str, language: str) -> tuple[str, ...]:
         for character in normalized:
             if _CJK_OR_KANA.fullmatch(character):
                 if latin_buffer:
-                    result.append("".join(latin_buffer).casefold())
+                    result.append("".join(latin_buffer))
                     latin_buffer.clear()
                 result.append(character)
             elif character.isalnum() or character in {"'", "\u2019", "-", "."}:
                 latin_buffer.append(character)
             elif latin_buffer:
-                result.append("".join(latin_buffer).casefold())
+                result.append("".join(latin_buffer))
                 latin_buffer.clear()
         if latin_buffer:
-            result.append("".join(latin_buffer).casefold())
+            result.append("".join(latin_buffer))
         return tuple(token for token in result if token)
     if language == "en":
-        return tuple(match.group(0).casefold() for match in _WORD.finditer(normalized))
+        return tuple(match.group(0) for match in _WORD.finditer(normalized))
     raise ValueError("language must be zh, ja, or en")
 
 

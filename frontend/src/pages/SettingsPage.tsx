@@ -6,12 +6,19 @@ import { api, authHeaders, type ApiObject, setApiToken } from "../api";
 export function SettingsPage() {
   const client = useQueryClient();
   const [token, setToken] = useState("");
-  const [retentionDays, setRetentionDays] = useState(30);
-  const [saveDictationAudio, setSaveDictationAudio] = useState(false);
+  const [retentionEdit, setRetentionDays] = useState<number | undefined>();
+  const [audioEdit, setSaveDictationAudio] = useState<boolean | undefined>();
   const settings = useQuery({
     queryKey: ["settings"],
     queryFn: () => api<Record<string, ApiObject>>("/settings"),
   });
+  const retentionDays =
+    retentionEdit ??
+    (typeof settings.data?.retention?.derived_days === "number"
+      ? settings.data.retention.derived_days
+      : 30);
+  const saveDictationAudio =
+    audioEdit ?? settings.data?.ibus?.save_audio === true;
   const diagnostics = useQuery({
     queryKey: ["diagnostics"],
     queryFn: () => api<ApiObject>("/diagnostics"),
@@ -22,12 +29,30 @@ export function SettingsPage() {
         method: "PUT",
         body: JSON.stringify({
           values: {
-            retention: { derived_days: retentionDays },
-            ibus: { save_audio: saveDictationAudio },
+            ...(retentionEdit !== undefined
+              ? {
+                  retention: {
+                    ...settings.data?.retention,
+                    derived_days: retentionDays,
+                  },
+                }
+              : {}),
+            ...(audioEdit !== undefined
+              ? {
+                  ibus: {
+                    ...settings.data?.ibus,
+                    save_audio: saveDictationAudio,
+                  },
+                }
+              : {}),
           },
         }),
       }),
-    onSuccess: (value) => client.setQueryData(["settings"], value),
+    onSuccess: (value) => {
+      client.setQueryData(["settings"], value);
+      setRetentionDays(undefined);
+      setSaveDictationAudio(undefined);
+    },
   });
 
   async function downloadDiagnostics() {
@@ -82,6 +107,7 @@ export function SettingsPage() {
           <label>
             <span>派生缓存保留天数</span>
             <input
+              disabled={!settings.data || save.isPending}
               min="1"
               onChange={(event) => {
                 setRetentionDays(event.target.valueAsNumber);
@@ -92,6 +118,7 @@ export function SettingsPage() {
           </label>
           <label className="toggle-line">
             <input
+              disabled={!settings.data || save.isPending}
               checked={saveDictationAudio}
               onChange={(event) => {
                 setSaveDictationAudio(event.target.checked);
@@ -102,6 +129,12 @@ export function SettingsPage() {
           </label>
           <button
             className="primary-button"
+            disabled={
+              !settings.data ||
+              save.isPending ||
+              !Number.isInteger(retentionDays) ||
+              retentionDays < 1
+            }
             onClick={() => {
               save.mutate();
             }}
@@ -109,6 +142,9 @@ export function SettingsPage() {
           >
             保存设置
           </button>
+          {save.error && <p role="alert">{save.error.message}</p>}
+          {settings.error && <p role="alert">{settings.error.message}</p>}
+          {save.isSuccess && <p role="status">设置已保存</p>}
           <pre>{JSON.stringify(settings.data ?? {}, null, 2)}</pre>
         </article>
         <article className="panel diagnostic-panel">

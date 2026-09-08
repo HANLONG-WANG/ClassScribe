@@ -7,7 +7,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event, text
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import Engine, create_engine, event, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from classscribe.db.base import Base
@@ -32,6 +34,30 @@ def create_sqlite_engine(path: Path, *, echo: bool = False) -> Engine:
 
 def create_schema(engine: Engine) -> None:
     Base.metadata.create_all(engine)
+
+
+def upgrade_schema(engine: Engine) -> None:
+    """Upgrade the authoritative database, including legacy unversioned current schemas."""
+    config = Config()
+    config.set_main_option("script_location", str(Path(__file__).parent / "migrations"))
+    config.attributes["database_url"] = engine.url.render_as_string(hide_password=False)
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if tables and "alembic_version" not in tables:
+        # Older core releases created the latest schema without recording a revision.
+        # Only stamp a schema that has every current table and column; never guess
+        # the version of a partially upgraded database.
+        for table in Base.metadata.sorted_tables:
+            if table.name not in tables or {column.name for column in table.columns} != {
+                column["name"] for column in inspector.get_columns(table.name)
+            }:
+                raise RuntimeError(
+                    "Unversioned database schema is incompatible. Back up classscribe.sqlite3 "
+                    "and establish its Alembic revision before upgrading; "
+                    "the database was not modified."
+                )
+        command.stamp(config, "head")
+    command.upgrade(config, "head")
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:

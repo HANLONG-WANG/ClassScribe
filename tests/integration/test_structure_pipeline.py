@@ -310,3 +310,33 @@ def test_worker_failures_are_isolated_to_one_window_and_leave_retryable_coarse_s
     assert result.windows[0].segments[0].provenance["retryable"] is True
     assert result.windows[1].path is WindowStructurePath.MOSS
     assert result.windows[1].errors == ()
+
+
+def test_overlap_only_speakers_without_embeddings_keep_anonymous_identity(tmp_path: Path) -> None:
+    async def moss(request: RPCRequest) -> RPCResponse:
+        return _moss_response(request)
+
+    async def diarization(request: RPCRequest) -> RPCResponse:
+        span = {"start_sample": 0, "end_sample": 8 * SAMPLE_RATE}
+        return RPCResponse(
+            request.request_id,
+            request.job_id,
+            True,
+            "pyannote_community_1",
+            PYANNOTE_REVISION,
+            segments=({**span, "speaker_local": "A"}, {**span, "speaker_local": "B"}),
+            result={"exclusive_segments": [{**span, "speaker_local": "A"}], "embeddings": []},
+        )
+
+    result = asyncio.run(
+        StructurePipeline(load_config(environment={}).classroom, moss, diarization).process(
+            job_id="overlap",
+            audio_path=tmp_path / "a.wav",
+            windows=make_structure_windows(8 * SAMPLE_RATE),
+            speech_spans=(AudioSpan(0, 8 * SAMPLE_RATE),),
+        )
+    )
+    window = result.windows[0]
+    assert len(set(window.speaker_mapping.values())) == 2
+    assert all(span.speaker_global for span in window.speaker_spans)
+    assert any(span.overlap for span in window.speaker_spans)

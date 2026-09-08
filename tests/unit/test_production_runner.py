@@ -160,3 +160,33 @@ def test_auto_best_consumes_only_a_fresh_local_gold_profile(
     with sessions() as session:
         selected = value._primary_entry({"model_selection": "auto_best"}, "ja", session)
     assert selected.id == granite.id
+
+
+def test_production_body_routing_excludes_structure_model(tmp_path: Path) -> None:
+    value = runner(tmp_path, {"moss_td_0_9b", "firered_vad"})
+    assert value._primary_entry({}, "zh").id != "moss_td_0_9b"
+    assert not value._fallback_entries({}, "zh", "qwen3_asr_1_7b")
+    with pytest.raises(ClassScribeError, match="no compatible"):
+        value._primary_entry({"primary_model_id": "moss_td_0_9b"}, "zh")
+
+
+def test_english_coarse_timing_preserves_words_in_subtitles() -> None:
+    from classscribe.classroom.production import _coarse_timing
+    from classscribe.exports.models import ExportLayer, ExportSegment, ExportToken
+    from classscribe.exports.subtitles import build_subtitle_cues
+    from classscribe.timeline import AudioSpan
+
+    span = AudioSpan(0, 32000)
+    timing = _coarse_timing("Hello NASA!", span, "en")
+    assert [token.text for token in timing.tokens] == ["Hello", "NASA!"]
+    segment = ExportSegment(
+        "s",
+        span,
+        "en",
+        "Hello NASA!",
+        "Hello NASA!",
+        "Hello NASA!",
+        None,
+        tuple(ExportToken(token.text, token.span) for token in timing.tokens),
+    )
+    assert build_subtitle_cues((segment,), ExportLayer.FAITHFUL)[0].lines == ("Hello NASA!",)

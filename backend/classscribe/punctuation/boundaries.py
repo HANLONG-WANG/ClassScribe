@@ -13,16 +13,24 @@ def apply_boundary_marks(text: str, marks: Mapping[int, str]) -> str:
 
     if any(index < 0 for index in marks):
         raise ValueError("boundary index must be non-negative")
-    output: list[str] = [marks[0]] if 0 in marks else []
+    # Existing punctuation wins over inferred marks at the same boundary.
+    existing: set[int] = set()
+    ordinal = 0
+    for character in text:
+        if not is_punctuation_or_spacing(character):
+            ordinal += 1
+        elif not character.isspace():
+            existing.add(ordinal)
+    if any(index > ordinal for index in marks):
+        raise ValueError("boundary index exceeds the input character sequence")
+    output: list[str] = [marks[0]] if 0 in marks and 0 not in existing else []
     ordinal = 0
     for character in text:
         output.append(character)
         if not is_punctuation_or_spacing(character):
             ordinal += 1
-            if ordinal in marks:
+            if ordinal in marks and ordinal not in existing:
                 output.append(marks[ordinal])
-    if any(index > ordinal for index in marks):
-        raise ValueError("boundary index exceeds the input character sequence")
     return "".join(output)
 
 

@@ -24,7 +24,8 @@ def default_dictation_socket(environment: Mapping[str, str] | None = None) -> Pa
         base = Path(state).expanduser() if state else Path.home() / ".local" / "state"
     if not base.is_absolute():
         raise ValueError("dictation runtime base must be absolute")
-    return base / "classscribe" / "dictationd.sock"
+    directory = base / "classscribe" if runtime else base / "classscribe" / "run"
+    return directory / "dictationd.sock"
 
 
 class DictationIPCError(RuntimeError):

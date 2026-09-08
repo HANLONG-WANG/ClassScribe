@@ -105,3 +105,34 @@ def test_cleanup_failure_fixture_does_not_expose_token(
         assert token not in str(workspace)
 
     assert token not in str(failure.value)
+
+
+@pytest.mark.parametrize("interruption", [KeyboardInterrupt, SystemExit])
+def test_workspace_cleans_up_on_interruption(
+    tmp_path: Path, interruption: type[BaseException]
+) -> None:
+    with (
+        pytest.raises(interruption),
+        private_temporary_workspace(token=None, parent=tmp_path) as workspace,
+    ):
+        (workspace / "payload").write_text("partial download")
+        raise interruption()
+    assert not workspace.exists()
+
+
+def test_cleanup_error_does_not_replace_keyboard_interrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = "hf_private_cleanup_secret"
+
+    def fail_cleanup(_path: Path) -> None:
+        raise OSError(token)
+
+    monkeypatch.setattr("classscribe_manifest_tool.workspace.shutil.rmtree", fail_cleanup)
+    with (
+        pytest.raises(KeyboardInterrupt) as failure,
+        private_temporary_workspace(token=token, parent=tmp_path),
+    ):
+        raise KeyboardInterrupt()
+    assert token not in str(failure.value.__notes__)
+    assert "cleanup failed" in str(failure.value.__notes__)

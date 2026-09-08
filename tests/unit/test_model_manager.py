@@ -508,9 +508,7 @@ def test_manifest_component_source_is_frozen_round_trippable_and_audited(
         write_health_wav(tmp_path / "health.wav"),
     )
     audit = json.loads((installed / AUDIT_FILENAME).read_text(encoding="utf-8"))
-    assert audit["manifest"]["component_sources"][0]["repository"] == (
-        "upstream/component"
-    )
+    assert audit["manifest"]["component_sources"][0]["repository"] == ("upstream/component")
 
 
 @pytest.mark.parametrize(
@@ -686,3 +684,59 @@ def test_model_control_directories_reject_symlinks(tmp_path: Path) -> None:
             health_check=healthy,
         )
     assert not list(outside.iterdir())
+
+
+def test_concurrent_install_does_not_delete_successful_revision(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    manager = ModelManager(tmp_path / "models")
+    spec, content = manifest()
+    tokens = [manager.request_user_install(spec).confirmation_token for _ in range(2)]
+    audio = write_health_wav(tmp_path / "health.wav")
+    barrier = Barrier(2)
+
+    def install(token: str) -> bool:
+        barrier.wait()
+        try:
+            manager.install_confirmed(
+                token, downloader=FakeDownloader(content), health_audio=audio, health_check=healthy
+            )
+            return True
+        except ClassScribeError:
+            return False
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(install, tokens)) == [False, True]
+    assert manager.resolve_for_runtime(spec.model_id).is_dir()
+
+
+@pytest.mark.parametrize("damage", ["payload", "health", "identity"])
+def test_invalid_rollback_preserves_active_revision(tmp_path: Path, damage: str) -> None:
+    manager = ModelManager(tmp_path / "models")
+    audio = write_health_wav(tmp_path / "health.wav")
+    for revision in (REVISION_A, REVISION_B):
+        spec, content = manifest(revision)
+        manager.install_confirmed(
+            manager.request_user_install(spec).confirmation_token,
+            downloader=FakeDownloader(content),
+            health_audio=audio,
+            health_check=healthy,
+        )
+    old = manager.root / "moss-test" / "revisions" / REVISION_A
+    if damage == "payload":
+        (old / "weights/model.bin").write_bytes(b"broken")
+    else:
+        audit_path = old / AUDIT_FILENAME
+        audit = json.loads(audit_path.read_text())
+        if damage == "health":
+            del audit["health_check"]
+        else:
+            audit["manifest"]["revision"] = REVISION_B
+        audit_path.write_text(json.dumps(audit))
+    with pytest.raises(ClassScribeError):
+        manager.rollback("moss-test", REVISION_A)
+    assert manager.resolve_for_runtime("moss-test").name == REVISION_B
+    manager._activate("moss-test", REVISION_A)
+    with pytest.raises(ClassScribeError):
+        manager.resolve_for_runtime("moss-test")

@@ -90,6 +90,7 @@ def test_core_cli_health_config_and_server_paths(
 
     assert cli.main([]) == 0
     assert calls["token_path"] == paths.config / "api-token"
+    assert calls["app"].pop("config").server.port == calls["run"][1]["port"]
     assert calls["app"] == {
         "api_token": "token",
         "enable_scheduler_ipc": True,
@@ -99,3 +100,26 @@ def test_core_cli_health_config_and_server_paths(
     assert calls["run"][0] == "application"
     assert calls["run"][1]["host"] == "127.0.0.1"
     assert calls["run"][1]["access_log"] is False
+
+
+def test_cli_passes_selected_config_to_application(tmp_path: Path, monkeypatch: Any) -> None:
+    import classscribe.cli as cli
+
+    paths = AppPaths.from_environment({}, home=tmp_path)
+    paths.ensure()
+    (paths.config / "config.yaml").write_text("config_version: 1\nserver:\n  port: 8765\n")
+    custom = tmp_path / "custom.yaml"
+    custom.write_text("config_version: 1\nserver:\n  port: 8766\n")
+    monkeypatch.setattr("classscribe.cli.AppPaths.from_environment", lambda: paths)
+    monkeypatch.setattr(cli, "resource_path", lambda _: tmp_path)
+    monkeypatch.setattr(cli, "create_app", lambda **kwargs: kwargs["config"])
+    seen: list[int] = []
+
+    def run(config: Any, **kwargs: Any) -> None:
+        assert config.server.port == kwargs["port"]
+        seen.append(config.server.port)
+
+    monkeypatch.setattr("classscribe.cli.uvicorn.run", run)
+    cli.main([])
+    cli.main(["--config", str(custom)])
+    assert seen == [8765, 8766]

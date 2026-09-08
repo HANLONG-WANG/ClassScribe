@@ -25,6 +25,10 @@ class ASRContractError(ValueError):
     """A registry entry, request, or response violated the body-ASR contract."""
 
 
+def is_structure_model(entry: ModelEntry) -> bool:
+    return "diarization" in entry.tasks and "timestamps" in entry.tasks
+
+
 class CandidateRole(StrEnum):
     PRIMARY = "primary"
     SECONDARY = "secondary_review"

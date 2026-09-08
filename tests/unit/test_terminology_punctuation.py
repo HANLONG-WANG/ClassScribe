@@ -199,3 +199,11 @@ def test_three_language_punctuation_routing_rejects_changed_text_and_protects_na
 def test_english_case_sensitive_wer_and_punctuation_f1_are_reported_separately() -> None:
     assert case_sensitive_wer("Use CPU now", "use CPU now") == pytest.approx(1 / 3)
     assert punctuation_f1("Hello, world!", "Hello world!") == pytest.approx(2 / 3)
+
+
+def test_existing_punctuation_wins_at_inferred_boundary() -> None:
+    from classscribe.punctuation.boundaries import apply_boundary_marks
+
+    assert apply_boundary_marks("長い文章です。", {6: "。"}) == "長い文章です。"
+    assert apply_boundary_marks("你好\uff0c世界。", {2: "\uff0c", 4: "。"}) == "你好\uff0c世界。"
+    assert apply_boundary_marks("Hello! World", {5: "."}) == "Hello! World"

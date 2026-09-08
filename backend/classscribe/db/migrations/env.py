@@ -41,7 +41,9 @@ def include_object(
 
 
 def database_url() -> str:
-    url = os.environ.get("CLASSSCRIBE_DATABASE_URL", config.get_main_option("sqlalchemy.url"))
+    url = config.attributes.get("database_url") or os.environ.get(
+        "CLASSSCRIBE_DATABASE_URL", config.get_main_option("sqlalchemy.url")
+    )
     if not url:
         raise RuntimeError("a local SQLAlchemy database URL is required")
     return url

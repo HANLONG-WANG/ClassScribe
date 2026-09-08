@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -27,12 +29,14 @@ from classscribe.alignment import (
     parse_alignment_response,
     select_canonical_timing,
 )
+from classscribe.alignment.validation import validate_timing
 from classscribe.asr.models import (
     ASRCandidateEvidence,
     ASRTokenEvidence,
     CandidateRole,
     PronunciationHint,
     build_asr_request,
+    is_structure_model,
     parse_asr_response,
 )
 from classscribe.audio.lid import ROUTABLE_LANGUAGES, LanguageRouter, LIDObservation
@@ -98,7 +102,9 @@ from classscribe.quality import (
     compare_language_candidates,
     merge_retry_pieces,
 )
+from classscribe.quality.text import surface_tokens
 from classscribe.recovery import atomic_write_text
+from classscribe.structure.models import task_speaker_config
 from classscribe.structure.pipeline import StructurePipeline
 from classscribe.terminology import (
     ConfirmationStatus,
@@ -401,7 +407,7 @@ class ProductionStageRunner:
 
         result = asyncio.run(
             StructurePipeline(
-                self.config.classroom,
+                task_speaker_config(self.config.classroom, job.options_json.get("speaker_count")),
                 moss_call,
                 pyannote_call,
             ).process(
@@ -807,6 +813,93 @@ class ProductionStageRunner:
             )
         )
 
+    def _native_timing(
+        self,
+        session: Session,
+        segment: TranscriptSegment,
+        text: str,
+        voiced: tuple[AudioSpan, ...],
+    ) -> TimingEvidence | None:
+        for candidate in session.scalars(
+            select(ASRCandidate)
+            .where(
+                ASRCandidate.segment_id == segment.id,
+                ASRCandidate.is_valid.is_(True),
+                ASRCandidate.deleted_at.is_(None),
+            )
+            .order_by(ASRCandidate.is_adopted.desc(), ASRCandidate.created_at.desc())
+        ):
+            rows = tuple(
+                session.scalars(
+                    select(TokenSpan)
+                    .where(
+                        TokenSpan.candidate_id == candidate.id,
+                    )
+                    .order_by(TokenSpan.start_sample, TokenSpan.id)
+                )
+            )
+            if not rows or any(not row.provenance_json.get("native_model_time") for row in rows):
+                continue
+            if surface_tokens(candidate.normalized_text, segment.language.value) != surface_tokens(
+                text, segment.language.value
+            ):
+                continue
+            if any(row.end_sample <= row.start_sample for row in rows):
+                continue
+            evidence = TimingEvidence(
+                TimingSource.NATIVE_WORD,
+                self._span(segment),
+                text,
+                tuple(
+                    AlignedToken(row.token, AudioSpan(row.start_sample, row.end_sample))
+                    for row in rows
+                ),
+                reliable=True,
+                text_unchanged=True,
+            )
+            if validate_timing(evidence, voiced).valid:
+                return evidence
+        return None
+
+    def _structure_timing(
+        self,
+        session: Session,
+        segment: TranscriptSegment,
+        text: str,
+    ) -> TimingEvidence | None:
+        rows = tuple(
+            session.scalars(
+                select(StructureSegmentRecord)
+                .where(
+                    StructureSegmentRecord.job_id == segment.job_id,
+                    StructureSegmentRecord.start_sample >= segment.start_sample,
+                    StructureSegmentRecord.end_sample <= segment.end_sample,
+                    StructureSegmentRecord.source_model == "moss_td_0_9b",
+                    StructureSegmentRecord.fallback.is_(False),
+                    StructureSegmentRecord.overlap.is_(False),
+                    StructureSegmentRecord.selection_score >= 0.7,
+                )
+                .order_by(StructureSegmentRecord.start_sample, StructureSegmentRecord.id)
+            )
+        )
+        if not rows or any(not row.coarse_text for row in rows):
+            return None
+        if surface_tokens(
+            " ".join(row.coarse_text for row in rows), segment.language.value
+        ) != surface_tokens(text, segment.language.value):
+            return None
+        return TimingEvidence(
+            TimingSource.MOSS_STRUCTURE,
+            self._span(segment),
+            text,
+            tuple(
+                AlignedToken(row.coarse_text, AudioSpan(row.start_sample, row.end_sample))
+                for row in rows
+            ),
+            reliable=True,
+            text_unchanged=True,
+        )
+
     def _forced_alignment(self, session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
         segment = self._segment(session, checkpoint)
         canonical = self._span(segment)
@@ -826,8 +919,8 @@ class ProductionStageRunner:
             ),
             registry_safe_seconds=aligner.safe_operating_window_seconds,
         )
-        forced: TimingEvidence | None = None
-        if gate.allowed and self._installed(aligner.id):
+
+        def run_forced_aligner() -> TimingEvidence:
             request = build_alignment_request(
                 request_id=f"{job.id}:align:{segment.id}",
                 job_id=job.id,
@@ -838,18 +931,19 @@ class ProductionStageRunner:
                 language=segment.language.value,
                 gate=gate,
             )
-            forced = parse_alignment_response(
+            return parse_alignment_response(
                 asyncio.run(self.invoke(aligner, request)), request, aligner, canonical
             )
-        coarse = _coarse_timing(final_text, canonical)
+
+        coarse = _coarse_timing(final_text, canonical, segment.language.value)
         selected = select_canonical_timing(
             final_text=final_text,
             canonical_span=canonical,
             voiced_spans=voiced,
-            native=None,
-            moss_structure=None,
+            native=self._native_timing(session, segment, final_text, voiced),
+            moss_structure=self._structure_timing(session, segment, final_text),
             alignment_gate=gate,
-            run_forced_aligner=(lambda: forced) if forced is not None else None,
+            run_forced_aligner=run_forced_aligner if self._installed(aligner.id) else None,
             vad_coarse=coarse,
         )
         old_tokens = tuple(
@@ -984,34 +1078,47 @@ class ProductionStageRunner:
     def _automatic_exports(self, session: Session, job: Job, _checkpoint: JobCheckpoint) -> None:
         segments = self._export_segments(session, job.id)
         raw_outputs = job.options_json.get("outputs", self.config.classroom.auto_export)
-        outputs = tuple(ExportFormat(str(item)) for item in raw_outputs)
-        for output_format in outputs:
-            content = render_export(
-                segments,
-                output_format=output_format,
-                layer=ExportLayer.SMART,
-                view=ExportView.SENTENCES,
+        outputs = tuple(
+            ExportFormat("md" if str(item) == "markdown" else str(item)) for item in raw_outputs
+        )
+        if not job.options_json.get("include_speakers", True):
+            segments = tuple(replace(segment, speaker=None) for segment in segments)
+        layers = tuple(
+            layer
+            for layer, enabled in (
+                (ExportLayer.FAITHFUL, job.options_json.get("include_faithful", True)),
+                (ExportLayer.SMART, job.options_json.get("include_smart", True)),
             )
-            artifact_id = str(uuid4())
-            suffix = "md" if output_format is ExportFormat.MARKDOWN else output_format.value
-            file_name = f"classscribe-{job.id}-smart.{suffix}"
-            relative = Path("jobs", job.id, "exports", f"{artifact_id}.{suffix}")
-            target = self.paths.data_path(*relative.parts)
-            atomic_write_text(target, content)
-            session.add(
-                ExportArtifact(
-                    id=artifact_id,
-                    job_id=job.id,
-                    output_format=output_format.value,
-                    text_layer=ExportLayer.SMART.value,
-                    view=ExportView.SENTENCES.value,
-                    file_name=file_name,
-                    relative_path=relative.as_posix(),
-                    content_type=_CONTENT_TYPES[output_format.value],
-                    sha256=hashlib.sha256(content.encode()).hexdigest(),
-                    size_bytes=len(content.encode()),
+            if enabled
+        )
+        for layer in layers:
+            for output_format in outputs:
+                content = render_export(
+                    segments,
+                    output_format=output_format,
+                    layer=layer,
+                    view=ExportView.SENTENCES,
                 )
-            )
+                artifact_id = str(uuid4())
+                suffix = "md" if output_format is ExportFormat.MARKDOWN else output_format.value
+                file_name = f"classscribe-{job.id}-{layer.value}.{suffix}"
+                relative = Path("jobs", job.id, "exports", f"{artifact_id}.{suffix}")
+                target = self.paths.data_path(*relative.parts)
+                atomic_write_text(target, content)
+                session.add(
+                    ExportArtifact(
+                        id=artifact_id,
+                        job_id=job.id,
+                        output_format=output_format.value,
+                        text_layer=layer.value,
+                        view=ExportView.SENTENCES.value,
+                        file_name=file_name,
+                        relative_path=relative.as_posix(),
+                        content_type=_CONTENT_TYPES[output_format.value],
+                        sha256=hashlib.sha256(content.encode()).hexdigest(),
+                        size_bytes=len(content.encode()),
+                    )
+                )
 
     def _transcribe(
         self,
@@ -1375,6 +1482,7 @@ class ProductionStageRunner:
             item
             for item in candidates
             if item.enabled
+            and not is_structure_model(item)
             and "asr" in item.tasks
             and "batch" in item.modes
             and (language in item.languages or "auto" in item.languages)
@@ -1400,6 +1508,7 @@ class ProductionStageRunner:
             if model_id != primary_id
             for entry in (self.registry.model(model_id),)
             if entry.enabled
+            and not is_structure_model(entry)
             and "asr" in entry.tasks
             and "batch" in entry.modes
             and (language in entry.languages or "auto" in entry.languages)
@@ -1758,8 +1867,8 @@ def _dominant_speaker(span: AudioSpan, rows: Sequence[Any]) -> str | None:
     return max(matching, default=(0, None), key=lambda item: item[0])[1]
 
 
-def _coarse_timing(text: str, span: AudioSpan) -> TimingEvidence:
-    characters = tuple(text)
+def _coarse_timing(text: str, span: AudioSpan, language: str = "ja") -> TimingEvidence:
+    characters = tuple(re.findall(r"\S+", text)) if language == "en" else tuple(text)
     if not characters or span.duration_samples < len(characters):
         raise ClassScribeError(
             ErrorCode.CANDIDATE_TIMELINE_INVALID,
