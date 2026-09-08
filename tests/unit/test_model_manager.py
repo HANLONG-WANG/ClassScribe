@@ -294,7 +294,7 @@ def test_resolved_revision_and_hash_mismatch_never_publish(tmp_path: Path) -> No
     assert not list((tmp_path / "models" / ".staging").iterdir())
 
 
-def test_health_failure_removes_candidate_and_restores_previous_active(tmp_path: Path) -> None:
+def test_health_failure_preserves_download_for_retry_and_previous_active(tmp_path: Path) -> None:
     first, first_content = manifest()
     second, second_content = manifest(
         REVISION_B, model=b"model-b", code=b"def load(): return 'b'\n"
@@ -320,8 +320,22 @@ def test_health_failure_removes_candidate_and_restores_previous_active(tmp_path:
     assert downloader.calls == 1
     assert active_path.read_bytes() == active_before
     assert manager.resolve_for_runtime("moss-test") == first_path
-    assert {path.name for path in revisions_root.iterdir()} == revisions_before
-    assert not (tmp_path / "models" / "moss-test" / "revisions" / REVISION_B).exists()
+    assert {path.name for path in revisions_root.iterdir()} == revisions_before | {REVISION_B}
+    assert manager.installation_stage("moss-test", REVISION_B) == "awaiting_health_check"
+    with pytest.raises(ClassScribeError):
+        manager.rollback("moss-test", REVISION_B)
+    # A fresh manager also discovers the retained files after a restart.
+    manager = ModelManager(tmp_path / "models")
+    assert manager.installation_stage("moss-test", REVISION_B) == "awaiting_health_check"
+    retry = manager.request_user_install(second)
+    assert retry.estimated_download_bytes == 0
+    assert retry.required_free_bytes < plan.required_free_bytes
+    manager.install_confirmed(
+        retry.confirmation_token, downloader=downloader, health_audio=audio, health_check=healthy
+    )
+    assert downloader.calls == 1
+    assert manager.resolve_for_runtime("moss-test").name == REVISION_B
+    assert manager.installation_stage("moss-test", REVISION_B) == "complete"
     assert not list((tmp_path / "models" / ".staging").iterdir())
 
 
@@ -740,3 +754,45 @@ def test_invalid_rollback_preserves_active_revision(tmp_path: Path, damage: str)
     manager._activate("moss-test", REVISION_A)
     with pytest.raises(ClassScribeError):
         manager.resolve_for_runtime("moss-test")
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_dependency_failure_retains_verified_payload_and_retry_rechecks_hashes(
+    tmp_path: Path, corrupt: bool
+) -> None:
+    spec, content = manifest()
+    manager = ModelManager(tmp_path / "models")
+    audio = write_health_wav(tmp_path / "health.wav")
+    downloader = FakeDownloader(content)
+
+    def dependency_failure(*_args: Any) -> HealthCheckOutcome:
+        assert manager.installation_stage(spec.model_id, spec.revision) == "checking"
+        raise RuntimeError("dependency setup failed")
+
+    with pytest.raises(RuntimeError, match="dependency setup"):
+        manager.install_confirmed(
+            manager.request_user_install(spec).confirmation_token,
+            downloader=downloader,
+            health_audio=audio,
+            health_check=dependency_failure,
+        )
+    with pytest.raises(ClassScribeError):
+        manager.resolve_for_runtime(spec.model_id)
+    if corrupt:
+        (
+            manager.root / spec.model_id / "revisions" / spec.revision / "weights/model.bin"
+        ).write_bytes(b"corrupt")
+    plan = manager.request_user_install(spec)
+    if corrupt:
+        with pytest.raises(ClassScribeError):
+            manager.install_confirmed(
+                plan.confirmation_token,
+                downloader=downloader,
+                health_audio=audio,
+                health_check=lambda *_: pytest.fail("must check hashes first"),
+            )
+    else:
+        manager.install_confirmed(
+            plan.confirmation_token, downloader=downloader, health_audio=audio, health_check=healthy
+        )
+    assert downloader.calls == 1

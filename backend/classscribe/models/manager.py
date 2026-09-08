@@ -432,6 +432,7 @@ class ModelManager:
         self._recorder = recorder
         self._now = now or (lambda: datetime.now(UTC))
         self._plans: dict[str, tuple[ModelManifest, datetime]] = {}
+        self._install_progress: dict[tuple[str, str], str] = {}
         self._ensure_directory(self.root)
         self._ensure_directory(self.root / ".staging")
 
@@ -443,11 +444,48 @@ class ModelManager:
         path.chmod(0o700)
         validate_restricted_directory(path)
 
+    def installation_stage(self, model_id: str, revision: str) -> str:
+        self._validate_identifier(model_id)
+        self._validate_revision(revision)
+        stage = self._install_progress.get((model_id, revision))
+        if stage is not None:
+            return stage
+        target = self.root / model_id / "revisions" / revision
+        if target.is_symlink() or (target / AUDIT_FILENAME).is_symlink():
+            return "not_installed"
+        try:
+            audit = json.loads((target / AUDIT_FILENAME).read_text(encoding="utf-8"))
+            if audit.get("health_check", {}).get("healthy") is True:
+                return "complete"
+            if audit.get("aggregate_sha256"):
+                return "awaiting_health_check"
+        except (OSError, ValueError, AttributeError):
+            pass
+        return "not_installed"
+
+    def _reusable_download(self, manifest: ModelManifest) -> dict[str, Any] | None:
+        target = self.root / manifest.model_id / "revisions" / manifest.revision
+        if target.is_symlink() or (target / AUDIT_FILENAME).is_symlink():
+            return None
+        try:
+            audit = json.loads((target / AUDIT_FILENAME).read_text(encoding="utf-8"))
+            if (
+                audit["manifest"] == manifest.as_dict()
+                and audit.get("health_check", {}).get("healthy") is not True
+            ):
+                return dict(audit)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            pass
+        return None
+
     def request_user_install(self, manifest: ModelManifest) -> InstallationPlan:
         """Create a short-lived, single-use confirmation after showing size/environment."""
 
         usage = shutil.disk_usage(self.root)
-        required = manifest.estimated_download_bytes + manifest.installed_size_bytes
+        reusable = self._reusable_download(manifest) is not None
+        required = (
+            0 if reusable else manifest.estimated_download_bytes + manifest.installed_size_bytes
+        )
         required += max(required // 10, 16 * 1024 * 1024)
         if usage.free < required:
             raise ClassScribeError(
@@ -465,7 +503,7 @@ class ModelManager:
             license_url=manifest.license_url,
             requires_terms_acceptance=manifest.requires_terms_acceptance,
             component_sources=manifest.component_sources,
-            estimated_download_bytes=manifest.estimated_download_bytes,
+            estimated_download_bytes=0 if reusable else manifest.estimated_download_bytes,
             installed_size_bytes=manifest.installed_size_bytes,
             required_free_bytes=required,
             available_bytes=usage.free,
@@ -507,7 +545,8 @@ class ModelManager:
             self._ensure_directory(model_root)
             self._ensure_directory(revisions_root)
             target = revisions_root / manifest.revision
-            if target.exists() or target.is_symlink():
+            cached_audit = self._reusable_download(manifest)
+            if (target.exists() or target.is_symlink()) and cached_audit is None:
                 raise ClassScribeError(
                     ErrorCode.MODEL_INTEGRITY_FAILED, "revision is already installed"
                 )
@@ -520,31 +559,47 @@ class ModelManager:
             previous_active = self._active_revision(manifest.model_id)
             installed_at = self._now()
             owns_target = False
+            verified = False
+            progress_key = (manifest.model_id, manifest.revision)
             try:
-                receipt = downloader.download(
-                    repository=manifest.repository,
-                    revision=manifest.revision,
-                    destination=payload,
-                    files=manifest.files,
-                )
-                if receipt.resolved_revision != manifest.revision:
-                    raise ClassScribeError(
-                        ErrorCode.MODEL_REVISION_NOT_PINNED,
-                        "download source resolved a revision different from the pinned commit",
+                if cached_audit is None:
+                    self._install_progress[progress_key] = "downloading"
+                    receipt = downloader.download(
+                        repository=manifest.repository,
+                        revision=manifest.revision,
+                        destination=payload,
+                        files=manifest.files,
                     )
-                aggregate = self._verify_payload(payload, manifest)
-                audit = {
-                    "format_version": 1,
-                    "installed_at": installed_at.isoformat(),
-                    "source": receipt.source,
-                    "downloaded_bytes": receipt.downloaded_bytes,
-                    "aggregate_sha256": aggregate,
-                    "manifest": manifest.as_dict(),
-                    "health_audio": health_audio_metadata,
-                }
-                self._atomic_json(payload / AUDIT_FILENAME, audit)
-                os.replace(payload, target)
-                owns_target = True
+                    if receipt.resolved_revision != manifest.revision:
+                        raise ClassScribeError(
+                            ErrorCode.MODEL_REVISION_NOT_PINNED,
+                            "download source resolved a revision different from the pinned commit",
+                        )
+                    self._install_progress[progress_key] = "verifying"
+                    aggregate = self._verify_payload(payload, manifest)
+                    audit = {
+                        "format_version": 1,
+                        "installed_at": installed_at.isoformat(),
+                        "source": receipt.source,
+                        "downloaded_bytes": receipt.downloaded_bytes,
+                        "aggregate_sha256": aggregate,
+                        "manifest": manifest.as_dict(),
+                        "health_audio": health_audio_metadata,
+                    }
+                    self._atomic_json(payload / AUDIT_FILENAME, audit)
+                    os.replace(payload, target)
+                    owns_target = True
+                else:
+                    self._install_progress[progress_key] = "verifying"
+                    aggregate = self._verify_payload(target, manifest, allow_audit=True)
+                    if aggregate != cached_audit["aggregate_sha256"]:
+                        raise ClassScribeError(
+                            ErrorCode.MODEL_INTEGRITY_FAILED, "cached checksum mismatch"
+                        )
+                    audit = cached_audit
+                    audit["health_audio"] = health_audio_metadata
+                verified = True
+                self._install_progress[progress_key] = "checking"
                 health = health_check(target, health_audio, runtime_environment())
                 if not health.healthy:
                     raise ClassScribeError(ErrorCode.MODEL_HEALTH_CHECK_FAILED, health.detail)
@@ -558,6 +613,7 @@ class ModelManager:
                 if self._recorder is not None:
                     self._recorder.record(manifest, target, aggregate, health, installed_at)
                 self._activate(manifest.model_id, manifest.revision)
+                self._install_progress[progress_key] = "complete"
                 return InstallationResult(
                     model_id=manifest.model_id,
                     revision=manifest.revision,
@@ -566,7 +622,13 @@ class ModelManager:
                     health=health,
                 )
             except Exception:
-                if owns_target and target.exists() and not target.is_symlink():
+                self._install_progress[progress_key] = (
+                    "awaiting_health_check" if verified else "failed"
+                )
+                if verified:
+                    audit["health_check"] = {"healthy": False}
+                    self._atomic_json(target / AUDIT_FILENAME, audit)
+                elif owns_target and target.exists() and not target.is_symlink():
                     shutil.rmtree(target)
                 current_active = self._active_revision(manifest.model_id)
                 if current_active != previous_active:
@@ -659,6 +721,7 @@ class ModelManager:
                 )
             if target.exists():
                 shutil.rmtree(target)
+            self._install_progress.pop((model_id, revision), None)
             if self._recorder is not None:
                 self._recorder.remove(model_id, revision)
 

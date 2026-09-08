@@ -1479,3 +1479,75 @@ def test_delete_glossary_removes_terms_and_materials_without_affecting_others(
         )
     missing = asyncio.run(request(app, "DELETE", endpoint, headers=auth(token, csrf, write=True)))
     assert missing.status == 404
+
+
+def test_install_rejects_language_before_download_and_retries_retained_files(
+    tmp_path: Path,
+) -> None:
+    content = {"config.json": b"{}"}
+    manifest = registry_fixture_manifest("granite_speech_4_1_2b", content)
+    downloader = FixtureModelDownloader(content, manifest.repository)
+    health_calls = 0
+
+    def health_check(*_args: Any) -> HealthCheckOutcome:
+        nonlocal health_calls
+        health_calls += 1
+        model = next(item for item in service.models() if item["id"] == manifest.model_id)
+        assert model["install_stage"] == "checking"
+        return HealthCheckOutcome(health_calls > 1, 1024, "health result", {})
+
+    service, _ = service_fixture(
+        tmp_path,
+        model_downloader=downloader,
+        model_health_check=health_check,
+        manifest_bundle=injected_bundle(manifest),
+    )
+    recording = service.create_recording(
+        source_name="health.wav",
+        content=health_wav_bytes(),
+        duration_samples=3200,
+        channels=1,
+        sample_rate=16000,
+    )
+    plan = service.request_bundled_model_install(manifest.model_id)
+    assert plan["supported_languages"] == ["ja", "en"]
+    assert plan["reusing_download"] is False
+    with pytest.raises(ClassScribeError, match="不受此模型支持"):
+        service.confirm_model_install(
+            manifest.model_id,
+            confirmation_token=plan["confirmation_token"],
+            health_recording_id=recording["id"],
+            health_language="zh",
+            health_transcript=None,
+            terms_accepted=False,
+        )
+    assert downloader.calls == 0
+    assert health_calls == 0
+    # Language rejection leaves the confirmation token usable.
+    with pytest.raises(ClassScribeError, match="health result"):
+        service.confirm_model_install(
+            manifest.model_id,
+            confirmation_token=plan["confirmation_token"],
+            health_recording_id=recording["id"],
+            health_language="en",
+            health_transcript=None,
+            terms_accepted=False,
+        )
+    model = next(item for item in service.models() if item["id"] == manifest.model_id)
+    assert model["install_stage"] == "awaiting_health_check"
+    retry = service.request_bundled_model_install(manifest.model_id)
+    assert retry["reusing_download"] is True
+    assert retry["estimated_download_bytes"] == 0
+    result = service.confirm_model_install(
+        manifest.model_id,
+        confirmation_token=retry["confirmation_token"],
+        health_recording_id=recording["id"],
+        health_language="en",
+        health_transcript=None,
+        terms_accepted=False,
+    )
+    assert result["installed"] is True
+    assert downloader.calls == 1
+    assert health_calls == 2
+    model = next(item for item in service.models() if item["id"] == manifest.model_id)
+    assert model["install_stage"] == "complete"

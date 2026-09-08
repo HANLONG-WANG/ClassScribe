@@ -55,14 +55,23 @@ repository/commit/文件集合；gated repository 还必须显式传入已接受
 6. 在强制离线环境和同一 Bubblewrap 挂载策略中，让对应 worker 对一个非空、单声道 16 kHz、
    16-bit PCM、最长 15 秒的真实短音频完成 load → 对应任务 infer → unload；回调必须报告实际
    结果、环境和实测 VRAM，不能只看文件存在。
-7. 健康后记录 `model_installations`，再原子写 `active.json`。任一环节失败会清理新 revision
-   并保持／恢复旧 active revision。
+7. 健康后记录 `model_installations`，再原子写 `active.json`。失败时保持／恢复旧 active revision。
+   下载或完整性校验失败会清理本次临时文件；完整性校验通过后，依赖准备或健康检查失败会保留
+   新 revision，标为待健康检查，不能用于推理或回滚启用。再次确认安装时，仅复用与发布 manifest
+   完全一致的文件，并重新校验全部 size／SHA-256 后运行健康检查，不重复下载模型文件。
+   保留状态可在 core 重启后恢复；用户可用模型卡片的删除按钮清理该版本。
 
 HTTP 流程固定为两步：`POST /api/v1/models/{model_id}/install` 接收空 JSON 对象，按 model ID 从
-内置 bundle 取 manifest，校验冻结许可证披露、空间和环境并返回确认 token；
+内置 bundle 取 manifest，校验冻结许可证披露、空间和环境并返回确认 token、支持语言和下载复用标记；
 `POST /api/v1/models/{model_id}/install/confirm` 必须再次提交 token、
 健康检查录音 UUID、语言、可选参考文本和 `terms_accepted`。需要 gated 条款却未明确接受、token
 对应其他模型，或 manifest 许可证与 `config/model-licenses.v1.json` 不一致时，在联网前拒绝。
+健康检查语言不受模型支持时也在下载前拒绝，不消耗确认 token。WebUI 禁用不支持的语言选项，
+并要求用户选择与录音实际内容一致的受支持语言。
+
+模型列表返回 `install_stage`，WebUI 每两秒刷新，显示下载、文件校验、准备依赖和健康检查、
+待重试或完成状态。完成后显示“已安装”；保留文件但未通过健康检查时显示“重试健康检查”。
+准备 Python 依赖属于安装中的步骤，只有健康检查成功后才提示模型可用。
 
 生产 downloader 只允许 `owner/repository`、完整 commit 和 manifest 中逐项列出的文件；只访问
 Hugging Face 官方 HTTPS host，拒绝凭证 URL、跨 host/非 HTTPS redirect、已存在目标、symlink、

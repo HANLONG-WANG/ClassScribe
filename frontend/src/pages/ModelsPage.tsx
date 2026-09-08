@@ -12,6 +12,8 @@ import {
 import { inspectHealthWav } from "../healthWav";
 
 interface InstallPlan extends ApiObject {
+  supported_languages?: string[];
+  reusing_download?: boolean;
   confirmation_token: string;
   model_id: string;
   revision: string;
@@ -39,9 +41,40 @@ const installBlockReasons: Record<string, string> = {
   worker_not_implemented: "当前版本未实现此模型 Worker",
 };
 
+const installStages: Record<string, string> = {
+  downloading: "正在下载模型文件…",
+  verifying: "下载已完成，正在校验模型文件…",
+  checking:
+    "模型文件已就绪，正在准备 Python 依赖、加载模型并运行健康检查；此步骤可能需要数分钟。",
+  awaiting_health_check:
+    "模型文件已保留，尚未通过健康检查。可重新选择录音和语言后重试，无需重新下载；文件将再次校验。",
+  complete: "安装完成，健康检查已通过，模型可用。",
+  failed: "安装未完成，请重试；如缓存文件校验失败，请先删除此版本。",
+};
+const busyStages = new Set(["downloading", "verifying", "checking"]);
+const installationLabels: Record<string, string> = {
+  not_installed: "未安装",
+  downloading: "下载中",
+  verifying: "文件校验中",
+  checking: "准备依赖 / 健康检查中",
+  awaiting_health_check: "已下载，待健康检查",
+  complete: "已安装，可用",
+  healthy: "已安装，可用",
+  installed: "已安装",
+  failed: "安装失败",
+  unhealthy: "健康检查未通过",
+  missing: "模型文件缺失",
+};
+
 function installBlockReason(reason: string | null) {
   if (reason === null) return "无";
   return `${installBlockReasons[reason] ?? "安装策略阻止"} (${reason})`;
+}
+
+function isInstalled(model: ModelInfo) {
+  return model.install_stage
+    ? model.install_stage === "complete"
+    : ["healthy", "installed"].includes(model.installation.state);
 }
 
 export function ModelsPage() {
@@ -51,9 +84,11 @@ export function ModelsPage() {
   const [healthLanguage, setHealthLanguage] = useState("ja");
   const [healthTranscript, setHealthTranscript] = useState("");
   const [termsAccepted, setTermsAccepted] = useState(false);
+  const [installedName, setInstalledName] = useState("");
   const query = useQuery({
     queryKey: ["models"],
     queryFn: () => api<ModelInfo[]>("/models"),
+    refetchInterval: 2000,
   });
   const recordings = useQuery({
     queryKey: ["recordings"],
@@ -89,6 +124,16 @@ export function ModelsPage() {
     onSuccess: (value) => {
       setPlan(value);
       setTermsAccepted(false);
+      setInstalledName("");
+      const supported =
+        value.supported_languages ??
+        query.data?.find((item) => item.id === value.model_id)?.languages ??
+        [];
+      setHealthLanguage((current) =>
+        supported.includes("auto") || supported.includes(current)
+          ? current
+          : "",
+      );
     },
   });
   const uploadHealthRecording = useMutation({
@@ -122,14 +167,43 @@ export function ModelsPage() {
           terms_accepted: termsAccepted,
         }),
       }),
-    onSuccess: () => {
+    onSuccess: (_value, installedPlan) => {
+      client.setQueryData<ModelInfo[]>(["models"], (models = []) =>
+        models.map((model) =>
+          model.id === installedPlan.model_id
+            ? {
+                ...model,
+                install_stage: "complete",
+                installation: { ...model.installation, state: "healthy" },
+              }
+            : model,
+        ),
+      );
+      setInstalledName(
+        query.data?.find((item) => item.id === installedPlan.model_id)?.name ??
+          installedPlan.model_id,
+      );
       setPlan(null);
       setHealthRecordingId("");
       setHealthTranscript("");
       setTermsAccepted(false);
       void client.invalidateQueries({ queryKey: ["models"] });
     },
+    onError: () => {
+      void client.invalidateQueries({ queryKey: ["models"] });
+    },
   });
+
+  const supportedLanguages =
+    plan?.supported_languages ??
+    query.data?.find((item) => item.id === plan?.model_id)?.languages ??
+    [];
+  const languageSupported =
+    supportedLanguages.includes("auto") ||
+    supportedLanguages.includes(healthLanguage);
+  const planStage = query.data?.find(
+    (item) => item.id === plan?.model_id,
+  )?.install_stage;
 
   function chooseHealthRecording(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -150,9 +224,22 @@ export function ModelsPage() {
           </p>
         </div>
       </header>
+      {installedName && (
+        <p className="notice" role="status">
+          {installedName} 安装完成，健康检查已通过，可以开始使用。
+        </p>
+      )}
       {plan && (
         <div className="notice install-plan">
           <strong>安装确认</strong>
+          {plan.reusing_download && (
+            <p>已找到保留的模型文件，本次将复用文件并重试健康检查。</p>
+          )}
+          {confirm.isPending && (
+            <p role="status">
+              {installStages[planStage ?? ""] ?? "正在提交安装请求…"}
+            </p>
+          )}
           {plan.error ? (
             <p>
               {typeof plan.error === "string" ? plan.error : "manifest 无效"}
@@ -210,6 +297,7 @@ export function ModelsPage() {
               <label>
                 健康检查录音
                 <select
+                  disabled={confirm.isPending}
                   onChange={(event) => {
                     setHealthRecordingId(event.target.value);
                   }}
@@ -239,7 +327,9 @@ export function ModelsPage() {
                   : "上传健康 WAV"}
                 <input
                   accept="audio/wav,.wav"
-                  disabled={uploadHealthRecording.isPending}
+                  disabled={
+                    uploadHealthRecording.isPending || confirm.isPending
+                  }
                   onChange={chooseHealthRecording}
                   type="file"
                 />
@@ -250,16 +340,48 @@ export function ModelsPage() {
               <label>
                 录音语言
                 <select
+                  disabled={confirm.isPending}
                   onChange={(event) => {
                     setHealthLanguage(event.target.value);
                   }}
                   value={healthLanguage}
                 >
-                  <option value="zh">中文</option>
-                  <option value="ja">日语</option>
-                  <option value="en">英语</option>
+                  {!healthLanguage && (
+                    <option value="">请选择支持的语言</option>
+                  )}
+                  {(
+                    [
+                      ["zh", "中文"],
+                      ["ja", "日语"],
+                      ["en", "英语"],
+                    ] as const
+                  ).map(([code, label]) => (
+                    <option
+                      key={code}
+                      value={code}
+                      disabled={
+                        !supportedLanguages.includes("auto") &&
+                        !supportedLanguages.includes(code)
+                      }
+                    >
+                      {label}
+                      {!supportedLanguages.includes("auto") &&
+                      !supportedLanguages.includes(code)
+                        ? "（此模型不支持）"
+                        : ""}
+                    </option>
+                  ))}
                 </select>
               </label>
+              <small>
+                此模型支持：{supportedLanguages.join("、")}
+                。请选择与录音实际内容一致的语言。
+              </small>
+              {!languageSupported && (
+                <p role="alert">
+                  请选择此模型支持的健康检查语言，当前选择不能开始下载。
+                </p>
+              )}
               <label>
                 精确文字（强制对齐模型必填）
                 <input
@@ -285,6 +407,9 @@ export function ModelsPage() {
               <button
                 disabled={
                   !healthRecordingId ||
+                  !languageSupported ||
+                  confirm.isError ||
+                  install.isPending ||
                   (plan.requires_terms_acceptance && !termsAccepted) ||
                   confirm.isPending
                 }
@@ -294,10 +419,15 @@ export function ModelsPage() {
                 type="button"
               >
                 {confirm.isPending
-                  ? "正在下载并实测…"
+                  ? "正在安装，请查看上方进度…"
                   : "确认安装并运行推理健康检查"}
               </button>
-              {confirm.isError && <p>{confirm.error.message}</p>}
+              {confirm.isError && (
+                <p role="alert">
+                  {confirm.error.message}{" "}
+                  请在模型卡片上重新准备安装或重试健康检查。
+                </p>
+              )}
             </>
           )}
         </div>
@@ -329,7 +459,11 @@ export function ModelsPage() {
             <dl>
               <div>
                 <dt>安装状态</dt>
-                <dd>{model.installation.state}</dd>
+                <dd>
+                  {installationLabels[
+                    model.install_stage ?? model.installation.state
+                  ] ?? model.installation.state}
+                </dd>
               </div>
               <div>
                 <dt>发布 Manifest</dt>
@@ -391,6 +525,11 @@ export function ModelsPage() {
             <p className="ranking">
               本机排名：{JSON.stringify(model.benchmark)}
             </p>
+            {model.install_stage && installStages[model.install_stage] && (
+              <p className="notice" role="status">
+                {installStages[model.install_stage]}
+              </p>
+            )}
             {!model.enabled &&
               model.manifest_available &&
               model.worker_implemented && (
@@ -417,16 +556,32 @@ export function ModelsPage() {
                         .filter(Boolean)
                         .join(" ")
                 }
-                disabled={!model.installable || install.isPending}
+                disabled={
+                  !model.installable ||
+                  install.isPending ||
+                  confirm.isPending ||
+                  busyStages.has(model.install_stage ?? "") ||
+                  isInstalled(model)
+                }
                 onClick={() => {
                   install.mutate(model.id);
+                  confirm.reset();
                 }}
                 type="button"
               >
-                {install.isPending ? "正在预检…" : "准备安装"}
+                {isInstalled(model)
+                  ? "已安装"
+                  : busyStages.has(model.install_stage ?? "")
+                    ? "正在安装…"
+                    : install.isPending && install.variables === model.id
+                      ? "正在预检…"
+                      : model.install_stage === "awaiting_health_check"
+                        ? "重试健康检查"
+                        : "准备安装"}
               </button>
               {install.isError && <p role="alert">{install.error.message}</p>}
               <button
+                disabled={busyStages.has(model.install_stage ?? "")}
                 onClick={() => {
                   verify.mutate(model.id);
                 }}
@@ -435,6 +590,7 @@ export function ModelsPage() {
                 验证
               </button>
               <button
+                disabled={busyStages.has(model.install_stage ?? "")}
                 onClick={() => {
                   rollback.mutate({ id: model.id, revision: model.revision });
                 }}
@@ -444,6 +600,7 @@ export function ModelsPage() {
               </button>
               <button
                 className="danger-button"
+                disabled={busyStages.has(model.install_stage ?? "")}
                 onClick={() => {
                   remove.mutate({ id: model.id, revision: model.revision });
                 }}

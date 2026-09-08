@@ -589,6 +589,11 @@ class ClassScribeService:
                         "tasks": list(entry.tasks),
                         "enabled": entry.enabled,
                         "experimental": entry.experimental,
+                        "install_stage": (
+                            self.model_manager.installation_stage(entry.id, entry.revision)
+                            if self.model_manager is not None
+                            else "not_installed"
+                        ),
                         "manifest_available": manifest_metadata is not None,
                         "manifest_sha256": (
                             manifest_metadata[1] if manifest_metadata is not None else None
@@ -722,6 +727,8 @@ class ClassScribeService:
         ]
         return {
             "confirmation_token": plan.confirmation_token,
+            "supported_languages": list(entry.languages),
+            "reusing_download": plan.estimated_download_bytes == 0,
             "model_id": plan.model_id,
             "revision": plan.revision,
             "license_id": plan.license_id,
@@ -750,6 +757,12 @@ class ClassScribeService:
     ) -> dict[str, Any]:
         entry = self._registry_model(model_id)
         manager = self._model_manager()
+        if health_language not in entry.languages and "auto" not in entry.languages:
+            raise ClassScribeError(
+                ErrorCode.MODEL_HEALTH_CHECK_FAILED,
+                f"健康检查语言 {health_language} 不受此模型支持; 支持语言: "
+                f"{', '.join(entry.languages)}。尚未开始下载。",
+            )
         if "alignment" in entry.tasks and not (health_transcript and health_transcript.strip()):
             raise ClassScribeError(
                 ErrorCode.MODEL_HEALTH_CHECK_FAILED,

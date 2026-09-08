@@ -179,6 +179,7 @@ export interface ModelComponentSource {
 }
 
 export interface ModelInfo {
+  install_stage?: string;
   id: string;
   name: string;
   revision: string;

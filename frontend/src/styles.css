@@ -699,7 +699,8 @@ details summary {
   border-radius: 50%;
   background: #98a39d;
 }
-.status-dot[data-status="installed"] {
+.status-dot[data-status="installed"],
+.status-dot[data-status="healthy"] {
   background: #55a978;
 }
 .status-dot[data-status="unhealthy"] {
