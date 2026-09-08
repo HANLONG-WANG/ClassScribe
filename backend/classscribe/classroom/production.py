@@ -352,10 +352,36 @@ class ProductionStageRunner:
             observations: list[LIDObservation] = []
             from classscribe.audio.lid import sliding_lid_windows
 
+            router = LanguageRouter()
+            speech = tuple(
+                AudioSpan(item.start_sample, item.end_sample)
+                for item in session.scalars(
+                    select(SpeechRegion)
+                    .where(SpeechRegion.job_id == job.id)
+                    .order_by(SpeechRegion.start_sample)
+                )
+            )
             windows = tuple(sliding_lid_windows(total))
             for ordinal, span in enumerate(windows):
                 if self.boundary is not None:
                     self.boundary(job.id)
+                if not any(region.overlaps(span) for region in speech):
+                    observations.append(
+                        LIDObservation(
+                            span, {code: 0.0 for code in ROUTABLE_LANGUAGES}, reason="no_speech"
+                        )
+                    )
+                    report_activity(
+                        "lid_window_skipped",
+                        window_ordinal=ordinal + 1,
+                        window_total=len(windows),
+                        windows_completed=ordinal + 1,
+                        start_sample=span.start_sample,
+                        end_sample=span.end_sample,
+                        reason="no_speech",
+                        force=ordinal + 1 == len(windows),
+                    )
+                    continue
                 report_activity(
                     "lid_window",
                     window_ordinal=ordinal + 1,
@@ -383,9 +409,25 @@ class ProductionStageRunner:
                         ),
                     )
                 )
-                report_activity("lid_window_completed", windows_completed=ordinal + 1)
-                if not response.ok or response.language not in {"zh", "ja", "en"}:
-                    raise RuntimeError("LID worker returned no supported language")
+                start_seconds, end_seconds = (
+                    span.start_sample / SAMPLE_RATE,
+                    span.end_sample / SAMPLE_RATE,
+                )
+                location = (
+                    f"FireRedLID 窗口 {ordinal + 1} ({start_seconds:.1f}-{end_seconds:.1f} 秒)"
+                )
+                if not response.ok:
+                    detail = response.error_detail or "worker 未提供错误说明"
+                    raise ClassScribeError(
+                        ErrorCode.LID_FAILED, f"{location}: {response.error_code}: {detail}"
+                    )
+                if (
+                    response.language is None
+                    and response.result.get("language_status") != "unknown"
+                ):
+                    raise ClassScribeError(
+                        ErrorCode.LID_FAILED, f"{location}: worker 未返回语言分类或未知标记"
+                    )
                 supplied = response.result.get("language_probabilities")
                 reported = (
                     supplied.get(response.language) if isinstance(supplied, Mapping) else None
@@ -393,25 +435,44 @@ class ProductionStageRunner:
                 segment_confidence = (
                     response.segments[0].get("confidence_raw") if response.segments else 0.0
                 )
-                probability = _bounded_probability(
-                    reported if reported is not None else segment_confidence
+                try:
+                    probability = _bounded_probability(
+                        reported if reported is not None else segment_confidence
+                    )
+                except ValueError as exc:
+                    raise ClassScribeError(
+                        ErrorCode.LID_FAILED, f"{location}: 无效的语言置信度"
+                    ) from exc
+                supported = response.language in {"zh", "ja", "en"}
+                reason = (
+                    "unsupported_language"
+                    if not supported
+                    else "low_confidence"
+                    if probability < router.threshold
+                    else None
                 )
                 probabilities = {
-                    language: probability if language.value == response.language else 0.0
-                    for language in ROUTABLE_LANGUAGES
+                    code: probability if code.value == response.language else 0.0
+                    for code in ROUTABLE_LANGUAGES
                 }
-                observations.append(LIDObservation(span, probabilities))
-            silence_points = _silence_points(
-                tuple(
-                    AudioSpan(item.start_sample, item.end_sample)
-                    for item in session.scalars(
-                        select(SpeechRegion)
-                        .where(SpeechRegion.job_id == job.id)
-                        .order_by(SpeechRegion.start_sample)
+                raw_language = response.result.get("raw_language", response.language)
+                observations.append(
+                    LIDObservation(
+                        span,
+                        probabilities,
+                        reason=reason,
+                        raw_language=raw_language if isinstance(raw_language, str) else None,
                     )
                 )
-            )
-            spans = LanguageRouter().route(
+                report_activity(
+                    "lid_window_uncertain" if reason else "lid_window_completed",
+                    windows_completed=ordinal + 1,
+                    reason=reason,
+                    raw_language=raw_language,
+                    confidence_raw=probability,
+                )
+            silence_points = _silence_points(speech)
+            spans = router.route(
                 job.language_mode,
                 total,
                 observations=observations,

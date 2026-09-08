@@ -279,3 +279,39 @@ def test_structure_overlap_matches_local_speakers_to_existing_global_labels() ->
         ("local-S01", "S02"),
         ("local-S02", "S01"),
     }
+
+
+def test_unknown_and_low_confidence_windows_do_not_switch_language() -> None:
+    windows = sliding_lid_windows(15 * SAMPLE_RATE)
+    values = [
+        probabilities(0, 0.99, 0),
+        probabilities(0, 0.99, 0),
+        probabilities(0, 0, 0),
+        probabilities(0, 0, 0.243),
+        probabilities(0, 0.98, 0),
+    ]
+    result = LanguageRouter().route(
+        LanguageMode.AUTO_MIXED,
+        15 * SAMPLE_RATE,
+        observations=tuple(
+            LIDObservation(span, value) for span, value in zip(windows, values, strict=True)
+        ),
+    )
+    assert len(result) == 1
+    assert result[0].language is LanguageMode.JAPANESE
+    assert result[0].confidence_raw > 0.98
+
+
+@pytest.mark.parametrize("value", [probabilities(0, 0, 0), probabilities(0, 0.24, 0)])
+def test_no_reliable_language_does_not_default_to_chinese(
+    value: Mapping[LanguageMode, float],
+) -> None:
+    from classscribe.errors import ClassScribeError, ErrorCode
+
+    with pytest.raises(ClassScribeError) as error:
+        LanguageRouter().route(
+            LanguageMode.AUTO_MIXED,
+            5 * SAMPLE_RATE,
+            observations=(LIDObservation(AudioSpan(0, 5 * SAMPLE_RATE), value),),
+        )
+    assert error.value.code is ErrorCode.LANGUAGE_UNDETERMINED

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from classscribe.contracts import LanguageMode
+from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.timeline import SAMPLE_RATE, AudioSpan
 
 ROUTABLE_LANGUAGES = (LanguageMode.CHINESE, LanguageMode.JAPANESE, LanguageMode.ENGLISH)
@@ -22,6 +23,8 @@ LANGUAGE_PROMPTS = {
 class LIDObservation:
     span: AudioSpan
     probabilities: Mapping[LanguageMode, float]
+    reason: str | None = None
+    raw_language: str | None = None
 
     def __post_init__(self) -> None:
         if set(self.probabilities) != set(ROUTABLE_LANGUAGES):
@@ -168,8 +171,16 @@ class LanguageRouter:
                 for item, observation in zip(candidates, group, strict=True)
             ):
                 return candidate, index
+        reliable = [
+            item for item in observations if max(item.probabilities.values()) >= self.threshold
+        ]
+        if not reliable:
+            raise ClassScribeError(
+                ErrorCode.LANGUAGE_UNDETERMINED,
+                "没有足够可靠的中、日、英语音证据, 无法自动确定语言; 请检查录音或手动选择语言。",
+            )
         totals: defaultdict[LanguageMode, float] = defaultdict(float)
-        for observation in observations:
+        for observation in reliable:
             for language, probability in observation.probabilities.items():
                 totals[language] += probability
         return max(ROUTABLE_LANGUAGES, key=totals.__getitem__), len(observations) - 1
@@ -200,9 +211,12 @@ class LanguageRouter:
                 for item in observations
                 if item.span.start_sample < end and item.span.end_sample > start
             ]
+            reliable = [
+                item for item in relevant if max(item.probabilities.values()) >= self.threshold
+            ]
             confidence = (
-                sum(item.probabilities[language] for item in relevant) / len(relevant)
-                if relevant
+                sum(item.probabilities[language] for item in reliable) / len(reliable)
+                if reliable
                 else 0.0
             )
             transition = switches[index - 1] if index else None
@@ -224,6 +238,8 @@ class LanguageRouter:
                             {
                                 "start_sample": item.span.start_sample,
                                 "end_sample": item.span.end_sample,
+                                "reason": item.reason,
+                                "raw_language": item.raw_language,
                                 "probabilities": {
                                     key.value: value for key, value in item.probabilities.items()
                                 },

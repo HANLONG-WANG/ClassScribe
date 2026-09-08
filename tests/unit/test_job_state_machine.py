@@ -191,3 +191,31 @@ def test_worker_failure_does_not_resume_a_user_paused_job(
         assert checkpoint.status is CheckpointStatus.RETRYABLE
         machine.resume(job)
         assert job.error_code is None
+
+
+def test_checkpoint_retains_specific_safe_error_details(
+    database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    from classscribe.errors import ClassScribeError
+
+    _, factory, _ = database
+    job_id, checkpoint_ids = make_job(factory)
+    machine = JobStateMachine()
+    with factory.begin() as session:
+        machine.start(session.get_one(Job, job_id))
+
+    def fail(session: Session, checkpoint: JobCheckpoint) -> None:
+        raise ClassScribeError(
+            ErrorCode.LID_FAILED,
+            "window 10: classifier execution failed at /home/private/model "
+            "Authorization: Bearer secret-credential",
+        )
+
+    with pytest.raises(ClassScribeError):
+        machine.run_checkpoint(factory, job_id, checkpoint_ids[0], fail)
+    with factory() as session:
+        job = session.get_one(Job, job_id)
+        assert job.error_code == ErrorCode.LID_FAILED.value
+        assert "classifier execution failed" in (job.error_detail or "")
+        assert "secret-credential" not in (job.error_detail or "")
+        assert "/home/private" not in (job.error_detail or "")

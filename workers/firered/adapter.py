@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import math
 import tempfile
 import time
 import wave
@@ -282,10 +283,27 @@ class FireRedAdapter(StatefulAdapter):
         result = await asyncio.to_thread(infer)
         if cancelled.is_set():
             raise asyncio.CancelledError
-        language = str(result.get("lang", "")).split(maxsplit=1)[0]
-        confidence = float(result.get("confidence", 0.0))
-        if language not in {"zh", "ja", "en"} or not 0 <= confidence <= 1:
-            raise AdapterError(RPCErrorCode.INTERNAL, "FireRedLID result is unsupported")
+        label = result.get("lang")
+        raw_confidence = result.get("confidence")
+        if (
+            not isinstance(label, str)
+            or not label.strip()
+            or isinstance(raw_confidence, bool)
+            or not isinstance(raw_confidence, (int, float))
+        ):
+            raise AdapterError(
+                RPCErrorCode.INTERNAL, "FireRedLID returned malformed classification"
+            )
+        raw_language = label.split(maxsplit=1)[0].lower()
+        confidence = float(raw_confidence)
+        if not math.isfinite(confidence) or not 0 <= confidence <= 1:
+            raise AdapterError(
+                RPCErrorCode.INTERNAL, "FireRedLID confidence must be finite and within [0, 1]"
+            )
+        supported = raw_language in {"zh", "ja", "en"}
+        # The multilingual classifier can legitimately return another language,
+        # especially for noise. This is unknown routing evidence, not a worker crash.
+        language = raw_language if supported else None
         return {
             "language": language,
             "segments": [
@@ -296,12 +314,17 @@ class FireRedAdapter(StatefulAdapter):
                     "confidence_raw": confidence,
                 }
             ],
-            "language_probabilities": {language: confidence},
+            "language_probabilities": {raw_language: confidence}
+            if supported
+            else {code: 0.0 for code in ("zh", "ja", "en")},
+            "raw_language": raw_language,
+            "raw_confidence": confidence,
+            "language_status": "classified" if supported else "unknown",
             "metrics": {
                 "backend": "firered_lid",
                 "inference_ms": round((time.perf_counter() - started) * 1000, 3),
             },
-            "warnings": [],
+            "warnings": [] if supported else [f"unsupported_language: {raw_language}"],
         }
 
     async def _lid_pcm(

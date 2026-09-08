@@ -313,7 +313,7 @@ class RPCStreamingRecognizer:
             probabilities = await self._firered_probabilities(
                 DictationChunk(0, base, base, base + len(self._stream_pcm) // 2, "release")
             )
-            if probabilities:
+            if probabilities and max(probabilities.values()) >= self._language.threshold:
                 return max(probabilities.items(), key=lambda item: item[1])[0]
         raise RuntimeError("automatic accuracy confirmation could not resolve a language")
 
@@ -342,6 +342,8 @@ class RPCStreamingRecognizer:
         )
         if not response.ok:
             raise RuntimeError(response.error_detail or response.error_code or "LID failed")
+        if response.result.get("language_status") == "unknown":
+            return {}
         return _probabilities(response.result.get("language_probabilities"))
 
     async def _accuracy_decode(

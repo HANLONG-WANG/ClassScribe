@@ -390,6 +390,8 @@ const operationLabels: Record<string, string> = {
   lid: "正在识别语言",
   lid_window: "正在识别语言窗口",
   lid_window_completed: "语言窗口完成",
+  lid_window_skipped: "跳过无语音窗口",
+  lid_window_uncertain: "语言窗口结果不确定",
   moss_structure: "准备说话人结构分析",
   structure_window: "正在分析结构窗口",
   structure_attempt: "正在分析说话人结构",
@@ -601,6 +603,9 @@ function readableEvents(events: PipelineEvent[]) {
 function reasonLabel(reason: string) {
   const labels: Record<string, string> = {
     low_unified_quality: "综合质量偏低",
+    no_speech: "VAD 未检测到语音",
+    unsupported_language: "分类结果不属于支持的中、日、英语言，记为未知证据",
+    low_confidence: "语言分类置信度不足，不作为语言切换依据",
     repetition_or_hallucination: "疑似重复或幻觉",
     script_anomaly: "文字系统异常",
     insufficient_time_coverage: "音频覆盖不足",

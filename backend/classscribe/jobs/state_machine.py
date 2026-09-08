@@ -19,7 +19,7 @@ from classscribe.db.models import (
     JobStage,
     JobStatus,
 )
-from classscribe.errors import ClassScribeError, ErrorCode
+from classscribe.errors import ClassScribeError, ErrorCode, public_error_detail
 
 STAGE_ORDER = {stage: index for index, stage in enumerate(JobStage)}
 TERMINAL_JOB_STATUSES = {JobStatus.CANCELLED, JobStatus.COMPLETED}
@@ -294,8 +294,12 @@ class JobStateMachine:
                 self.fail_checkpoint(
                     job,
                     checkpoint,
-                    code=ErrorCode.WORKER_CRASH,
-                    detail=type(exc).__name__,
+                    code=exc.code if isinstance(exc, ClassScribeError) else ErrorCode.WORKER_CRASH,
+                    detail=public_error_detail(
+                        exc.detail
+                        if isinstance(exc, ClassScribeError)
+                        else f"{type(exc).__name__}: {exc}"
+                    )[:1000],
                 )
             raise
 

@@ -1094,3 +1094,34 @@ def test_unloaded_models_remain_selectable_from_safe_catalog(tmp_path: Path) -> 
     assert recognizer.available_models() == ("qwen", "nemotron")
     catalog.chmod(0o666)
     assert recognizer.available_models() == ()
+
+
+def test_unknown_lid_does_not_vote_against_primary_or_default_accuracy_to_chinese() -> None:
+    class UnknownLID:
+        async def call(self, request: RPCRequest) -> RPCResponse:
+            return RPCResponse(
+                request.request_id,
+                request.job_id,
+                True,
+                "firered_lid",
+                "f" * 40,
+                result={
+                    "language_status": "unknown",
+                    "raw_language": "pa",
+                    "language_probabilities": {"zh": 0.0, "ja": 0.0, "en": 0.0},
+                },
+            )
+
+    async def scenario() -> None:
+        recognizer = RPCStreamingRecognizer(Path("/tmp/primary.sock"))
+        recognizer.config = DictationConfig(language=DictationLanguage.AUTO_MIXED)
+        recognizer._language = StableLanguageRouter(DictationLanguage.AUTO_MIXED)
+        recognizer.job_id = "job"
+        recognizer._stream_pcm = bytearray(b"\0\0" * 16000)
+        recognizer.lid_client = cast(Any, UnknownLID())
+        result = await recognizer._firered_probabilities(DictationChunk(0, 0, 0, 16000, "release"))
+        assert result == {}
+        with pytest.raises(RuntimeError, match="could not resolve"):
+            await recognizer.accuracy_language()
+
+    asyncio.run(scenario())

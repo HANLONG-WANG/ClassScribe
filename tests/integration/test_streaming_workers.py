@@ -233,9 +233,7 @@ def test_nemotron_worker_uses_local_nemo_snapshot_for_streaming(
         def __init__(self) -> None:
             self.encoder = Encoder()
             self.decoding = SimpleNamespace(
-                set_strip_lang_tags=lambda enabled: captured.update(
-                    strip_language_tags=enabled
-                )
+                set_strip_lang_tags=lambda enabled: captured.update(strip_language_tags=enabled)
             )
 
         @classmethod
@@ -295,10 +293,8 @@ def test_nemotron_worker_uses_local_nemo_snapshot_for_streaming(
 
     models.__dict__["ASRModel"] = Model
     models.__dict__["NemotronModel"] = NemotronModel
-    model_utils.__dict__["import_class_by_path"] = (
-        lambda target: NemotronModel
-        if target == "nemo.collections.asr.models.NemotronModel"
-        else None
+    model_utils.__dict__["import_class_by_path"] = lambda target: (
+        NemotronModel if target == "nemo.collections.asr.models.NemotronModel" else None
     )
     nemo_utils.__dict__["model_utils"] = model_utils
     streaming_utils.__dict__["CacheAwareStreamingAudioBuffer"] = AudioBuffer
@@ -640,3 +636,65 @@ def test_firered_worker_uses_official_batch_vad_lid_and_stream_vad_apis(
         await streaming.dispatch("stream_close", {"stream_id": "v"}, event)
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("label,confidence", [("pa", 0.243), ("ko", 0.99)])
+def test_lid_unsupported_language_is_unknown_evidence_not_a_worker_error(
+    tmp_path: Path, label: str, confidence: float
+) -> None:
+    from workers.firered.adapter import create_adapter
+
+    class Model:
+        def process(self, ids: list[str], paths: list[str]) -> list[dict[str, object]]:
+            return [{"lang": label, "confidence": confidence}]
+
+    audio = tmp_path / "audio.wav"
+    _wav(audio)
+    adapter = create_adapter()
+    adapter._model = Model()
+    adapter._model_kind = "lid"
+    result = asyncio.run(
+        adapter.dispatch(
+            "lid",
+            {
+                "audio_path": str(audio),
+                "start_sample": 0,
+                "end_sample": 16000,
+                "sample_rate": 16000,
+            },
+            asyncio.Event(),
+        )
+    )
+    assert result["language"] is None
+    assert result["language_status"] == "unknown"
+    assert result["raw_language"] == label
+    assert result["raw_confidence"] == confidence
+    assert result["language_probabilities"] == {"zh": 0.0, "ja": 0.0, "en": 0.0}
+
+
+@pytest.mark.parametrize("confidence", [float("nan"), float("inf"), -0.1, 1.1, True])
+def test_lid_malformed_confidence_is_still_an_error(tmp_path: Path, confidence: object) -> None:
+    from workers.firered.adapter import create_adapter
+
+    class Model:
+        def process(self, ids: list[str], paths: list[str]) -> list[dict[str, object]]:
+            return [{"lang": "ja", "confidence": confidence}]
+
+    audio = tmp_path / "audio.wav"
+    _wav(audio)
+    adapter = create_adapter()
+    adapter._model = Model()
+    adapter._model_kind = "lid"
+    with pytest.raises(AdapterError):
+        asyncio.run(
+            adapter.dispatch(
+                "lid",
+                {
+                    "audio_path": str(audio),
+                    "start_sample": 0,
+                    "end_sample": 16000,
+                    "sample_rate": 16000,
+                },
+                asyncio.Event(),
+            )
+        )
