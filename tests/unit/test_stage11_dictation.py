@@ -603,8 +603,8 @@ def test_core_lifespan_hands_gpu_between_classroom_and_resident_workers(
 
     asyncio.run(scenario())
     assert events == [
-        "resident-started",
         "jobs-recovered",
+        "resident-started",
         "classroom-paused",
         "resident-loaded",
         "resident-unloaded",
@@ -1050,3 +1050,43 @@ def test_failed_lease_end_is_retained_and_retried() -> None:
         await service.close()
 
     asyncio.run(scenario())
+
+
+def test_scheduler_transmits_requested_language_profile_and_model(tmp_path: Path) -> None:
+    from classscribe.scheduler import GPULeaseIPCServer, GPULeaseManager
+    from classscribe_dictationd.daemon import SchedulerLeaseClient
+
+    observed: list[dict[str, str]] = []
+
+    async def scenario() -> None:
+        server = GPULeaseIPCServer(
+            tmp_path / "lease.sock",
+            GPULeaseManager(),
+            on_prepare=lambda options: observed.append(dict(options)),
+        )
+        await server.start()
+        client = SchedulerLeaseClient(server.socket_path)
+        try:
+            config = DictationConfig(
+                language=DictationLanguage.ENGLISH,
+                confirmation=ConfirmationMode.FAST,
+                model_id="english-model",
+            )
+            await client.begin("configured", config=config)
+            assert observed == [{"language": "en", "profile": "fast", "model_id": "english-model"}]
+            await client.end("configured")
+        finally:
+            await server.close()
+
+    asyncio.run(scenario())
+
+
+def test_unloaded_models_remain_selectable_from_safe_catalog(tmp_path: Path) -> None:
+    path = tmp_path / "resident-workers.json"
+    catalog = tmp_path / "resident-model-catalog.json"
+    catalog.write_text(json.dumps({"schema_version": 1, "models": ["qwen", "nemotron"]}))
+    catalog.chmod(0o600)
+    recognizer = ManifestRoutedStreamingRecognizer(path)
+    assert recognizer.available_models() == ("qwen", "nemotron")
+    catalog.chmod(0o666)
+    assert recognizer.available_models() == ()

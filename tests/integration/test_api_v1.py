@@ -1551,3 +1551,97 @@ def test_install_rejects_language_before_download_and_retries_retained_files(
     assert health_calls == 2
     model = next(item for item in service.models() if item["id"] == manifest.model_id)
     assert model["install_stage"] == "complete"
+
+
+@pytest.mark.parametrize("prewarm", [False, True])
+def test_webui_serves_during_slow_model_preparation_and_cancellation_stops_loads(
+    tmp_path: Path,
+    database: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    prewarm: bool,
+) -> None:
+    import threading
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from tests.unit.test_resident_workers import lifecycle_fixture
+
+    supervisor, manager, processes = lifecycle_fixture(
+        database, tmp_path, monkeypatch, prewarm=prewarm
+    )
+    paths = replace(supervisor.paths, runtime=tmp_path.parent / "runtime-webui")
+    paths.ensure()
+    supervisor.paths = paths
+    supervisor.manifest_path = paths.runtime / "resident-workers.json"
+    entered, release = threading.Event(), threading.Event()
+    original = manager.resolve_for_runtime
+
+    def slow_verify(model_id: str) -> Path:
+        entered.set()
+        if not release.wait(5):
+            raise RuntimeError("test verification gate timed out")
+        return original(model_id)
+
+    monkeypatch.setattr(manager, "resolve_for_runtime", slow_verify)
+    static = tmp_path / "webui"
+    static.mkdir()
+    (static / "index.html").write_text("<html>__CLASSSCRIBE_API_TOKEN__</html>")
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(
+        service=cast(Any, SimpleNamespace(pipeline=None, resident_workers=supervisor)),
+        api_token=token,
+        csrf_token=csrf,
+        enable_scheduler_ipc=True,
+        runtime_paths=paths,
+        static_directory=static,
+    )
+
+    async def scenario() -> None:
+        try:
+            async with app.router.lifespan_context(app):
+                page = await asyncio.wait_for(request(app, "GET", "/"), 0.5)
+                assert page.status == 200
+                assert not processes
+                if not prewarm:
+                    assert not entered.is_set()
+                    denied = await request(
+                        app, "POST", "/api/v1/ibus/workers/prepare", headers=auth(token, csrf)
+                    )
+                    assert denied.status == 403
+                    prepared = await request(
+                        app,
+                        "POST",
+                        "/api/v1/ibus/workers/prepare",
+                        headers=auth(token, csrf, write=True),
+                    )
+                    assert prepared.status == 202
+
+                async def wait_entered() -> None:
+                    while not entered.is_set():
+                        await asyncio.sleep(0.001)
+
+                await asyncio.wait_for(wait_entered(), 1)
+                health = await asyncio.wait_for(request(app, "GET", "/healthz"), 0.5)
+                assert health.status == 200
+                status = await asyncio.wait_for(
+                    request(app, "GET", "/api/v1/ibus/workers", headers=auth(token, csrf)), 0.5
+                )
+                assert status.json()["stage"] == "verifying"
+                cancelled = await asyncio.wait_for(
+                    request(
+                        app,
+                        "POST",
+                        "/api/v1/ibus/workers/release",
+                        headers=auth(token, csrf, write=True),
+                    ),
+                    0.5,
+                )
+                assert cancelled.status == 200
+                release.set()
+                await asyncio.sleep(0.02)
+                assert not processes
+                assert supervisor.status()["stage"] == "unloaded"
+        finally:
+            release.set()
+
+    asyncio.run(scenario())

@@ -931,6 +931,21 @@ details summary {
   width: 100%;
   margin: 1rem 0;
 }
+.worker-readiness {
+  min-width: 0;
+  padding: 1.2rem;
+  overflow-wrap: anywhere;
+}
+.worker-readiness h2 {
+  font-size: 1.1rem;
+}
+.worker-readiness p {
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.worker-readiness .toolbar {
+  margin-top: 0.8rem;
+}
 .ibus-console .notice {
   width: 100%;
 }

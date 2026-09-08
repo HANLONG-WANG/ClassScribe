@@ -33,15 +33,36 @@ class InstalledModels:
     def __init__(self, root: Path, revisions: dict[str, str]) -> None:
         self.root = root
         self.revisions = revisions
+        self.verifications: list[str] = []
         for model_id, revision in revisions.items():
             (root / model_id / revision).mkdir(parents=True)
 
     def resolve_for_runtime(self, model_id: str) -> Path:
+        self.verifications.append(model_id)
+        return self.installed_revision_metadata(model_id)
+
+    def installed_revision_metadata(self, model_id: str) -> Path:
         try:
             revision = self.revisions[model_id]
         except KeyError as exc:
             raise FileNotFoundError(model_id) from exc
         return self.root / model_id / revision
+
+    def revision_fingerprint(
+        self, model_id: str
+    ) -> tuple[tuple[str, int, int, int, int, int], ...]:
+        path = self.installed_revision_metadata(model_id)
+        metadata = path.stat()
+        return (
+            (
+                str(path),
+                metadata.st_dev,
+                metadata.st_ino,
+                metadata.st_size,
+                metadata.st_mtime_ns,
+                metadata.st_ctime_ns,
+            ),
+        )
 
 
 def test_resident_manifest_is_same_user_bounded_and_strict(tmp_path: Path) -> None:
@@ -168,6 +189,7 @@ def test_resident_workers_are_unloaded_for_classroom_and_refresh_waits_for_idle(
         )
 
     monkeypatch.setattr(supervisor, "_start_locked", start_workers)
+    monkeypatch.setattr(supervisor, "_catalog", lambda: ())
 
     async def scenario() -> None:
         suspended = await supervisor.suspend_for_classroom()
@@ -431,64 +453,24 @@ def test_gpu_stop_retains_cpu_auxiliary_worker_and_unloads_gpu_worker(
     assert not cpu.calls and not cpu.stopped
 
 
-def test_resident_start_builds_only_available_routes_and_records_auxiliary_failure(
+def test_resident_start_loads_only_current_route_and_required_auxiliaries(
     database: tuple[Engine, sessionmaker[Session], Path],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _, sessions, _ = database
-    registry = load_registry(Path("config/model-registry.v1.yaml"))
-    qwen = registry.model("qwen3_asr_1_7b")
-    paths = AppPaths.from_environment({}, home=tmp_path / "home")
-    paths.ensure()
-    supervisor = DictationWorkerSupervisor(
-        paths,
-        load_config(environment={}),
-        registry,
-        cast(ModelManager, object()),
-        cast(WorkerEnvironmentProvisioner, object()),
-        sessions,
-    )
-    monkeypatch.setattr("classscribe.models.resident.shutil.which", lambda _name: "/usr/bin/bwrap")
-    monkeypatch.setattr(
-        supervisor,
-        "planned_profile_models",
-        lambda: (
-            {
-                "ibus.ja.fast": qwen.id,
-                "ibus.ja.balanced": qwen.id,
-                "ibus.ja.accuracy": qwen.id,
-            },
-            (qwen,),
-        ),
-    )
-    started: list[tuple[str, bool]] = []
-
-    async def start_entry(entry: Any, _socket: Path, *, expose_gpu: bool = True) -> None:
-        started.append((entry.id, expose_gpu))
-        if entry.id == "firered_lid":
-            raise RuntimeError("LID fixture unavailable")
-
-    monkeypatch.setattr(supervisor, "_start_entry", start_entry)
-    monkeypatch.setattr(
-        supervisor,
-        "_installed_accuracy_entry",
-        lambda language: qwen if language in {"ja", "auto"} else None,
-    )
+    supervisor, manager, processes = lifecycle_fixture(database, tmp_path, monkeypatch)
     manifest = asyncio.run(supervisor._start_locked())
     assert manifest.ready
-    assert manifest.default_model_id == qwen.id
-    assert manifest.accuracy_socket == manifest.routes[0].socket_path
-    assert manifest.accuracy_routes["ja"].model_id == qwen.id
-    assert manifest.accuracy_routes["ja"].expected_load_ms is None
-    assert [item[0] for item in started] == [qwen.id, "firered_vad", "firered_lid"]
-    assert started[1:] == [("firered_vad", False), ("firered_lid", False)]
-    assert any("LID fixture unavailable" in error for error in manifest.errors)
-
+    assert manifest.default_model_id == "qwen3_asr_1_7b"
+    assert manifest.lid_socket is None
+    assert manifest.accuracy_routes == {}
+    assert [process.model_id for process in processes] == ["firered_vad", "qwen3_asr_1_7b"]
+    assert sorted(manager.verifications) == ["firered_vad", "qwen3_asr_1_7b"]
     monkeypatch.setattr("classscribe.models.resident.shutil.which", lambda _name: None)
     unavailable = asyncio.run(supervisor._start_locked())
     assert not unavailable.ready
     assert unavailable.errors == ("Bubblewrap is unavailable",)
+    assert not supervisor._processes
 
 
 @pytest.mark.parametrize("model_id", ["qwen3_asr_1_7b", "firered_vad"])
@@ -599,3 +581,271 @@ def test_resident_entry_loads_and_unloads_in_sandbox(
     assert Process.instances[0].calls[0].params["device"] == "cpu"
     assert Process.instances[0].stopped
     assert not supervisor._processes
+
+
+class LifecycleProcess:
+    def __init__(self, spec: Any, processes: list[LifecycleProcess], failures: set[str]) -> None:
+        self.spec = spec
+        self.running = False
+        self.model_id = ""
+        self.failures = failures
+        self.stopped = False
+        processes.append(self)
+
+    async def start(self, *, timeout_seconds: float) -> None:
+        self.running = True
+
+    async def call(self, request: RPCRequest) -> RPCResponse:
+        if request.method == "load":
+            self.model_id = str(request.params["model_id"])
+        failed = request.method == "load" and self.model_id in self.failures
+        return RPCResponse(
+            request.request_id,
+            request.job_id,
+            not failed,
+            self.model_id,
+            "a" * 40,
+            error_code="model_load_failed" if failed else None,
+            error_detail="fixture load failure" if failed else None,
+        )
+
+    async def stop(self) -> None:
+        self.running = False
+        self.stopped = True
+
+
+def lifecycle_fixture(
+    database: tuple[Engine, sessionmaker[Session], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    installed: tuple[str, ...] = ("qwen3_asr_1_7b", "firered_vad"),
+    enabled: bool = True,
+    prewarm: bool = False,
+    idle: int = 60,
+    failures: set[str] | None = None,
+) -> tuple[DictationWorkerSupervisor, InstalledModels, list[LifecycleProcess]]:
+    from types import SimpleNamespace
+
+    registry = load_registry(Path("config/model-registry.v1.yaml"))
+    _, sessions, _ = database
+    paths = AppPaths.from_environment({}, home=tmp_path / "home")
+    paths.ensure()
+    manager = InstalledModels(
+        tmp_path / "models", {key: registry.model(key).revision for key in installed}
+    )
+    config = load_config(environment={})
+    config = config.model_copy(
+        update={
+            "ibus": config.ibus.model_copy(
+                update={
+                    "enabled": enabled,
+                    "prewarm_on_startup": prewarm,
+                    "idle_unload_seconds": idle,
+                }
+            )
+        }
+    )
+    processes: list[LifecycleProcess] = []
+    supervisor = DictationWorkerSupervisor(
+        paths,
+        config,
+        registry,
+        cast(ModelManager, manager),
+        cast(
+            WorkerEnvironmentProvisioner,
+            SimpleNamespace(resolve=lambda _: tmp_path / "environment"),
+        ),
+        sessions,
+        sandbox=cast(Any, SimpleNamespace(command=lambda **_: ("fixture",))),
+    )
+    monkeypatch.setattr("classscribe.models.resident.shutil.which", lambda _: "/usr/bin/bwrap")
+    monkeypatch.setattr(
+        "classscribe.models.resident.provisioned_worker_command",
+        lambda _: ("/bin/python", "/worker.py"),
+    )
+    monkeypatch.setattr("classscribe.models.resident.nvidia_devices", lambda: ())
+    monkeypatch.setattr(
+        "classscribe.models.resident.WorkerProcess",
+        lambda spec: LifecycleProcess(spec, processes, failures if failures is not None else set()),
+    )
+    return supervisor, manager, processes
+
+
+def test_cold_start_never_loads_or_hashes_models_and_disable_blocks_all_preparation(
+    database: tuple[Engine, sessionmaker[Session], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor, manager, processes = lifecycle_fixture(database, tmp_path, monkeypatch)
+
+    async def scenario() -> None:
+        await supervisor.start()
+        assert not processes and not manager.verifications
+        assert supervisor._background is not None
+        await supervisor._background
+        assert supervisor.status()["stage"] == "unloaded"
+        assert not processes and not manager.verifications
+        await supervisor.close()
+        supervisor.config = supervisor.config.model_copy(
+            update={"ibus": supervisor.config.ibus.model_copy(update={"enabled": False})}
+        )
+        await supervisor.start()
+        assert supervisor.status()["stage"] == "disabled"
+        with pytest.raises(RuntimeError, match="disabled"):
+            await supervisor.resume_for_dictation()
+        with pytest.raises(RuntimeError):
+            await supervisor.request_prewarm()
+        await supervisor.refresh()
+        assert not processes and not manager.verifications
+        await supervisor.close()
+
+    asyncio.run(scenario())
+
+
+def test_prewarm_is_reused_then_released_on_classroom_handoff(
+    database: tuple[Engine, sessionmaker[Session], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor, manager, processes = lifecycle_fixture(
+        database, tmp_path, monkeypatch, prewarm=True
+    )
+
+    async def scenario() -> None:
+        await supervisor.start()
+        assert supervisor._background is not None
+        await supervisor._background
+        assert supervisor.status()["stage"] == "ready"
+        assert len(processes) == 2
+        await supervisor.resume_for_dictation()
+        await supervisor.end_dictation()
+        await supervisor.resume_for_dictation()
+        assert len(processes) == 2
+        assert len(manager.verifications) == 2
+        await supervisor.end_dictation()
+        await supervisor.suspend_for_classroom()
+        assert all(process.stopped for process in processes)
+        assert not supervisor._processes
+        await supervisor.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("language", ["ja", "auto"])
+def test_missing_required_components_fail_before_hashing_or_loading(
+    database: tuple[Engine, sessionmaker[Session], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    language: str,
+) -> None:
+    installed = ("qwen3_asr_1_7b",) if language == "ja" else ("qwen3_asr_1_7b", "firered_vad")
+    supervisor, manager, processes = lifecycle_fixture(
+        database, tmp_path, monkeypatch, installed=installed
+    )
+
+    async def scenario() -> None:
+        result = await supervisor.resume_for_dictation(language=language)
+        assert not result.ready
+        assert not supervisor._dictation_active
+        assert supervisor.status()["stage"] == "failed"
+        assert not processes and not manager.verifications
+        await supervisor.close()
+
+    asyncio.run(scenario())
+
+
+def test_partial_load_failure_cleans_up_and_allows_retry(
+    database: tuple[Engine, sessionmaker[Session], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failures = {"qwen3_asr_1_7b"}
+    supervisor, manager, processes = lifecycle_fixture(
+        database, tmp_path, monkeypatch, failures=failures
+    )
+
+    async def scenario() -> None:
+        assert not (await supervisor.resume_for_dictation()).ready
+        assert all(process.stopped for process in processes)
+        assert not supervisor._processes
+        failures.clear()
+        assert (await supervisor.resume_for_dictation()).ready
+        assert len(manager.verifications) == 4
+        await supervisor.end_dictation()
+        await supervisor.release_idle()
+        assert all(process.stopped for process in processes)
+        await supervisor.close()
+
+    asyncio.run(scenario())
+
+
+def test_idle_models_release_after_timeout(
+    database: tuple[Engine, sessionmaker[Session], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor, _manager, processes = lifecycle_fixture(database, tmp_path, monkeypatch, idle=1)
+
+    async def scenario() -> None:
+        await supervisor.resume_for_dictation()
+        await supervisor.end_dictation()
+        assert any(process.running for process in processes)
+        await asyncio.sleep(1.1)
+        assert all(process.stopped for process in processes)
+        assert supervisor.status()["stage"] == "unloaded"
+        await supervisor.close()
+
+    asyncio.run(scenario())
+
+
+def test_file_changes_invalidate_warm_reuse_and_rerun_full_verification(
+    database: tuple[Engine, sessionmaker[Session], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor, manager, processes = lifecycle_fixture(database, tmp_path, monkeypatch)
+
+    async def scenario() -> None:
+        await supervisor.prewarm()
+        path = manager.installed_revision_metadata("qwen3_asr_1_7b")
+        (path / "changed").write_bytes(b"new file")
+        await supervisor.resume_for_dictation()
+        assert len(processes) == 4
+        assert len(manager.verifications) == 4
+        assert all(process.stopped for process in processes[:2])
+        await supervisor.end_dictation()
+        await supervisor.close()
+
+    asyncio.run(scenario())
+
+
+def test_actual_dictation_preparation_rejects_competing_manual_prewarm(
+    database: tuple[Engine, sessionmaker[Session], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor, _manager, _processes = lifecycle_fixture(database, tmp_path, monkeypatch)
+
+    async def scenario() -> None:
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def slow_start() -> ResidentWorkerManifest:
+            entered.set()
+            await release.wait()
+            return supervisor._empty_manifest([])
+
+        monkeypatch.setattr(supervisor, "_start_locked", slow_start)
+        task = asyncio.create_task(supervisor.resume_for_dictation())
+        await entered.wait()
+        assert supervisor.status()["active"] is True
+        with pytest.raises(RuntimeError):
+            await supervisor.request_prewarm()
+        with pytest.raises(RuntimeError):
+            await supervisor.release_idle()
+        release.set()
+        await task
+        assert supervisor.status()["active"] is False
+        await supervisor.close()
+
+    asyncio.run(scenario())

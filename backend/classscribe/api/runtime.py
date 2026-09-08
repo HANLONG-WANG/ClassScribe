@@ -63,6 +63,7 @@ def build_default_service(config: AppConfig | None = None) -> ClassScribeService
         sessions,
         ProductionStageRunner(paths, config, registry, manager, invoker),
     )
+    resident_workers.can_prewarm = lambda: not pipeline.has_running_jobs()
     return ClassScribeService(
         sessions,
         paths,

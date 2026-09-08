@@ -664,7 +664,41 @@ class ModelManager:
             )
         return self._validate_installed_revision(model_id, revision)
 
-    def _validate_installed_revision(self, model_id: str, revision: str) -> Path:
+    def installed_revision_metadata(self, model_id: str) -> Path:
+        """Inspect installation records for planning only; never authorize model execution."""
+        self._validate_identifier(model_id)
+        revision = self._active_revision(model_id)
+        if revision is None:
+            raise ClassScribeError(
+                ErrorCode.MODEL_NOT_FULLY_INSTALLED, f"model {model_id} has no active revision"
+            )
+        return self._validate_installed_revision(model_id, revision, verify_files=False)
+
+    def revision_fingerprint(
+        self, model_id: str
+    ) -> tuple[tuple[str, int, int, int, int, int], ...]:
+        """Stat-only invalidation token for already verified, loaded worker reuse."""
+        target = self.installed_revision_metadata(model_id)
+        result = []
+        for path in (target, *sorted(target.rglob("*"))):
+            if path.is_symlink():
+                raise ClassScribeError(ErrorCode.MODEL_INTEGRITY_FAILED, "model contains a symlink")
+            metadata = path.stat()
+            result.append(
+                (
+                    str(path),
+                    metadata.st_dev,
+                    metadata.st_ino,
+                    metadata.st_size,
+                    metadata.st_mtime_ns,
+                    metadata.st_ctime_ns,
+                )
+            )
+        return tuple(result)
+
+    def _validate_installed_revision(
+        self, model_id: str, revision: str, *, verify_files: bool = True
+    ) -> Path:
         target = self.root / model_id / "revisions" / revision
         if target.is_symlink() or (target / AUDIT_FILENAME).is_symlink():
             raise ClassScribeError(
@@ -681,9 +715,10 @@ class ModelManager:
                 or audit["health_check"].get("healthy") is not True
             ):
                 raise ValueError("revision has no successful health check")
-            aggregate = self._verify_payload(target, manifest, allow_audit=True)
-            if aggregate != audit["aggregate_sha256"]:
-                raise ValueError("aggregate checksum mismatch")
+            if verify_files:
+                aggregate = self._verify_payload(target, manifest, allow_audit=True)
+                if aggregate != audit["aggregate_sha256"]:
+                    raise ValueError("aggregate checksum mismatch")
         except (
             OSError,
             KeyError,

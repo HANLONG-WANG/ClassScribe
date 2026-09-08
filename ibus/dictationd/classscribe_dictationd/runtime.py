@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import stat
@@ -510,6 +511,31 @@ class ManifestRoutedStreamingRecognizer:
         self._expected_load_ms: float | None = None
 
     def available_models(self) -> tuple[str, ...]:
+        # Catalog entries describe installed choices, not already-loaded worker sockets.
+        try:
+            path = self.manifest_path.with_name("resident-model-catalog.json")
+            metadata = path.lstat()
+            if (
+                path.is_symlink()
+                or not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_mode & 0o077
+                or metadata.st_size > 65536
+            ):
+                raise ValueError("unsafe resident catalog")
+            value = json.loads(path.read_text(encoding="utf-8"))
+            models = value.get("models") if isinstance(value, dict) else None
+            if (
+                not isinstance(value, dict)
+                or value.get("schema_version") != 1
+                or not isinstance(models, list)
+                or len(models) > 256
+                or any(not isinstance(item, str) or not item or len(item) > 128 for item in models)
+            ):
+                raise ValueError("invalid resident catalog")
+            return tuple(models)
+        except (OSError, ValueError):
+            pass
         try:
             manifest = load_resident_worker_manifest(self.manifest_path)
         except (OSError, ValueError):

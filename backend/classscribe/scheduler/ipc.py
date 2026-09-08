@@ -10,7 +10,7 @@ import os
 import socket
 import stat
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from classscribe.scheduler.gpu import GPULeaseManager
@@ -26,6 +26,7 @@ class GPULeaseIPCServer:
         *,
         lease_timeout_seconds: float = 45.0,
         on_begin: Callable[[], object] | None = None,
+        on_prepare: Callable[[Mapping[str, str]], object] | None = None,
         on_end: Callable[[], object] | None = None,
         on_prepare_accuracy: Callable[[str], object] | None = None,
     ) -> None:
@@ -40,6 +41,7 @@ class GPULeaseIPCServer:
         self.socket_path = socket_path
         self.manager = manager
         self.on_begin = on_begin
+        self.on_prepare = on_prepare
         self.on_end = on_end
         self.on_prepare_accuracy = on_prepare_accuracy
         self._sessions: set[str] = set()
@@ -87,12 +89,27 @@ class GPULeaseIPCServer:
             if not isinstance(session_id, str) or not session_id:
                 raise ValueError("GPU lease session ID is invalid")
             if action == "begin_dictation":
+                options: dict[str, str] = {}
+                for key in ("language", "profile", "model_id"):
+                    if key in request:
+                        value = request[key]
+                        if not isinstance(value, str) or not value or len(value) > 128:
+                            raise ValueError("invalid dictation preparation options")
+                        options[key] = value
+                if "language" in options and options["language"] not in {"zh", "ja", "en", "auto"}:
+                    raise ValueError("invalid dictation language")
+                if "profile" in options and options["profile"] not in {
+                    "fast",
+                    "balanced",
+                    "accuracy",
+                }:
+                    raise ValueError("invalid dictation profile")
                 self._deadlines[session_id] = (
                     asyncio.get_running_loop().time() + self.lease_timeout_seconds
                 )
                 task = self._preparations.get(session_id)
                 if task is None:
-                    task = asyncio.create_task(self._begin_session(session_id))
+                    task = asyncio.create_task(self._begin_session(session_id, options))
                     self._preparations[session_id] = task
                 try:
                     await asyncio.shield(task)
@@ -135,7 +152,9 @@ class GPULeaseIPCServer:
         with contextlib.suppress(OSError):
             await writer.wait_closed()
 
-    async def _begin_session(self, session_id: str) -> None:
+    async def _begin_session(
+        self, session_id: str, options: Mapping[str, str] | None = None
+    ) -> None:
         async with self._lock:
             if session_id in self._sessions:
                 return
@@ -143,8 +162,12 @@ class GPULeaseIPCServer:
             self._sessions.add(session_id)
             await self.manager.begin_dictation()
             try:
-                if was_empty and self.on_begin is not None:
-                    result = self.on_begin()
+                if was_empty and (self.on_prepare is not None or self.on_begin is not None):
+                    if self.on_prepare is not None:
+                        result = self.on_prepare(options or {})
+                    else:
+                        assert self.on_begin is not None
+                        result = self.on_begin()
                     if inspect.isawaitable(result):
                         await result
             except BaseException:

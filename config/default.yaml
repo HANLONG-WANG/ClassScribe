@@ -43,6 +43,8 @@ quality:
 
 ibus:
   enabled: true
+  prewarm_on_startup: false
+  idle_unload_seconds: 60
   activation: hold
   show_interim: true
   default_language: ja

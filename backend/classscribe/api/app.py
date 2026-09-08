@@ -7,7 +7,7 @@ import html
 import json
 import os
 import stat
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -67,48 +67,60 @@ def create_app(
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
         lease_server: GPULeaseIPCServer | None = None
         resident_workers: Any | None = None
-        concrete = api_service.get() if isinstance(api_service, LazyService) else api_service
-        pipeline = concrete.pipeline
-        if enable_scheduler_ipc:
-            paths = runtime_paths or AppPaths.from_environment()
-            paths.ensure()
-            resident_workers = concrete.resident_workers
+        try:
+            concrete = api_service.get() if isinstance(api_service, LazyService) else api_service
+            pipeline = concrete.pipeline
+            if enable_scheduler_ipc:
+                paths = runtime_paths or AppPaths.from_environment()
+                paths.ensure()
+                resident_workers = concrete.resident_workers
+
+                async def prepare_dictation(options: Mapping[str, str] | None = None) -> None:
+                    if resident_workers is not None and not getattr(
+                        resident_workers, "enabled", True
+                    ):
+                        raise RuntimeError("IBus is disabled")
+                    if pipeline is not None:
+                        await pipeline.arm_dictation_at_safe_boundary()
+                    if resident_workers is not None:
+                        manifest = (
+                            await resident_workers.resume_for_dictation(
+                                language=options.get("language"),
+                                profile=options.get("profile"),
+                                model_id=options.get("model_id", "auto_best"),
+                            )
+                            if options
+                            else await resident_workers.resume_for_dictation()
+                        )
+                        if not manifest.ready:
+                            raise RuntimeError(
+                                "; ".join(manifest.errors)
+                                or "resident dictation workers are unavailable"
+                            )
+
+                async def finish_dictation() -> None:
+                    if resident_workers is not None:
+                        await resident_workers.end_dictation()
+                    if pipeline is not None:
+                        pipeline.resume_preempted()
+
+                async def prepare_accuracy(language: str) -> None:
+                    if resident_workers is None:
+                        raise RuntimeError("resident worker supervisor is unavailable")
+                    await resident_workers.prepare_accuracy(language)
+
+                lease_server = GPULeaseIPCServer(
+                    paths.runtime / "gpu-lease.sock",
+                    GPULeaseManager(),
+                    on_prepare=prepare_dictation,
+                    on_end=finish_dictation,
+                    on_prepare_accuracy=prepare_accuracy,
+                )
+                await lease_server.start()
+            if pipeline is not None:
+                pipeline.start_recovered_jobs()
             if resident_workers is not None:
                 await resident_workers.start()
-
-            async def prepare_dictation() -> None:
-                if pipeline is not None:
-                    await pipeline.arm_dictation_at_safe_boundary()
-                if resident_workers is not None:
-                    manifest = await resident_workers.resume_for_dictation()
-                    if not manifest.ready:
-                        raise RuntimeError(
-                            "; ".join(manifest.errors)
-                            or "resident dictation workers are unavailable"
-                        )
-
-            async def finish_dictation() -> None:
-                if resident_workers is not None:
-                    await resident_workers.end_dictation()
-                if pipeline is not None:
-                    pipeline.resume_preempted()
-
-            async def prepare_accuracy(language: str) -> None:
-                if resident_workers is None:
-                    raise RuntimeError("resident worker supervisor is unavailable")
-                await resident_workers.prepare_accuracy(language)
-
-            lease_server = GPULeaseIPCServer(
-                paths.runtime / "gpu-lease.sock",
-                GPULeaseManager(),
-                on_begin=prepare_dictation,
-                on_end=finish_dictation,
-                on_prepare_accuracy=prepare_accuracy,
-            )
-            await lease_server.start()
-        if pipeline is not None:
-            pipeline.start_recovered_jobs()
-        try:
             yield
         finally:
             if lease_server is not None:
@@ -159,6 +171,30 @@ def create_app(
     @application.get("/api/v1/ibus/status")
     async def ibus_status() -> dict[str, object]:
         return await _ibus_status(runtime_paths)
+
+    def worker_supervisor() -> Any:
+        supervisor = api_service.resident_workers
+        if supervisor is None:
+            raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "语音输入模型管理器不可用。")
+        return supervisor
+
+    @application.get("/api/v1/ibus/workers")
+    async def ibus_workers() -> dict[str, object]:
+        return dict(worker_supervisor().status())
+
+    @application.post("/api/v1/ibus/workers/prepare", status_code=202)
+    async def prewarm_ibus_workers() -> dict[str, object]:
+        try:
+            return dict(await worker_supervisor().request_prewarm())
+        except RuntimeError as exc:
+            raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, str(exc)) from exc
+
+    @application.post("/api/v1/ibus/workers/release")
+    async def release_ibus_workers() -> dict[str, object]:
+        try:
+            return dict(await worker_supervisor().release_idle())
+        except RuntimeError as exc:
+            raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, str(exc)) from exc
 
     application.include_router(create_api_router(api_service))  # type: ignore[arg-type]
     if static_directory is not None:

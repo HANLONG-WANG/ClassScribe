@@ -82,9 +82,10 @@ Hugging Face 官方 HTTPS host，拒绝凭证 URL、跨 host/非 HTTPS redirect�
 绑定 worker ID 和 lock SHA。运行器只使用该环境中的解释器，不回退系统 site-packages，也不在
 任务期间解析或下载依赖。
 
-安装健康通过并切换 active revision 后，core 请求 resident supervisor 刷新。刷新只调用
-`WorkerEnvironmentProvisioner.resolve()` 读取已经完成且 lock SHA 匹配的环境；它不会调用
-`ensure()`、`uv sync` 或 downloader。课堂一次性 worker 和 IBus 常驻 worker 都遵守这一分界：
+安装健康通过并切换 active revision 后，core 请求 resident supervisor 刷新安装目录并使旧预热状态失效，
+不会因刷新而加载模型。实际听写或用户请求预热时，才调用 `WorkerEnvironmentProvisioner.resolve()`
+读取已完成且 lock SHA 匹配的环境；它不会调用 `ensure()`、`uv sync` 或 downloader。
+课堂一次性 worker 和 IBus worker 都遵守这一分界：
 环境创建只属于用户确认的安装事务，普通推理缺环境时立即报告未完整安装。
 
 manifest diff 会列出 added、removed、hash/size/kind changed 和其中所有 remote-code

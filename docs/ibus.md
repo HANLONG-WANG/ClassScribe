@@ -40,19 +40,39 @@ PipeWire/base/good 插件和 portal 依赖。
 `--model-worker MODEL_ID=SOCKET`、显式 VAD/LID/accuracy socket 只保留给合同测试和人工诊断；
 正常 systemd 路径完全由 core 清单路由。清单必须是当前 UID 拥有、非 symlink、普通文件、`0600`、
 不超过 64 KiB；其中每个 socket 必须直接位于同一 runtime 的 `workers/`、为当前 UID 的真实 socket
-且无 group/other 权限。profile 应用、回滚或模型安装健康确认后，core 在没有活动听写模型会话的
-刷新点停止并卸载旧进程，再按新清单启动。
+且无 group/other 权限。另一个同用户、0600、至多 64 KiB 的 `resident-model-catalog.json` 仅列出
+已安装的流式模型 ID，供冷启动时的选单展示；该目录不代表已有可用 worker，不授权推理。
 
-常驻集合受 `hardware.max_vram_mb`（含每模型 safety margin）约束，优先默认语言/profile 和有效的
-本机 gold 排名；预算装不下另一模型时，相容 profile 明确路由到已加载模型，而不是超配、临时 load
-或隐式下载。没有合格本机排名时只使用带 bootstrap 标记的 registry 顺序。FireRed VAD/LID 以 CPU、
-无 GPU device 启动；ASR 只看到显式 NVIDIA character devices。任一 worker 不可用会使清单记录错误，
-无法形成 ASR+VAD 的组合则 `ready=false`，听写安全失败且不 commit。
+## 按需加载与可选预热
 
-“常驻”只覆盖 IBus 拥有 GPU 的窗口和没有课堂占用的 idle 时段，绝不表示和课堂重型 worker 并存：
-课堂推理启动前同步卸载整组 resident；听写 begin 等待所有 RUNNING 课堂 job 到安全 checkpoint 后
-重新加载，听写 end 先卸载再恢复课堂。活动听写期间安装/profile 刷新只登记为待处理，不替换当前
-socket；下一 idle→arming 边界才计算新路由。
+core 先完成数据库、调度接口和任务恢复初始化，然后开放 WebUI；启动时不会等待模型权重加载。
+默认仅在后台读取安装元数据，既不启动模型进程，也不对全部权重做 SHA-256 扫描。
+
+```yaml
+ibus:
+  enabled: true
+  prewarm_on_startup: false
+  idle_unload_seconds: 60
+```
+
+- `enabled: false` 阻止启动预热、手动预热和听写准备；安装或 profile 变更也不会触发模型加载。
+- 默认按实际听写请求的语言、档位和手动模型选择，仅加载一条流式路线。没有合格本机排名时使用
+  bootstrap 顺序；最高精度的非流式确认模型只在真正需要确认时切入。
+- 先确认 ASR、FireRedVAD、运行环境齐全；自动/混合语言还要求 FireRedLID。只有这些检查通过后，
+  才在后台线程中对本次所需文件逐个完整校验，再加载 CPU 辅助模型和 ASR。任一步失败或取消会清理
+  已启动的进程，`ready=false`，不会留下无法组成可用链路的 ASR。
+- 每次准备中的同一模型只完整校验一次。预热模型在版本及文件元数据未变化、进程存活且配置相同时
+  复用；复用前检查文件集合、设备/inode、大小、mtime/ctime。变化、升级、删除、回滚或 profile 更新
+  会使复用失效，下一次加载重新完整校验。手动文件校验始终读取全部权重。
+- IBus 页面提供“预热默认模型”和“释放模型”，显示检查依赖、校验文件、加载、就绪及失败原因。
+  `prewarm_on_startup: true` 开启可选后台预热；课堂任务运行时不进行后台预热。
+- 听写结束后相同配置的 worker 默认保留 60 秒，便于下一次复用，空闲超时自动释放。
+  `idle_unload_seconds: 0` 表示听写结束立即释放；关闭 core 也会清理后台任务与 worker。
+
+“常驻”不表示和课堂重型 worker 并存：课堂推理启动前会取消预热并卸载 resident；听写 begin 等待
+课堂 job 到安全 checkpoint 后再准备。听写 end 恢复课堂调度，课堂需要 GPU 时立即释放缓存的 worker。
+活动听写期间安装/profile 刷新仅登记失效，不替换当前 socket；结束后释放，下一次按新配置准备。
+所有这些路径只解析已有环境，不安装 Python 依赖、不下载模型。
 
 ## 状态机与输入语义
 

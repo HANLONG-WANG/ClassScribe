@@ -112,6 +112,8 @@ class QualityConfig(StrictModel):
 
 class IBusConfig(StrictModel):
     enabled: bool = True
+    prewarm_on_startup: bool = False
+    idle_unload_seconds: int = Field(default=60, ge=0, le=3600)
     activation: Literal["hold", "toggle"] = "hold"
     show_interim: bool = True
     default_language: LanguageMode = LanguageMode.JAPANESE

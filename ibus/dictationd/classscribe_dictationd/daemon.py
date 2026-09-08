@@ -68,11 +68,11 @@ class SchedulerLeaseClient:
         self._renewals: dict[str, asyncio.Task[None]] = {}
         self._lost: dict[str, asyncio.Event] = {}
 
-    async def begin(self, session_id: str) -> None:
+    async def begin(self, session_id: str, *, config: DictationConfig | None = None) -> None:
         self._lost[session_id] = asyncio.Event()
         self._renewals[session_id] = asyncio.create_task(self._renew(session_id))
         try:
-            await self._request("begin_dictation", session_id)
+            await self._request("begin_dictation", session_id, config=config)
         except BaseException:
             with contextlib.suppress(Exception):
                 await self.end(session_id)
@@ -102,7 +102,14 @@ class SchedulerLeaseClient:
     async def prepare_accuracy(self, session_id: str, language: str) -> None:
         await self._request("prepare_accuracy", session_id, language=language)
 
-    async def _request(self, action: str, session_id: str, *, language: str | None = None) -> None:
+    async def _request(
+        self,
+        action: str,
+        session_id: str,
+        *,
+        language: str | None = None,
+        config: DictationConfig | None = None,
+    ) -> None:
         metadata = self.socket_path.lstat()
         if (
             self.socket_path.is_symlink()
@@ -117,19 +124,32 @@ class SchedulerLeaseClient:
             payload = {"action": action, "session_id": session_id}
             if language is not None:
                 payload["language"] = language
+            if config is not None:
+                payload.update(
+                    language="auto"
+                    if config.language.value == "auto_mixed"
+                    else config.language.value,
+                    profile=config.confirmation.value,
+                    model_id=config.model_id,
+                )
             writer.write(json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n")
             await writer.drain()
             response_timeout = (
                 180.0
                 if action == "prepare_accuracy"
-                else (35.0 if action == "begin_dictation" else 2.0)
+                else (600.0 if action == "begin_dictation" else 2.0)
             )
             raw = await asyncio.wait_for(reader.readline(), timeout=response_timeout)
             if not raw.endswith(b"\n") or len(raw) > 4096:
                 raise RuntimeError("core returned an invalid GPU lease response")
             response = json.loads(raw)
             if not isinstance(response, dict) or response.get("ok") is not True:
-                raise RuntimeError("core rejected dictation GPU lease")
+                detail = (
+                    response.get("error", "core rejected dictation GPU lease")
+                    if isinstance(response, dict)
+                    else "invalid core response"
+                )
+                raise RuntimeError(str(detail))
         finally:
             writer.close()
             await writer.wait_closed()
@@ -190,7 +210,10 @@ class DictationService:
             self._loop = asyncio.get_running_loop()
             try:
                 self._session_id = session_id
-                await self.lease.begin(session_id)
+                if isinstance(self.lease, SchedulerLeaseClient):
+                    await self.lease.begin(session_id, config=self.controller.config)
+                else:
+                    await self.lease.begin(session_id)
                 await self.vad.open(session_id)
                 status = await self.controller.activate()
                 if status.state is DictationState.IDLE:

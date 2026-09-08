@@ -187,6 +187,9 @@ class ClassroomPipeline:
             )
         self.broker.publish(job_id, "pipeline_initialized", stage=JobStage.CREATED.value)
 
+    def has_running_jobs(self) -> bool:
+        return any(not task.done() for task in self._tasks)
+
     def start_recovered_jobs(self) -> None:
         """Run once before serving requests; never scan beneath an active executor."""
         if self._startup_recovered or self._tasks:

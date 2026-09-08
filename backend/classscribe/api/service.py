@@ -841,10 +841,14 @@ class ClassScribeService:
 
     def delete_model(self, model_id: str, revision: str) -> dict[str, Any]:
         self._model_manager().delete_revision(model_id, revision)
+        if self.resident_workers is not None:
+            self.resident_workers.request_refresh()
         return {"model_id": model_id, "revision": revision, "deleted": True}
 
     def rollback_model(self, model_id: str, revision: str) -> dict[str, Any]:
         self._model_manager().rollback(model_id, revision)
+        if self.resident_workers is not None:
+            self.resident_workers.request_refresh()
         return {"model_id": model_id, "revision": revision, "active": True}
 
     def profiles(self) -> list[dict[str, Any]]:

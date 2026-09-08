@@ -796,3 +796,23 @@ def test_dependency_failure_retains_verified_payload_and_retry_rechecks_hashes(
             plan.confirmation_token, downloader=downloader, health_audio=audio, health_check=healthy
         )
     assert downloader.calls == 1
+
+
+def test_metadata_planning_does_not_hash_but_runtime_still_rejects_changed_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec, content = manifest()
+    manager = ModelManager(tmp_path / "models")
+    audio = write_health_wav(tmp_path / "health.wav")
+    target = install(manager, spec, content, audio)
+    (target / "weights/model.bin").write_bytes(b"corrupt")
+    original = manager._verify_payload
+    monkeypatch.setattr(
+        manager,
+        "_verify_payload",
+        lambda *_args, **_kwargs: pytest.fail("metadata must not hash weights"),
+    )
+    assert manager.installed_revision_metadata(spec.model_id) == target
+    monkeypatch.setattr(manager, "_verify_payload", original)
+    with pytest.raises(ClassScribeError):
+        manager.resolve_for_runtime(spec.model_id)
