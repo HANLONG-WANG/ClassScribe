@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from typing import Annotated
+from typing import Annotated, Literal
+from urllib.parse import unquote
 
-from fastapi import APIRouter, Header, Query, Request, Response, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
 
 from classscribe.api.schemas import (
@@ -33,13 +34,27 @@ from classscribe.db.models import JobStatus
 from classscribe.terminology import TermSource
 
 
+async def uploaded_filename(
+    source_name: Annotated[str, Header(alias="X-ClassScribe-Filename")],
+    encoding: Annotated[
+        Literal["utf-8-percent"] | None, Header(alias="X-ClassScribe-Filename-Encoding")
+    ] = None,
+) -> str:
+    if encoding is None:
+        return source_name
+    try:
+        return unquote(source_name, encoding="utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=422, detail="Invalid UTF-8 filename") from exc
+
+
 def create_api_router(service: ClassScribeService) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
 
     @router.post("/recordings", status_code=status.HTTP_201_CREATED)
     async def create_recording(
         request: Request,
-        source_name: str = Header(alias="X-ClassScribe-Filename"),
+        source_name: str = Depends(uploaded_filename),
         duration_samples: int = Header(alias="X-ClassScribe-Duration-Samples"),
         channels: int = Header(alias="X-ClassScribe-Channels"),
         sample_rate: int = Header(alias="X-ClassScribe-Sample-Rate"),
@@ -242,11 +257,15 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
     async def create_glossary(value: GlossaryCreate) -> dict[str, object]:
         return service.create_glossary(value)
 
+    @router.delete("/glossaries/{glossary_id}")
+    async def delete_glossary(glossary_id: str) -> dict[str, object]:
+        return service.delete_glossary(glossary_id)
+
     @router.post("/glossaries/{glossary_id}/documents", status_code=status.HTTP_201_CREATED)
     async def add_glossary_document(
         glossary_id: str,
         request: Request,
-        source_name: Annotated[str, Header(alias="X-ClassScribe-Filename")],
+        source_name: Annotated[str, Depends(uploaded_filename)],
         source_kind: Annotated[TermSource, Header(alias="X-ClassScribe-Material-Kind")],
         language: Annotated[str, Header(alias="X-ClassScribe-Language")],
     ) -> dict[str, object]:

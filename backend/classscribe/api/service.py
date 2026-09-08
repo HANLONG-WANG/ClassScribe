@@ -1087,6 +1087,23 @@ class ClassScribeService:
             )
         return self.glossary(identifier)
 
+    def delete_glossary(self, glossary_id: str) -> dict[str, Any]:
+        identifier = _id(glossary_id, "glossary_id")
+        with self.sessions.begin() as session:
+            glossary = session.get(Glossary, identifier)
+            if glossary is None:
+                raise _not_found("glossary")
+            materials = list(
+                session.scalars(
+                    select(GlossaryMaterial).where(GlossaryMaterial.glossary_id == identifier)
+                )
+            )
+            paths = [self.paths.data_path(*Path(item.relative_path).parts) for item in materials]
+            for path in paths:
+                path.unlink(missing_ok=True)
+            session.delete(glossary)
+        return {"glossary_id": identifier, "deleted": True}
+
     def delete_term(self, glossary_id: str, term_id: str) -> dict[str, Any]:
         glossary = _id(glossary_id, "glossary_id")
         term = _id(term_id, "term_id")

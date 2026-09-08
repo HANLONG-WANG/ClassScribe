@@ -57,6 +57,13 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await response.json()) as T;
 }
 
+export function filenameHeaders(filename: string): Record<string, string> {
+  return {
+    "X-ClassScribe-Filename": encodeURIComponent(filename),
+    "X-ClassScribe-Filename-Encoding": "utf-8-percent",
+  };
+}
+
 export async function uploadRecording(
   file: File,
   metadata: { durationSamples: number; channels: number; sampleRate: number },
@@ -65,7 +72,7 @@ export async function uploadRecording(
     method: "POST",
     headers: {
       "Content-Type": "application/octet-stream",
-      "X-ClassScribe-Filename": file.name,
+      ...filenameHeaders(file.name),
       "X-ClassScribe-Duration-Samples": String(metadata.durationSamples),
       "X-ClassScribe-Channels": String(metadata.channels),
       "X-ClassScribe-Sample-Rate": String(metadata.sampleRate),

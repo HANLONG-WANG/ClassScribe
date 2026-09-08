@@ -1373,3 +1373,109 @@ def test_edit_history_repeated_undo_redo_and_new_branch(tmp_path: Path) -> None:
         service.redo_segment(identifier, value["version"])
     value = service.undo_segment(identifier, value["version"])
     assert value["user_text"] == "A"
+
+
+@pytest.mark.parametrize(
+    ("filename", "encoded"),
+    [
+        ("录音 2.wav", True),
+        ("授業 🎙️.wav", True),
+        ("100% + %E5.wav", True),
+        ("lecture.wav", False),
+        ("literal%20name.wav", False),
+    ],
+)
+def test_upload_filename_round_trip(tmp_path: Path, filename: str, encoded: bool) -> None:
+    from urllib.parse import quote
+
+    service, _sessions = service_fixture(tmp_path)
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+    audio = BytesIO()
+    with wave.open(audio, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"\x00\x00" * 1600)
+    headers = {
+        **auth(token, csrf, write=True),
+        "Content-Type": "application/octet-stream",
+        "X-ClassScribe-Filename": quote(filename, safe="") if encoded else filename,
+        "X-ClassScribe-Duration-Samples": "1600",
+        "X-ClassScribe-Channels": "1",
+        "X-ClassScribe-Sample-Rate": "16000",
+    }
+    if encoded:
+        headers["X-ClassScribe-Filename-Encoding"] = "utf-8-percent"
+    response = asyncio.run(
+        request(app, "POST", "/api/v1/recordings", headers=headers, body=audio.getvalue())
+    )
+    assert response.status == 201
+    assert response.json()["source_name"] == filename
+    assert response.json()["audio_qc"]["health_wav_eligible"] is True
+
+
+def test_delete_glossary_removes_terms_and_materials_without_affecting_others(
+    tmp_path: Path,
+) -> None:
+    from classscribe.api.schemas import GlossaryCreate, GlossaryTermInput, GlossaryTermsUpdate
+    from classscribe.db.models import Glossary, GlossaryMaterial, GlossaryTerm
+    from classscribe.terminology import TermSource
+    from sqlalchemy import select
+
+    service, sessions = service_fixture(tmp_path)
+    target = service.create_glossary(GlossaryCreate(name="删除此词典"))
+    other = service.create_glossary(GlossaryCreate(name="保留此词典"))
+    service.update_terms(
+        target["id"],
+        GlossaryTermsUpdate(
+            terms=(
+                GlossaryTermInput(
+                    canonical="光合作用",
+                    reading="こうごうせい",
+                    language="ja",
+                    source="manual",
+                    confirmed=True,
+                ),
+            )
+        ),
+    )
+    service.add_glossary_document(
+        target["id"],
+        source_name="notes.txt",
+        source_kind=TermSource.TXT,
+        language="ja",
+        content=b"notes",
+    )
+    with sessions() as session:
+        material = session.scalar(
+            select(GlossaryMaterial).where(GlossaryMaterial.glossary_id == target["id"])
+        )
+        assert material is not None
+        path = service.paths.data_path(material.relative_path)
+    assert path.exists()
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+    endpoint = f"/api/v1/glossaries/{target['id']}"
+    rejected = asyncio.run(request(app, "DELETE", endpoint, headers=auth(token, csrf)))
+    assert rejected.status == 403
+    assert path.exists()
+    response = asyncio.run(request(app, "DELETE", endpoint, headers=auth(token, csrf, write=True)))
+    assert response.status == 200
+    assert response.json()["deleted"] is True
+    assert not path.exists()
+    with sessions() as session:
+        assert session.get(Glossary, target["id"]) is None
+        assert session.get(Glossary, other["id"]) is not None
+        assert (
+            session.scalar(select(GlossaryTerm).where(GlossaryTerm.glossary_id == target["id"]))
+            is None
+        )
+        assert (
+            session.scalar(
+                select(GlossaryMaterial).where(GlossaryMaterial.glossary_id == target["id"])
+            )
+            is None
+        )
+    missing = asyncio.run(request(app, "DELETE", endpoint, headers=auth(token, csrf, write=True)))
+    assert missing.status == 404

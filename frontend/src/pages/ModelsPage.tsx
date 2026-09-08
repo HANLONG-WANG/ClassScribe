@@ -140,7 +140,7 @@ export function ModelsPage() {
   }
 
   return (
-    <section className="page-stack" aria-labelledby="models-title">
+    <section className="page-stack models-page" aria-labelledby="models-title">
       <header className="page-header">
         <div>
           <p className="eyebrow">Pinned & isolated</p>

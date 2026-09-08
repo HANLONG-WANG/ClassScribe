@@ -86,3 +86,34 @@ describe("API authentication bootstrap", () => {
     );
   });
 });
+
+describe("recording upload filenames", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it.each(["录音 2.wav", "授業 🎙️.wav", "100% + %E5.wav", "lecture.wav"])(
+    "uploads %s through browser-safe headers",
+    async (name) => {
+      const fetchMock = vi.fn(() => Promise.resolve(new Response("{}")));
+      vi.stubGlobal("fetch", fetchMock);
+      const { uploadRecording } = await import("../src/api");
+      const file = new File(["audio"], name, { type: "audio/wav" });
+      await uploadRecording(file, {
+        durationSamples: 16000,
+        channels: 1,
+        sampleRate: 16000,
+      });
+      const [, init] = fetchMock.mock.calls[0] as unknown as [
+        string,
+        RequestInit,
+      ];
+      const headers = new Headers(init.headers);
+      expect(headers.get("X-ClassScribe-Filename-Encoding")).toBe(
+        "utf-8-percent",
+      );
+      expect(
+        decodeURIComponent(headers.get("X-ClassScribe-Filename") ?? ""),
+      ).toBe(name);
+      expect(init.body).toBe(file);
+    },
+  );
+});

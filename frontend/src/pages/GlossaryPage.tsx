@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type SyntheticEvent, useState } from "react";
 
-import { api, type Glossary } from "../api";
+import { api, filenameHeaders, type Glossary } from "../api";
 
 export function GlossaryPage() {
   const client = useQueryClient();
@@ -34,6 +34,18 @@ export function GlossaryPage() {
       }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["glossaries"] }),
   });
+  const deleteGlossary = useMutation({
+    mutationFn: (id: string) => api(`/glossaries/${id}`, { method: "DELETE" }),
+    onSuccess: (_value, id) => {
+      client.setQueryData<Glossary[]>(["glossaries"], (items = []) =>
+        items.filter((item) => item.id !== id),
+      );
+      setSelected((current) => (current === id ? null : current));
+      setCanonical("");
+      setReading("");
+      return client.invalidateQueries({ queryKey: ["glossaries"] });
+    },
+  });
   const remove = useMutation({
     mutationFn: ({
       glossaryId,
@@ -51,7 +63,7 @@ export function GlossaryPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/octet-stream",
-          "X-ClassScribe-Filename": file.name,
+          ...filenameHeaders(file.name),
           "X-ClassScribe-Material-Kind": file.name.endsWith(".csv")
             ? "csv"
             : file.name.endsWith(".md")
@@ -99,6 +111,11 @@ export function GlossaryPage() {
           <p>手工词条权重最高；材料抽取只生成低权重建议，确认后才提升。</p>
         </div>
       </header>
+      {deleteGlossary.isError && (
+        <p className="notice" role="alert">
+          删除失败：{deleteGlossary.error.message}
+        </p>
+      )}
       <div className="split-layout">
         <aside className="panel collection-list">
           <form
@@ -155,6 +172,29 @@ export function GlossaryPage() {
                     type="file"
                   />
                 </label>
+              </div>
+              <div className="toolbar compact">
+                <button
+                  className="danger-button"
+                  disabled={
+                    deleteGlossary.isPending ||
+                    update.isPending ||
+                    material.isPending ||
+                    remove.isPending
+                  }
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        `删除词典「${glossary.name}」？其中的词条和已导入材料也会删除，无法撤销。`,
+                      )
+                    ) {
+                      deleteGlossary.mutate(glossary.id);
+                    }
+                  }}
+                  type="button"
+                >
+                  {deleteGlossary.isPending ? "正在删除…" : "删除词典"}
+                </button>
               </div>
               <form className="term-form" onSubmit={addTerm}>
                 <input

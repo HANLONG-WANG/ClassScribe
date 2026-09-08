@@ -670,13 +670,18 @@ details summary {
     monospace;
 }
 
+.models-page {
+  grid-template-columns: minmax(0, 1fr);
+}
 .model-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
   gap: 1rem;
 }
 .model-card {
+  min-width: 0;
   padding: 1.1rem;
+  overflow-wrap: anywhere;
 }
 .card-top h2 {
   display: inline;
@@ -714,7 +719,7 @@ details summary {
 }
 .model-card dl {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.6rem;
 }
 .model-card dl div {
@@ -734,7 +739,19 @@ details summary {
 }
 .install-plan {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
   gap: 0.2rem;
+  overflow-wrap: anywhere;
+}
+.install-plan label {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+.install-plan input,
+.install-plan select {
+  min-width: 0;
+  max-width: 100%;
 }
 .install-plan p {
   margin: 0;
