@@ -84,6 +84,13 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
     async def create_job(value: JobCreate) -> dict[str, object]:
         return service.create_job(value)
 
+    @router.get("/jobs")
+    async def list_jobs(
+        limit: int = Query(default=30, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict[str, object]:
+        return service.list_jobs(limit=limit, offset=offset)
+
     @router.get("/jobs/{job_id}")
     async def get_job(job_id: str) -> dict[str, object]:
         return service.job(job_id)

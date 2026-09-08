@@ -4,6 +4,7 @@ export type Page =
   | "upload"
   | "job"
   | "transcript"
+  | "transcripts"
   | "models"
   | "glossary"
   | "exports"
@@ -37,7 +38,12 @@ export const useWorkbench = create<WorkbenchState>((set) => ({
   },
   setCurrentJob: (currentJobId) => {
     sessionStorage.setItem("classscribe-current-job", currentJobId);
-    set({ currentJobId, page: "job", selectedSegmentId: null });
+    set({
+      currentJobId,
+      page: "job",
+      selectedSegmentId: null,
+      lowConfidenceOnly: false,
+    });
   },
   selectSegment: (selectedSegmentId) => {
     set({ selectedSegmentId });

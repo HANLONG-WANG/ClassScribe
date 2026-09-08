@@ -15,6 +15,9 @@ const player = vi.hoisted(() => ({
   create: vi.fn(),
   destroy: vi.fn(),
   setTime: vi.fn(),
+  playPause: vi.fn().mockResolvedValue(undefined),
+  skip: vi.fn(),
+  setPlaybackRate: vi.fn(),
 }));
 vi.mock("wavesurfer.js", () => ({ default: { create: player.create } }));
 afterEach(() => {
@@ -25,12 +28,15 @@ afterEach(() => {
 
 it("keeps the player on text-layer changes and seeks on the full recording timeline", async () => {
   player.create.mockImplementation(() => ({
-    on: (_event: string, callback: () => void) => {
-      callback();
+    on: (event: string, callback: () => void) => {
+      if (event === "ready") callback();
     },
     getDuration: () => 120,
     setTime: player.setTime,
     destroy: player.destroy,
+    playPause: player.playPause,
+    skip: player.skip,
+    setPlaybackRate: player.setPlaybackRate,
   }));
   useWorkbench.setState({
     currentJobId: "job",
@@ -81,6 +87,14 @@ it("keeps the player on text-layer changes and seeks on the full recording timel
   expect(player.setTime).toHaveBeenCalledWith(30);
   expect(player.create).toHaveBeenCalledTimes(1);
   expect(player.destroy).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "播放" }));
+  expect(player.playPause).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole("button", { name: "前进 10 秒" }));
+  expect(player.skip).toHaveBeenCalledWith(10);
+  fireEvent.change(screen.getByRole("combobox", { name: "播放速度" }), {
+    target: { value: "1.5" },
+  });
+  expect(player.setPlaybackRate).toHaveBeenCalledWith(1.5);
   const track = document.querySelector(".timeline-track > div > span");
   expect(track).toHaveStyle({ left: "25%", width: "25%" });
   fireEvent.click(screen.getByRole("checkbox", { name: /仅低置信度/ }));

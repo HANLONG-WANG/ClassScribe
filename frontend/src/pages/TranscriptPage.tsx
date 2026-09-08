@@ -8,6 +8,7 @@ import {
   type Candidate,
   formatSamples,
   type Job,
+  type Recording,
   type Segment,
   type Transcript,
 } from "../api";
@@ -28,9 +29,14 @@ function Waveform({
 }: {
   job: Job;
   duration: number;
-  onReady: (wave: WaveSurfer) => void;
+  onReady: (wave: WaveSurfer | null) => void;
 }) {
   const target = useRef<HTMLDivElement>(null);
+  const instance = useRef<WaveSurfer | null>(null);
+  const [ready, setReady] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [position, setPosition] = useState(0);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (target.current === null) return;
     const wave = WaveSurfer.create({
@@ -43,24 +49,104 @@ function Waveform({
       cursorColor: "#17211d",
       normalize: true,
     });
+    instance.current = wave;
     wave.on("ready", () => {
+      setReady(true);
       onReady(wave);
     });
+    wave.on("play", () => {
+      setPlaying(true);
+    });
+    wave.on("pause", () => {
+      setPlaying(false);
+    });
+    wave.on("finish", () => {
+      setPlaying(false);
+    });
+    wave.on("timeupdate", (seconds) => {
+      setPosition(seconds);
+    });
+    wave.on("error", (reason) => {
+      setError(reason.message);
+      setReady(false);
+    });
     return () => {
+      instance.current = null;
+      onReady(null);
       wave.destroy();
     };
   }, [job.recording_id, onReady]);
   return (
-    <div
-      aria-label={`音频波形，共 ${formatSamples(duration)}`}
-      className="waveform"
-      ref={target}
-    />
+    <>
+      <div
+        aria-label={`音频波形，共 ${formatSamples(duration)}`}
+        className="waveform"
+        ref={target}
+      />
+      <div className="toolbar audio-controls" aria-label="音频播放控制">
+        <button
+          type="button"
+          disabled={!ready}
+          onClick={() => {
+            setError(null);
+            void instance.current?.playPause().catch((reason: unknown) => {
+              setError(
+                reason instanceof Error ? reason.message : "播放失败，请重试",
+              );
+            });
+          }}
+        >
+          {playing ? "暂停" : "播放"}
+        </button>
+        <button
+          type="button"
+          disabled={!ready}
+          onClick={() => {
+            instance.current?.skip(-10);
+          }}
+        >
+          后退 10 秒
+        </button>
+        <button
+          type="button"
+          disabled={!ready}
+          onClick={() => {
+            instance.current?.skip(10);
+          }}
+        >
+          前进 10 秒
+        </button>
+        <span>
+          {formatSamples(Math.round(position * 16000))} /{" "}
+          {formatSamples(duration)}
+        </span>
+        <label>
+          播放速度{" "}
+          <select
+            defaultValue="1"
+            disabled={!ready}
+            onChange={(event) => {
+              instance.current?.setPlaybackRate(Number(event.target.value));
+            }}
+          >
+            {[0.5, 0.75, 1, 1.25, 1.5, 2].map((rate) => (
+              <option key={rate} value={rate}>
+                {rate}×
+              </option>
+            ))}
+          </select>
+        </label>
+        {!ready && !error && <span role="status">音频加载中…</span>}
+      </div>
+      <p className="muted">点击波形或句段可定位音频，再按播放开始收听。</p>
+      {error && <p role="alert">音频不可播放：{error}</p>}
+    </>
   );
 }
 
 export function TranscriptPage() {
   const jobId = useWorkbench((state) => state.currentJobId);
+  const setPage = useWorkbench((state) => state.setPage);
   const selectedId = useWorkbench((state) => state.selectedSegmentId);
   const selectSegment = useWorkbench((state) => state.selectSegment);
   const layer = useWorkbench((state) => state.textLayer);
@@ -70,9 +156,10 @@ export function TranscriptPage() {
   const wave = useRef<WaveSurfer | null>(null);
   const client = useQueryClient();
   const [mediaDuration, setMediaDuration] = useState(1);
-  const onWaveReady = useCallback((instance: WaveSurfer) => {
+  const onWaveReady = useCallback((instance: WaveSurfer | null) => {
     wave.current = instance;
-    setMediaDuration(Math.max(1, Math.round(instance.getDuration() * 16000)));
+    if (instance)
+      setMediaDuration(Math.max(1, Math.round(instance.getDuration() * 16000)));
   }, []);
 
   const job = useQuery({
@@ -82,12 +169,20 @@ export function TranscriptPage() {
   });
   const transcript = useQuery({
     queryKey: ["transcript", jobId, lowOnly],
-    placeholderData: (previous) => previous,
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === jobId ? previous : undefined,
+
     queryFn: () =>
       api<Transcript>(
         `/jobs/${String(jobId)}/transcript?low_confidence_only=${String(lowOnly)}`,
       ),
     enabled: jobId !== null,
+  });
+  const recording = useQuery({
+    queryKey: ["recording", job.data?.recording_id],
+    queryFn: () =>
+      api<Recording>(`/recordings/${String(job.data?.recording_id)}`),
+    enabled: Boolean(job.data?.recording_id),
   });
   const detail = useQuery({
     queryKey: ["segment", selectedId],
@@ -157,6 +252,10 @@ export function TranscriptPage() {
   });
 
   if (jobId === null) return <p className="empty-state">请先创建课堂任务。</p>;
+  if (job.isError || transcript.isError)
+    return (
+      <p role="alert">{job.error?.message ?? transcript.error?.message}</p>
+    );
   if (!job.data || !transcript.data)
     return <p className="loading">正在加载可追溯转录稿…</p>;
   const segments = transcript.data.segments;
@@ -172,9 +271,20 @@ export function TranscriptPage() {
       className="page-stack transcript-page"
       aria-labelledby="transcript-title"
     >
+      <button
+        className="back-to-manuscripts"
+        type="button"
+        onClick={() => {
+          setPage("transcripts");
+        }}
+      >
+        ← 全部转录稿
+      </button>
       <header className="page-header">
         <div>
-          <p className="eyebrow">Canonical 16 kHz timeline</p>
+          <p className="eyebrow">
+            {recording.data?.source_name ?? "课堂转录稿"}
+          </p>
           <h1 id="transcript-title">转录工作台</h1>
           <p>每句绑定真实音频范围；自动结果可直接导出，校对是可选增强。</p>
         </div>
@@ -191,7 +301,12 @@ export function TranscriptPage() {
         </label>
       </header>
       <div className="panel timeline-panel">
-        <Waveform duration={duration} job={job.data} onReady={onWaveReady} />
+        <Waveform
+          key={job.data.recording_id}
+          duration={duration}
+          job={job.data}
+          onReady={onWaveReady}
+        />
         <TimelineTrack
           label="说话人"
           segments={segments}

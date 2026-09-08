@@ -7,13 +7,14 @@ import { JobPage } from "./pages/JobPage";
 import { ModelsPage } from "./pages/ModelsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { TranscriptPage } from "./pages/TranscriptPage";
+import { TranscriptsPage } from "./pages/TranscriptsPage";
 import { UploadPage } from "./pages/UploadPage";
 import { type Page, useWorkbench } from "./store";
 
 const navigation: { id: Page; label: string; mark: string }[] = [
   { id: "upload", label: "导入", mark: "↑" },
   { id: "job", label: "任务", mark: "◌" },
-  { id: "transcript", label: "转录稿", mark: "≡" },
+  { id: "transcripts", label: "转录稿", mark: "≡" },
   { id: "exports", label: "导出", mark: "↓" },
   { id: "glossary", label: "词典", mark: "Aa" },
   { id: "models", label: "模型", mark: "◇" },
@@ -48,7 +49,12 @@ export function App() {
         <nav aria-label="主导航">
           {navigation.map((item) => (
             <button
-              aria-current={page === item.id ? "page" : undefined}
+              aria-current={
+                page === item.id ||
+                (page === "transcript" && item.id === "transcripts")
+                  ? "page"
+                  : undefined
+              }
               key={item.id}
               onClick={() => {
                 setPage(item.id);
@@ -103,6 +109,7 @@ function PageContent({ page }: { page: Page }) {
   if (page === "upload") return <UploadPage />;
   if (page === "job") return <JobPage />;
   if (page === "transcript") return <TranscriptPage />;
+  if (page === "transcripts") return <TranscriptsPage />;
   if (page === "models") return <ModelsPage />;
   if (page === "glossary") return <GlossaryPage />;
   if (page === "exports") return <ExportsPage />;

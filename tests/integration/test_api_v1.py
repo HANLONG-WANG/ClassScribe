@@ -1667,3 +1667,64 @@ def test_webui_serves_during_slow_model_preparation_and_cancellation_stops_loads
             release.set()
 
     asyncio.run(scenario())
+
+
+def test_job_history_lists_all_recordings_in_stable_pages(tmp_path: Path) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from classscribe.db.models import Job, Recording
+
+    service, sessions = service_fixture(tmp_path)
+    with sessions.begin() as session:
+        for index in range(3):
+            recording = Recording(
+                source_name=f"lecture-{index}.mp4",
+                source_sha256=str(index) * 64,
+                source_path=f"{index}.mp4",
+                duration_samples=16000,
+                sample_rate=16000,
+                channels=1,
+            )
+            session.add(
+                Job(
+                    recording=recording,
+                    language_mode=LanguageMode.JAPANESE,
+                    profile_id="balanced",
+                    created_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index),
+                )
+            )
+    first = service.list_jobs(limit=2)
+    second = service.list_jobs(limit=2, offset=2)
+    assert first["total"] == second["total"] == 3
+    assert [item["source_name"] for item in first["items"]] == ["lecture-2.mp4", "lecture-1.mp4"]
+    assert second["items"][0]["source_name"] == "lecture-0.mp4"
+    assert first["items"][0]["created_at"].endswith("+00:00")
+
+
+def test_job_history_route_validates_pagination_and_requires_auth(tmp_path: Path) -> None:
+    service, _ = service_fixture(tmp_path)
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+
+    async def check() -> None:
+        response = await asyncio.wait_for(
+            request(app, "GET", "/api/v1/jobs", headers=auth(token, csrf)),
+            timeout=3,
+        )
+        assert response.status == 200
+        assert response.json() == {"items": [], "total": 0}
+        response = await asyncio.wait_for(
+            request(
+                app,
+                "GET",
+                "/api/v1/jobs",
+                headers=auth(token, csrf),
+                query={"offset": "-1"},
+            ),
+            timeout=3,
+        )
+        assert response.status == 422
+        response = await asyncio.wait_for(request(app, "GET", "/api/v1/jobs"), timeout=3)
+        assert response.status in {401, 403}
+
+    asyncio.run(check())

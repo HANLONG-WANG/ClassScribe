@@ -1257,3 +1257,39 @@ details summary {
 .job-technical {
   padding: 22px;
 }
+
+.manuscript-list {
+  display: grid;
+  gap: 12px;
+}
+.manuscript-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  text-align: left;
+  width: 100%;
+  padding: 22px;
+}
+.manuscript-card strong {
+  overflow-wrap: anywhere;
+  font-size: 1.05rem;
+}
+.manuscript-card span {
+  color: var(--muted, #65736b);
+}
+.manuscript-card:hover {
+  border-color: #d36135;
+}
+.back-to-manuscripts {
+  align-self: flex-start;
+}
+.audio-controls {
+  flex-wrap: wrap;
+  align-items: center;
+}
+.audio-controls label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}

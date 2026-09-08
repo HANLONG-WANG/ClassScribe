@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from classscribe.api.schemas import (
@@ -243,6 +243,31 @@ class ClassScribeService:
             self.pipeline.initialize(job_id, options)
             self.pipeline.schedule(job_id)
         return self.job(job_id)
+
+    def list_jobs(self, *, limit: int = 30, offset: int = 0) -> dict[str, Any]:
+        with self.sessions() as session:
+            rows = session.execute(
+                select(Job, Recording)
+                .join(Recording, Job.recording_id == Recording.id)
+                .order_by(Job.created_at.desc(), Job.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            return {
+                "items": [
+                    {
+                        "job_id": job.id,
+                        "source_name": recording.source_name,
+                        "duration_samples": recording.duration_samples,
+                        "language": job.language_mode.value,
+                        "status": job.status.value,
+                        "created_at": job.created_at.isoformat()
+                        + ("+00:00" if job.created_at.tzinfo is None else ""),
+                    }
+                    for job, recording in rows
+                ],
+                "total": session.scalar(select(func.count()).select_from(Job)),
+            }
 
     def job(self, job_id: str) -> dict[str, Any]:
         identifier = _id(job_id, "job_id")
