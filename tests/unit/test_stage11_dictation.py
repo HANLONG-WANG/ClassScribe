@@ -545,6 +545,9 @@ def test_core_lifespan_hands_gpu_between_classroom_and_resident_workers(
     events: list[str] = []
 
     class Pipeline:
+        async def close(self) -> None:
+            events.append("classroom-closed")
+
         def start_recovered_jobs(self) -> None:
             events.append("jobs-recovered")
 
@@ -609,6 +612,7 @@ def test_core_lifespan_hands_gpu_between_classroom_and_resident_workers(
         "resident-loaded",
         "resident-unloaded",
         "classroom-resumed",
+        "classroom-closed",
         "resident-closed",
     ]
 

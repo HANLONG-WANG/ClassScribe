@@ -155,3 +155,37 @@ it("distinguishes a live model from actual progress and uses no invented percent
   expect(await screen.findByText("任务已暂停")).toBeVisible();
   expect(screen.queryByText(/本次操作已运行/)).not.toBeInTheDocument();
 });
+
+it("explains model reuse without showing another load or verification percentage", async () => {
+  const update = setup("running", "transcription", 0.4);
+  await screen.findByText("主 ASR", { selector: "strong" });
+  await update({
+    activity: {
+      run_id: "resident-1",
+      checkpoint_id: "cp-38",
+      checkpoint_key: "primary_asr",
+      attempt: 1,
+      stage: "transcription",
+      operation: "reuse_model",
+      started_at: new Date().toISOString(),
+      progress_at: new Date().toISOString(),
+      model_id: "qwen3_asr_1_7b",
+      device: "cuda:0",
+      segment_ordinal: 38,
+      segment_total: 126,
+    },
+  });
+  expect(
+    await screen.findByRole("heading", { name: "复用已加载模型" }),
+  ).toBeVisible();
+  expect(
+    screen.queryByRole("heading", { name: "正在加载模型" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("progressbar", { name: "当前操作进度" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole("progressbar", { name: "任务进度" })).toHaveAttribute(
+    "aria-valuenow",
+    "40",
+  );
+});

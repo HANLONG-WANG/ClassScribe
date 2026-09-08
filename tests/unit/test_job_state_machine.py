@@ -170,3 +170,24 @@ def test_checkpoint_parameter_hash_is_stable_and_unique_per_key(
         assert first.parameter_hash == second.parameter_hash
         assert len(first.parameter_hash) == 64
         assert first.checkpoint_key != second.checkpoint_key
+
+
+def test_worker_failure_does_not_resume_a_user_paused_job(
+    database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    _, factory, _ = database
+    job_id, checkpoint_ids = make_job(factory)
+    machine = JobStateMachine()
+    with factory.begin() as session:
+        job = session.get_one(Job, job_id)
+        checkpoint = session.get_one(JobCheckpoint, checkpoint_ids[0])
+        machine.start(job)
+        machine.begin_checkpoint(job, checkpoint)
+        machine.pause(job)
+        machine.fail_checkpoint(
+            job, checkpoint, code=ErrorCode.WORKER_CRASH, detail="worker failure"
+        )
+        assert job.status is JobStatus.PAUSED
+        assert checkpoint.status is CheckpointStatus.RETRYABLE
+        machine.resume(job)
+        assert job.error_code is None

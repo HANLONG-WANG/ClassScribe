@@ -277,11 +277,11 @@ export function JobPage() {
                     </span>
                   </summary>
                   <p>
-                    等待计算资源 → 校验模型文件 → 准备运行环境 → 加载模型 →
-                    处理音频 → 释放模型
+                    首次加载：等待资源 → 校验文件 → 准备环境 →
+                    加载模型；后续片段复用模型，切换或结束时释放。
                   </p>
                   <p className="muted">
-                    每次模型调用分别执行；未调用模型的操作不经过这些步骤。
+                    每个片段独立保存；暂停或重启后，从已保存的检查点继续。
                   </p>
                   {job.stage_activity?.[id]?.slice(-8).map((step, n) => (
                     <p className="muted" key={n}>
@@ -368,6 +368,12 @@ function EmptyJob() {
 
 const operationLabels: Record<string, string> = {
   model_error: "模型处理失败",
+  reuse_model: "复用已加载模型",
+  model_retained: "模型已保留，等待下一片段",
+  restore_window_result: "恢复已完成窗口的结果",
+  restore_review_result: "读取已保存的复核结果",
+  quality_secondary: "第二模型复核",
+  quality_tertiary: "第三模型复核",
   waiting_resource: "等待计算资源",
   verify_model: "正在校验模型文件",
   prepare_environment: "正在准备运行环境",
@@ -565,12 +571,14 @@ function eventLabel(event?: PipelineEvent) {
     checkpoint_started: "检查点开始",
     checkpoint_completed: "检查点完成",
     checkpoint_failed: "检查点失败",
+    checkpoint_yielded: "已到安全边界，保存进度并让出资源",
     job_completed: "任务已完成",
     job_cancelled: "任务已取消",
     job_paused: "任务暂停",
     preemption_requested: "IBus 请求 GPU，等待安全边界",
     job_resumed: "任务继续",
     job_cancelling: "请求取消任务",
+    job_shutdown_yield: "服务停止，任务进度已保存",
   };
   const segment =
     typeof p.segment_ordinal === "number"

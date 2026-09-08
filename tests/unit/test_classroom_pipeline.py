@@ -295,3 +295,226 @@ def test_activity_snapshot_is_visible_before_checkpoint_transaction_commits(
     assert snapshots[0]["activity"]["attempt"] == 1
     assert snapshots[0]["error_detail"] != "uncommitted"
     assert pipeline.snapshot(job_id)["activity"] is None
+
+
+def test_window_boundary_yields_without_consuming_a_retry_and_closes_sessions(
+    database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    _, factory, _ = database
+    job_id = make_job(factory)
+    closed: list[str] = []
+    calls: list[str] = []
+
+    class Runner:
+        def open_job(self, identifier: str) -> None:
+            pass
+
+        def close_job(self, identifier: str) -> None:
+            closed.append(identifier)
+
+        def run(self, session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
+            calls.append(checkpoint.checkpoint_key)
+            pipeline.preemption.request(job.id)
+            pipeline.check_boundary(job.id)
+
+    pipeline = ClassroomPipeline(factory, Runner())
+    pipeline.initialize(job_id, {})
+    pipeline.run_until_blocked(job_id)
+    assert closed == [job_id]
+    assert len(calls) == 1
+    with factory() as session:
+        job = session.get_one(Job, job_id)
+        assert job.status is JobStatus.PAUSED
+        checkpoint = pipeline.state.first_incomplete(job)
+        assert checkpoint is not None
+        assert checkpoint.status is CheckpointStatus.PENDING
+        assert checkpoint.attempt_count == 0
+        assert checkpoint.error_code is None
+    assert pipeline.snapshot(job_id)["activity"] is None
+
+
+def test_ibus_waits_for_session_release_after_safe_boundary(
+    database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    import threading
+
+    _, factory, _ = database
+    job_id = make_job(factory)
+    processing = threading.Event()
+    finish_processing = threading.Event()
+    releasing = threading.Event()
+    finish_releasing = threading.Event()
+
+    class Runner:
+        def run(self, session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
+            processing.set()
+            assert finish_processing.wait(3)
+
+        def close_job(self, identifier: str) -> None:
+            releasing.set()
+            assert finish_releasing.wait(3)
+
+    pipeline = ClassroomPipeline(factory, Runner())
+    pipeline.initialize(job_id, {})
+
+    async def scenario() -> None:
+        pipeline.schedule(job_id)
+        try:
+            async with asyncio.timeout(2):
+                while not processing.is_set():
+                    await asyncio.sleep(0.01)
+            arming = asyncio.create_task(pipeline.arm_dictation_at_safe_boundary(timeout_seconds=2))
+            await asyncio.sleep(0.02)
+            finish_processing.set()
+            async with asyncio.timeout(2):
+                while not releasing.is_set():
+                    await asyncio.sleep(0.01)
+            assert pipeline.snapshot(job_id)["status"] == "paused"
+            assert not arming.done()
+            finish_releasing.set()
+            assert await arming == (job_id,)
+        finally:
+            finish_processing.set()
+            finish_releasing.set()
+            await pipeline.close()
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_leaves_interrupted_checkpoint_pending_for_restart(
+    database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    _, factory, _ = database
+    job_id = make_job(factory)
+
+    def handler(session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
+        asyncio.run(pipeline.close())
+        pipeline.check_boundary(job.id)
+
+    pipeline = ClassroomPipeline(factory, ComposableStageRunner({"audio_import": handler}))
+    pipeline.initialize(job_id, {})
+    pipeline.run_until_blocked(job_id)
+    assert pipeline.snapshot(job_id)["status"] == "pending"
+    assert not any(event.kind == "job_paused" for event in pipeline.broker.after(job_id))
+    restarted = ClassroomPipeline(factory, ComposableStageRunner({}))
+    assert restarted.recover() == (job_id,)
+
+
+def test_cancel_during_last_checkpoint_does_not_turn_into_completion(
+    database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    _, factory, _ = database
+    job_id = make_job(factory)
+    closed: list[str] = []
+
+    class Runner:
+        def run(self, session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
+            pipeline.cancel(job.id)
+
+        def close_job(self, identifier: str) -> None:
+            closed.append(identifier)
+
+    pipeline = ClassroomPipeline(factory, Runner())
+    pipeline.initialize(job_id, {})
+    with factory.begin() as session:
+        for checkpoint in session.get_one(Job, job_id).checkpoints:
+            if checkpoint.checkpoint_key != "upload_validate":
+                checkpoint.status = CheckpointStatus.COMPLETED
+    pipeline.run_until_blocked(job_id)
+    assert pipeline.snapshot(job_id)["status"] == "cancelled"
+    assert closed == [job_id]
+    assert pipeline.broker.after(job_id)[-1].kind == "job_cancelled"
+
+
+def test_retry_queued_during_model_cleanup_is_not_lost(
+    database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    import threading
+
+    _, factory, _ = database
+    job_id = make_job(factory)
+    releasing = threading.Event()
+    released = threading.Event()
+    calls = 0
+    closes = 0
+
+    class Runner:
+        def run(self, session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("retryable worker failure")
+
+        def close_job(self, identifier: str) -> None:
+            nonlocal closes
+            closes += 1
+            if closes == 1:
+                releasing.set()
+                assert released.wait(3)
+
+    pipeline = ClassroomPipeline(factory, Runner())
+    pipeline.initialize(job_id, {})
+
+    async def scenario() -> None:
+        pipeline.schedule(job_id)
+        try:
+            async with asyncio.timeout(2):
+                while not releasing.is_set():
+                    await asyncio.sleep(0.01)
+            assert pipeline.snapshot(job_id)["status"] == "pending"
+            old_tasks = set(pipeline._tasks)
+            pipeline.schedule(job_id)
+            duplicate = next(task for task in pipeline._tasks if task not in old_tasks)
+            await asyncio.wait_for(duplicate, timeout=2)
+            released.set()
+            await asyncio.gather(*tuple(old_tasks))
+            assert pipeline.snapshot(job_id)["status"] == "completed"
+            assert closes == 2
+        finally:
+            released.set()
+            await pipeline.close()
+
+    asyncio.run(scenario())
+
+
+def test_ibus_can_take_free_gpu_while_cpu_checkpoint_reaches_its_boundary(
+    database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    import threading
+
+    _, factory, _ = database
+    job_id = make_job(factory)
+    processing = threading.Event()
+    finish_processing = threading.Event()
+    calls: list[str] = []
+
+    class CpuRunner:
+        def uses_gpu(self) -> bool:
+            return False
+
+        def run(self, session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
+            calls.append(checkpoint.checkpoint_key)
+            processing.set()
+            assert finish_processing.wait(3)
+
+    pipeline = ClassroomPipeline(factory, CpuRunner())
+    pipeline.initialize(job_id, {})
+
+    async def scenario() -> None:
+        pipeline.schedule(job_id)
+        tasks = tuple(pipeline._tasks)
+        try:
+            async with asyncio.timeout(2):
+                while not processing.is_set():
+                    await asyncio.sleep(0.01)
+            assert await pipeline.arm_dictation_at_safe_boundary(timeout_seconds=0.2) == (job_id,)
+            assert pipeline.snapshot(job_id)["status"] == "running"
+            finish_processing.set()
+            await asyncio.gather(*tasks)
+            assert len(calls) == 1
+            assert pipeline.snapshot(job_id)["status"] == "paused"
+        finally:
+            finish_processing.set()
+            await pipeline.close()
+
+    asyncio.run(scenario())

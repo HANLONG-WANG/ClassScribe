@@ -142,9 +142,11 @@ class StructurePipeline:
         repository: StructureRepository | None = None,
         max_window_attempts: int = 2,
         speaker_tracker: GlobalSpeakerTracker | None = None,
+        boundary: Callable[[], None] | None = None,
     ) -> None:
         if max_window_attempts < 1:
             raise ValueError("a structure window needs at least one attempt")
+        self.boundary = boundary
         self.config = config
         self.moss_call = moss_call
         self.pyannote_call = pyannote_call
@@ -165,6 +167,9 @@ class StructurePipeline:
     ) -> StructurePipelineResult:
         outcomes: list[WindowStructureOutcome] = []
         previous_stitched: tuple[StructureSegment, ...] = ()
+        # MOSS windows do not depend on stitched speaker IDs. Finish the MOSS
+        # pass first, then run pyannote and stitch in the original temporal order.
+        moss_results = {}
         for window in windows:
             report_activity(
                 "structure_window",
@@ -174,9 +179,19 @@ class StructurePipeline:
                 start_sample=window.span.start_sample,
                 end_sample=window.span.end_sample,
             )
-            moss, health, moss_attempts, moss_errors = await self._run_moss(
+            moss_results[window.ordinal] = await self._run_moss(
                 job_id, audio_path, window, speech_spans, language, hotwords
             )
+        for window in windows:
+            report_activity(
+                "structure_window",
+                window_ordinal=window.ordinal + 1,
+                window_total=len(windows),
+                windows_completed=len(outcomes),
+                start_sample=window.span.start_sample,
+                end_sample=window.span.end_sample,
+            )
+            moss, health, moss_attempts, moss_errors = moss_results[window.ordinal]
             relevant_speech = tuple(span for span in speech_spans if span.overlaps(window.span))
             should_run_pyannote = bool(relevant_speech or (moss and moss.segments))
             report_activity("speaker_analysis", fallback=moss is None or health.needs_fallback)
@@ -311,6 +326,8 @@ class StructurePipeline:
         latest_result: StructureResult | None = None
         latest_health = StructureHealthReport.worker_failure("MOSS was not attempted")
         for attempt in range(1, self.max_window_attempts + 1):
+            if self.boundary is not None:
+                self.boundary()
             report_activity(
                 "structure_attempt",
                 fallback=False,
@@ -345,6 +362,8 @@ class StructurePipeline:
     ) -> tuple[PyannoteResult | None, int, tuple[str, ...]]:
         errors: list[str] = []
         for attempt in range(1, self.max_window_attempts + 1):
+            if self.boundary is not None:
+                self.boundary()
             report_activity(
                 "speaker_analysis",
                 model_attempt=attempt,

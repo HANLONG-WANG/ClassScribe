@@ -38,10 +38,12 @@ class InstalledModels:
         self.root = root
         self.identifiers = identifiers
 
-    def resolve_for_runtime(self, model_id: str) -> Path:
+    def installed_revision_metadata(self, model_id: str) -> Path:
         if model_id not in self.identifiers:
             raise FileNotFoundError(model_id)
         return self.root / model_id
+
+    resolve_for_runtime = installed_revision_metadata
 
 
 class FixtureInvoker:
@@ -327,3 +329,142 @@ def test_service_preflight_rejects_before_persisting_a_job(
     assert failure.value.code is ErrorCode.MODEL_NOT_FULLY_INSTALLED
     with sessions() as session:
         assert session.scalar(select(func.count()).select_from(Job)) == 0
+
+
+def test_batched_reviews_match_inline_consensus_and_group_model_calls(
+    database: tuple[Engine, sessionmaker[Session], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    from classscribe.db.models import JobCheckpoint, JobStage, SpeechRegion
+    from classscribe.quality.routing import (
+        ReviewRouter,
+        SecondaryReviewDecision,
+        TertiaryReviewDecision,
+    )
+
+    _, sessions, _ = database
+    paths = AppPaths.from_environment({}, home=tmp_path / "home")
+    paths.ensure()
+    registry = load_registry(Path("config/model-registry.v1.yaml"))
+    primary = registry.model("granite_speech_4_1_2b")
+    secondary = registry.model("qwen3_asr_1_7b")
+    tertiary = registry.model("qwen3_asr_0_6b")
+    monkeypatch.setattr(
+        ReviewRouter, "secondary", lambda _self, _report: SecondaryReviewDecision(True, (), None)
+    )
+    monkeypatch.setattr(
+        ReviewRouter, "tertiary", lambda _self, _p, _s, _c: TertiaryReviewDecision(True, (), ())
+    )
+
+    class Reviews(FixtureInvoker):
+        async def __call__(self, entry: ModelEntry, request: RPCRequest) -> RPCResponse:
+            response = await super().__call__(primary, request)
+            self.calls[-1] = (entry.id, request.method)
+            return replace(response, model_id=entry.id, model_revision=entry.revision)
+
+    invoke = Reviews()
+    runner = ProductionStageRunner(
+        paths,
+        load_config(environment={}),
+        registry,
+        cast(ModelManager, InstalledModels(tmp_path, {primary.id, secondary.id, tertiary.id})),
+        cast(SandboxedModelInvoker, invoke),
+    )
+    monkeypatch.setattr(runner, "_fallback_entries", lambda *_args: (secondary, tertiary))
+
+    def prepare() -> tuple[str, list[str]]:
+        with sessions.begin() as session:
+            recording = Recording(
+                source_name="test.wav",
+                source_sha256="a" * 64,
+                source_path=f"{uuid4()}.wav",
+                duration_samples=36 * SAMPLE_RATE,
+                sample_rate=SAMPLE_RATE,
+                channels=1,
+            )
+            job = Job(
+                recording=recording,
+                language_mode=LanguageMode.JAPANESE,
+                profile_id="balanced",
+                options_json={"primary_model_id": primary.id, "model_selection": "manual_primary"},
+            )
+            session.add(job)
+            session.flush()
+            segments = []
+            for i in range(3):
+                segment = TranscriptSegment(
+                    job_id=job.id,
+                    start_sample=i * 12 * SAMPLE_RATE,
+                    end_sample=(i + 1) * 12 * SAMPLE_RATE,
+                    language=LanguageMode.JAPANESE,
+                )
+                session.add(segment)
+                session.flush()
+                session.add(
+                    SpeechRegion(
+                        job_id=job.id,
+                        start_sample=segment.start_sample,
+                        end_sample=segment.end_sample,
+                        vad_score=0.98,
+                        acoustic_class="speech",
+                        source="firered_vad",
+                    )
+                )
+                checkpoint = JobCheckpoint(
+                    job_id=job.id,
+                    stage=JobStage.QUALITY,
+                    checkpoint_key="quality_and_review",
+                    segment_id=segment.id,
+                    position=i,
+                    parameter_hash="a" * 64,
+                )
+                session.add(checkpoint)
+                session.flush()
+                runner._primary_asr(session, job, checkpoint)
+                segments.append(segment.id)
+            return job.id, segments
+
+    inline_id, inline_segments = prepare()
+    invoke.calls.clear()
+    with sessions.begin() as session:
+        job = session.get_one(Job, inline_id)
+        for checkpoint in session.scalars(
+            select(JobCheckpoint)
+            .where(JobCheckpoint.job_id == inline_id)
+            .order_by(JobCheckpoint.position)
+        ):
+            runner._quality_and_review(session, job, checkpoint)
+        expected = [
+            session.get_one(TranscriptSegment, item).faithful_text for item in inline_segments
+        ]
+    assert [model for model, _ in invoke.calls] == [secondary.id, tertiary.id] * 3
+
+    batched_id, batched_segments = prepare()
+    # Simulate a task created by the earlier version: only monolithic quality
+    # checkpoints exist. Starting it must upgrade the pending review schedule.
+    from classscribe.db.models import CheckpointStatus
+
+    with sessions.begin() as session:
+        session.add(
+            JobCheckpoint(
+                job_id=batched_id,
+                stage=JobStage.STRUCTURE,
+                checkpoint_key="moss_structure",
+                position=0,
+                parameter_hash="a" * 64,
+                status=CheckpointStatus.COMPLETED,
+            )
+        )
+    invoke.calls.clear()
+    pipeline = ClassroomPipeline(sessions, runner)
+    pipeline.run_until_blocked(batched_id)
+    with sessions() as session:
+        job = session.get_one(Job, batched_id)
+        assert job.status is JobStatus.COMPLETED, (job.error_code, job.error_detail)
+        assert [
+            session.get_one(TranscriptSegment, item).faithful_text for item in batched_segments
+        ] == expected
+    assert [model for model, _ in invoke.calls] == [secondary.id] * 3 + [tertiary.id] * 3

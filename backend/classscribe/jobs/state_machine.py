@@ -51,6 +51,10 @@ def parameter_hash(parameters: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+class CheckpointInterrupted(Exception):
+    """A cooperative safe boundary; this is not a failed model attempt."""
+
+
 class JobStateMachine:
     def create_checkpoints(
         self, session: Session, job: Job, specs: Iterable[CheckpointSpec]
@@ -91,6 +95,8 @@ class JobStateMachine:
         if job.status is not JobStatus.PAUSED:
             raise self._state_error(job, "resume")
         job.status = JobStatus.RUNNING
+        job.error_code = None
+        job.error_detail = None
 
     def request_cancel(self, job: Job) -> None:
         if job.status in TERMINAL_JOB_STATUSES:
@@ -176,11 +182,20 @@ class JobStateMachine:
                 ErrorCode.JOB_STATE_CONFLICT,
                 f"checkpoint {checkpoint.id} is not running",
             )
+        if job.status in {JobStatus.CANCELLING, JobStatus.CANCELLED}:
+            self.acknowledge_cancel(job, checkpoint)
+            return
         retryable = checkpoint.attempt_count < checkpoint.max_attempts
         checkpoint.status = CheckpointStatus.RETRYABLE if retryable else CheckpointStatus.FAILED
         checkpoint.error_code = code.value
         checkpoint.error_detail = detail
-        job.status = JobStatus.PENDING if retryable else JobStatus.FAILED
+        job.status = (
+            JobStatus.PAUSED
+            if retryable and job.status is JobStatus.PAUSED
+            else JobStatus.PENDING
+            if retryable
+            else JobStatus.FAILED
+        )
         job.error_code = code.value
         job.error_detail = detail
 
@@ -262,7 +277,16 @@ class JobStateMachine:
                 job = session.get_one(Job, job_id)
                 checkpoint = session.get_one(JobCheckpoint, checkpoint_id)
                 operation(session, checkpoint)
+                session.flush()
+                # Controls may have changed the job while a model was running.
+                session.refresh(job, attribute_names=["status"])
                 self.complete_checkpoint(job, checkpoint)
+        except CheckpointInterrupted:
+            with factory.begin() as session:
+                checkpoint = session.get_one(JobCheckpoint, checkpoint_id)
+                checkpoint.status = CheckpointStatus.PENDING
+                checkpoint.attempt_count = max(0, checkpoint.attempt_count - 1)
+            raise
         except Exception as exc:
             with factory.begin() as session:
                 job = session.get_one(Job, job_id)
@@ -283,7 +307,10 @@ class JobStateMachine:
         job.progress = complete / total if total else 1.0
         next_checkpoint = self.first_incomplete(job)
         if next_checkpoint is None:
-            self._complete_job(job)
+            if job.status in {JobStatus.CANCELLING, JobStatus.CANCELLED}:
+                self.acknowledge_cancel(job)
+            else:
+                self._complete_job(job)
         else:
             job.stage = next_checkpoint.stage
 

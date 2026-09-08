@@ -8,7 +8,7 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from itertools import pairwise
 from pathlib import Path
@@ -46,6 +46,7 @@ from classscribe.audio.qc import PCMQualityAnalyzer
 from classscribe.audio.segmentation import TranscriptChunk, make_structure_windows
 from classscribe.audio.vad import SpeechRegionResult
 from classscribe.benchmark import CalibrationArtifact
+from classscribe.classroom.journal import ResponseJournal
 from classscribe.config import AppConfig
 from classscribe.consensus import (
     ConfusionNetwork,
@@ -58,11 +59,13 @@ from classscribe.db.models import (
     ASRCandidate,
     BenchmarkRun,
     BenchmarkStatus,
+    CheckpointStatus,
     DecisionEvent,
     ExportArtifact,
     GlossaryTerm,
     Job,
     JobCheckpoint,
+    JobStage,
     LanguageSpan,
     ProfileSetting,
     Recording,
@@ -83,6 +86,7 @@ from classscribe.exports import (
     ExportView,
     render_export,
 )
+from classscribe.jobs.state_machine import CheckpointSpec, JobStateMachine
 from classscribe.models import ModelEntry, ModelManager, ModelRegistry, SandboxedModelInvoker
 from classscribe.paths import AppPaths
 from classscribe.punctuation import (
@@ -147,6 +151,7 @@ class ProductionStageRunner:
         self.registry = registry
         self.manager = manager
         self.invoke = invoke
+        self.boundary: Callable[[str], None] | None = None
         self.media = FFmpegMediaPipeline()
         self.quality = PCMQualityAnalyzer()
         self._handlers = {
@@ -157,13 +162,44 @@ class ProductionStageRunner:
             "lid": self._lid,
             "moss_structure": self._moss_structure,
             "primary_asr": self._primary_asr,
-            "quality_and_review": self._quality_and_review,
+            "quality_and_review": self._quality_finish,
+            "quality_secondary": self._quality_secondary,
+            "quality_tertiary": self._quality_tertiary,
             "terminology": self._terminology,
             "punctuation": self._punctuation,
             "forced_alignment": self._forced_alignment,
             "final_validation": self._final_validation,
             "automatic_exports": self._automatic_exports,
         }
+
+    def open_job(self, job_id: str) -> None:
+        if isinstance(self.invoke, SandboxedModelInvoker):
+            boundary = self.boundary
+            self.invoke.open_job(job_id, boundary=(lambda: boundary(job_id)) if boundary else None)
+            return
+        hook = getattr(self.invoke, "open_job", None)
+        if hook is not None:
+            hook(job_id)
+
+    def close_job(self, job_id: str) -> None:
+        hook = getattr(self.invoke, "close_job", None)
+        if hook is not None:
+            hook(job_id)
+
+    def uses_gpu(self) -> bool | None:
+        if isinstance(self.invoke, SandboxedModelInvoker):
+            return self.invoke.uses_gpu()
+        return None
+
+    def release_cpu(self, job_id: str) -> None:
+        hook = getattr(self.invoke, "release_cpu", None)
+        if hook is not None:
+            hook(job_id)
+
+    def close(self) -> None:
+        hook = getattr(self.invoke, "close", None)
+        if hook is not None:
+            hook()
 
     def preflight(self, parameters: Mapping[str, Any], session: Session | None = None) -> None:
         missing_tools = [
@@ -318,6 +354,8 @@ class ProductionStageRunner:
 
             windows = tuple(sliding_lid_windows(total))
             for ordinal, span in enumerate(windows):
+                if self.boundary is not None:
+                    self.boundary(job.id)
                 report_activity(
                     "lid_window",
                     window_ordinal=ordinal + 1,
@@ -327,7 +365,8 @@ class ProductionStageRunner:
                     end_sample=span.end_sample,
                 )
                 response = asyncio.run(
-                    self.invoke(
+                    self._window_call(
+                        job,
                         entry,
                         RPCRequest(
                             f"{job.id}:lid:{ordinal}",
@@ -416,17 +455,20 @@ class ProductionStageRunner:
             if item.user_confirmed
         )
 
+        boundary = self.boundary
+
         async def moss_call(request: RPCRequest) -> RPCResponse:
-            return await self.invoke(moss, request)
+            return await self._window_call(job, moss, request)
 
         async def pyannote_call(request: RPCRequest) -> RPCResponse:
-            return await self.invoke(pyannote, request)
+            return await self._window_call(job, pyannote, request)
 
         result = asyncio.run(
             StructurePipeline(
                 task_speaker_config(self.config.classroom, job.options_json.get("speaker_count")),
                 moss_call,
                 pyannote_call,
+                boundary=(lambda: boundary(job.id)) if boundary else None,
             ).process(
                 job_id=job.id,
                 audio_path=master,
@@ -521,6 +563,19 @@ class ProductionStageRunner:
                     )
                 )
 
+    async def _window_call(self, job: Job, entry: ModelEntry, request: RPCRequest) -> RPCResponse:
+        audio = self._master_path(job.recording_id)
+        stat = audio.stat()
+        identity: dict[str, Any] = {
+            "model_id": entry.id,
+            "revision": entry.revision,
+            "audio": [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns],
+        }
+        if isinstance(self.invoke, SandboxedModelInvoker):
+            identity["environment"] = str(self.invoke.provisioner.resolve(entry.worker))
+        journal = ResponseJournal(self.paths.data_path("jobs", job.id, "structure-calls"))
+        return await journal.call(request, identity, lambda: self.invoke(entry, request))
+
     def _primary_asr(self, session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
         segment = self._segment(session, checkpoint)
         entry = self._primary_entry(job.options_json, segment.language.value, session)
@@ -528,7 +583,95 @@ class ProductionStageRunner:
         self._store_candidate(session, segment, evidence)
         segment.raw_text = evidence.raw_text
 
-    def _quality_and_review(self, session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
+    def prepare_review_checkpoints(
+        self, session: Session, job: Job, segments: Sequence[TranscriptSegment]
+    ) -> None:
+        if (
+            job.options_json.get("accuracy_mode") == "strict_single"
+            or job.options_json.get("model_selection")
+            == ModelSelectionMode.STRICT_SINGLE_MODEL.value
+        ):
+            return
+        session.flush()
+        existing = {
+            (c.segment_id, c.checkpoint_key): c
+            for c in session.scalars(select(JobCheckpoint).where(JobCheckpoint.job_id == job.id))
+        }
+        routes: dict[str, tuple[str, ...]] = {}
+        for segment in segments:
+            final = existing.get((segment.id, "quality_and_review"))
+            if final is None or final.status is CheckpointStatus.COMPLETED:
+                continue
+            primary = self._primary_entry(job.options_json, segment.language.value, session)
+            fallbacks = self._fallback_entries(
+                job.options_json, segment.language.value, primary.id, session
+            )
+            routes[segment.id] = tuple(
+                fallbacks[i].id if len(fallbacks) > i else "" for i in range(2)
+            )
+        groups = sorted({model for route in routes.values() for model in route})
+        stride = len(segments) + 1
+        band = max(1, len(groups)) * stride
+        specs = []
+        for ordinal, segment in enumerate(segments):
+            if segment.id not in routes:
+                continue
+            existing[(segment.id, "quality_and_review")].position = 2 * band + ordinal
+            for phase, key in enumerate(("quality_secondary", "quality_tertiary")):
+                position = phase * band + groups.index(routes[segment.id][phase]) * stride + ordinal
+                if (segment.id, key) in existing:
+                    existing[(segment.id, key)].position = position
+                else:
+                    specs.append(
+                        CheckpointSpec(
+                            JobStage.QUALITY,
+                            key,
+                            position,
+                            {"segment_id": segment.id, "review_pass": phase + 1},
+                            segment_id=segment.id,
+                        )
+                    )
+        JobStateMachine().create_checkpoints(session, job, specs)
+
+    def _quality_secondary(self, session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
+        self._quality_and_review(session, job, checkpoint, review_pass="secondary")
+
+    def _quality_tertiary(self, session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
+        self._quality_and_review(session, job, checkpoint, review_pass="tertiary")
+
+    def _quality_finish(self, session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
+        split = session.scalar(
+            select(JobCheckpoint.id).where(
+                JobCheckpoint.job_id == job.id,
+                JobCheckpoint.segment_id == checkpoint.segment_id,
+                JobCheckpoint.checkpoint_key == "quality_secondary",
+            )
+        )
+        self._quality_and_review(session, job, checkpoint, review_pass="final" if split else "all")
+
+    @staticmethod
+    def _review_candidate(
+        candidates: Sequence[ASRCandidate],
+        primary: ASRCandidate,
+        entry: ModelEntry,
+        role: CandidateRole,
+    ) -> ASRCandidate:
+        for candidate in reversed(candidates):
+            if (
+                candidate.model_id == entry.id
+                and candidate.model_revision == entry.revision
+                and candidate.quality_features_json.get("candidate_role") == role.value
+                and candidate.quality_features_json.get("review_primary_id") == primary.id
+            ):
+                return candidate
+        raise ClassScribeError(
+            ErrorCode.JOB_STATE_CONFLICT,
+            "review evidence is missing or belongs to an older primary candidate",
+        )
+
+    def _quality_and_review(
+        self, session: Session, job: Job, checkpoint: JobCheckpoint, *, review_pass: str = "all"
+    ) -> None:
         segment = self._segment(session, checkpoint)
         candidates = list(
             session.scalars(
@@ -547,7 +690,16 @@ class ProductionStageRunner:
             third_model_threshold=self.config.quality.third_model_threshold,
         )
         reviewed: list[ConsensusCandidate] = []
-        primary = candidates[-1]
+        primary = next(
+            (
+                candidate
+                for candidate in reversed(candidates)
+                if candidate.quality_features_json.get("candidate_role", "primary") == "primary"
+            ),
+            None,
+        )
+        if primary is None:
+            raise RuntimeError("quality stage has no primary candidate")
         primary_evidence = self._evidence(session, segment, primary)
         primary_report = extractor.inspect(primary.id, primary_evidence, context)
         reviewed.append(ConsensusCandidate(primary.id, primary_evidence, primary_report))
@@ -565,36 +717,67 @@ class ProductionStageRunner:
                 job.options_json, segment.language.value, primary.model_id, session
             )
         )
+        if review_pass in {"tertiary", "final"}:
+            frozen = primary.quality_features_json.get("review_models")
+            if not isinstance(frozen, list):
+                raise ClassScribeError(
+                    ErrorCode.JOB_STATE_CONFLICT, "review route was not persisted"
+                )
+            fallbacks = tuple(self.registry.model(str(item["id"])) for item in frozen)
+            if any(
+                entry.revision != item["revision"]
+                for entry, item in zip(fallbacks, frozen, strict=True)
+            ):
+                raise ClassScribeError(
+                    ErrorCode.JOB_STATE_CONFLICT, "review model revision changed"
+                )
+        planned_route = [{"id": entry.id, "revision": entry.revision} for entry in fallbacks[:2]]
         if secondary_decision.run_secondary and fallbacks:
             report_activity(
-                "review",
+                "restore_review_result" if review_pass in {"tertiary", "final"} else "review",
                 model_id=fallbacks[0].id,
                 reason=", ".join(item.value for item in secondary_decision.triggers),
             )
-            if secondary_decision.retry is not None:
-                pieces = tuple(
-                    self._transcribe(
-                        session,
-                        job,
-                        segment,
-                        fallbacks[0],
-                        CandidateRole.SECONDARY,
-                        span=span,
-                    )
-                    for span in secondary_decision.retry.retry_spans
+            if review_pass in {"tertiary", "final"}:
+                secondary = self._review_candidate(
+                    candidates, primary, fallbacks[0], CandidateRole.SECONDARY
                 )
-                secondary_evidence = merge_retry_pieces(
-                    secondary_decision.retry,
-                    pieces,
-                    original_core=self._span(segment),
-                )
+                secondary_evidence = self._evidence(session, segment, secondary)
             else:
-                secondary_evidence = self._transcribe(
-                    session, job, segment, fallbacks[0], CandidateRole.SECONDARY
-                )
-            secondary = self._store_candidate(session, segment, secondary_evidence)
+                if secondary_decision.retry is not None:
+                    pieces = tuple(
+                        self._transcribe(
+                            session,
+                            job,
+                            segment,
+                            fallbacks[0],
+                            CandidateRole.SECONDARY,
+                            span=span,
+                        )
+                        for span in secondary_decision.retry.retry_spans
+                    )
+                    secondary_evidence = merge_retry_pieces(
+                        secondary_decision.retry,
+                        pieces,
+                        original_core=self._span(segment),
+                    )
+                else:
+                    secondary_evidence = self._transcribe(
+                        session, job, segment, fallbacks[0], CandidateRole.SECONDARY
+                    )
+                secondary = self._store_candidate(session, segment, secondary_evidence)
+                secondary.quality_features_json = {
+                    **secondary.quality_features_json,
+                    "review_primary_id": primary.id,
+                }
             secondary_report = extractor.inspect(secondary.id, secondary_evidence, context)
             reviewed.append(ConsensusCandidate(secondary.id, secondary_evidence, secondary_report))
+            if review_pass == "secondary":
+                primary.quality_features_json = {
+                    **primary.quality_features_json,
+                    "review_models": planned_route,
+                }
+                return
             comparison = compare_language_candidates(
                 primary.normalized_text,
                 secondary.normalized_text,
@@ -604,16 +787,33 @@ class ProductionStageRunner:
             tertiary_decision = router.tertiary(primary_report, secondary_report, comparison)
             if tertiary_decision.run_tertiary and len(fallbacks) > 1:
                 report_activity(
-                    "review",
+                    "restore_review_result" if review_pass == "final" else "review",
                     model_id=fallbacks[1].id,
                     reason=", ".join(item.value for item in tertiary_decision.triggers),
                 )
-                tertiary_evidence = self._transcribe(
-                    session, job, segment, fallbacks[1], CandidateRole.TERTIARY
-                )
-                tertiary = self._store_candidate(session, segment, tertiary_evidence)
+                if review_pass == "final":
+                    tertiary = self._review_candidate(
+                        candidates, primary, fallbacks[1], CandidateRole.TERTIARY
+                    )
+                    tertiary_evidence = self._evidence(session, segment, tertiary)
+                else:
+                    tertiary_evidence = self._transcribe(
+                        session, job, segment, fallbacks[1], CandidateRole.TERTIARY
+                    )
+                    tertiary = self._store_candidate(session, segment, tertiary_evidence)
+                    tertiary.quality_features_json = {
+                        **tertiary.quality_features_json,
+                        "review_primary_id": primary.id,
+                    }
                 tertiary_report = extractor.inspect(tertiary.id, tertiary_evidence, context)
                 reviewed.append(ConsensusCandidate(tertiary.id, tertiary_evidence, tertiary_report))
+        if review_pass == "secondary":
+            primary.quality_features_json = {
+                **primary.quality_features_json,
+                "review_models": planned_route,
+            }
+        if review_pass in {"secondary", "tertiary"}:
+            return
         for item in reviewed:
             row = session.get_one(ASRCandidate, item.candidate_id)
             row.quality_features_json = {
@@ -1168,6 +1368,8 @@ class ProductionStageRunner:
         *,
         span: AudioSpan | None = None,
     ) -> ASRCandidateEvidence:
+        if self.boundary is not None:
+            self.boundary(job.id)
         report_activity("transcribe_segment", model_id=entry.id, role=role.value)
         requested = span or self._span(segment)
         chunk = TranscriptChunk(
@@ -1191,9 +1393,12 @@ class ProductionStageRunner:
             hints=hints,
             rolling_context=rolling_context,
         )
-        return parse_asr_response(
-            asyncio.run(self.invoke(entry, request)), request, entry, chunk, role
+        response = asyncio.run(
+            self._window_call(job, entry, request)
+            if span is not None
+            else self.invoke(entry, request)
         )
+        return parse_asr_response(response, request, entry, chunk, role)
 
     def _store_candidate(
         self, session: Session, segment: TranscriptSegment, evidence: ASRCandidateEvidence
@@ -1506,7 +1711,7 @@ class ProductionStageRunner:
         language: str,
         session: Session | None = None,
         *,
-        verify_files: bool = True,
+        verify_files: bool = False,
     ) -> ModelEntry:
         if language not in {"zh", "ja", "en"}:
             raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "body ASR language is unresolved")
@@ -1708,7 +1913,7 @@ class ProductionStageRunner:
             calibrated_tokens,
         )
 
-    def _installed(self, model_id: str, *, verify_files: bool = True) -> bool:
+    def _installed(self, model_id: str, *, verify_files: bool = False) -> bool:
         try:
             if verify_files:
                 report_activity(

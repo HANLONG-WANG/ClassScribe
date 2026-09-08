@@ -51,6 +51,8 @@ def test_production_runner_binds_every_persistent_checkpoint(tmp_path: Path) -> 
         "moss_structure",
         "primary_asr",
         "quality_and_review",
+        "quality_secondary",
+        "quality_tertiary",
         "terminology",
         "punctuation",
         "forced_alignment",

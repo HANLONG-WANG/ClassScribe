@@ -23,7 +23,7 @@ from classscribe.db.models import (
     TranscriptSegment,
 )
 from classscribe.errors import ClassScribeError, ErrorCode
-from classscribe.jobs.state_machine import CheckpointSpec, JobStateMachine
+from classscribe.jobs.state_machine import CheckpointInterrupted, CheckpointSpec, JobStateMachine
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,11 +74,13 @@ class PipelineEventBroker:
             if kind in {
                 "checkpoint_completed",
                 "checkpoint_failed",
+                "checkpoint_yielded",
                 "job_completed",
                 "job_cancelled",
                 "job_paused",
                 "job_cancelling",
                 "job_deferred",
+                "job_shutdown_yield",
             }:
                 self._activity.pop(job_id, None)
                 self._runs.pop(job_id, None)
@@ -170,6 +172,10 @@ class SafeBoundaryPause:
             self._requested.remove(job_id)
             return True
 
+    def requested(self, job_id: str) -> bool:
+        with self._lock:
+            return self._block_all or job_id in self._requested
+
     def block_all(self) -> None:
         with self._lock:
             self._block_all = True
@@ -219,7 +225,13 @@ class ClassroomPipeline:
         self.broker = broker or PipelineEventBroker()
         self.preemption = preemption or SafeBoundaryPause()
         self._tasks: set[asyncio.Task[None]] = set()
+        self._active_jobs: set[str] = set()
+        self._rerun_jobs: set[str] = set()
+        self._active_lock = threading.Lock()
+        if hasattr(runner, "boundary"):
+            runner.boundary = self.check_boundary
         self._startup_recovered = False
+        self._shutting_down = False
         self._preempted_jobs: set[str] = set()
         self._deferred_jobs: set[str] = set()
         self._preempted_lock = threading.Lock()
@@ -249,7 +261,8 @@ class ClassroomPipeline:
         self.broker.publish(job_id, "pipeline_initialized", stage=JobStage.CREATED.value)
 
     def has_running_jobs(self) -> bool:
-        return any(not task.done() for task in self._tasks)
+        with self._active_lock:
+            return bool(self._active_jobs) or any(not task.done() for task in self._tasks)
 
     def start_recovered_jobs(self) -> None:
         """Run once before serving requests; never scan beneath an active executor."""
@@ -274,8 +287,71 @@ class ClassroomPipeline:
         return tuple(plan.job_id for plan in plans)
 
     def run_until_blocked(self, job_id: str) -> None:
-        while self.run_next(job_id):
-            pass
+        while True:
+            with self._active_lock:
+                if job_id in self._active_jobs:
+                    self._rerun_jobs.add(job_id)
+                    return
+                self._active_jobs.add(job_id)
+            try:
+                if hasattr(self.runner, "prepare_review_checkpoints"):
+                    with self.sessions() as session:
+                        ready = session.scalar(
+                            select(JobCheckpoint.id).where(
+                                JobCheckpoint.job_id == job_id,
+                                JobCheckpoint.checkpoint_key == "moss_structure",
+                                JobCheckpoint.status == CheckpointStatus.COMPLETED,
+                            )
+                        )
+                        status = session.get_one(Job, job_id).status
+                    if ready and status in {JobStatus.RUNNING, JobStatus.PENDING}:
+                        with self.sessions.begin() as session:
+                            job = session.get_one(Job, job_id)
+                            segments = tuple(
+                                session.scalars(
+                                    select(TranscriptSegment)
+                                    .where(
+                                        TranscriptSegment.job_id == job_id,
+                                        TranscriptSegment.is_active.is_(True),
+                                    )
+                                    .order_by(TranscriptSegment.start_sample, TranscriptSegment.id)
+                                )
+                            )
+                            self.runner.prepare_review_checkpoints(session, job, segments)
+                hook = getattr(self.runner, "open_job", None)
+                if hook is not None:
+                    hook(job_id)
+                while self.run_next(job_id):
+                    pass
+            finally:
+                try:
+                    hook = getattr(self.runner, "close_job", None)
+                    if hook is not None:
+                        hook(job_id)
+                finally:
+                    with self._active_lock:
+                        self._active_jobs.discard(job_id)
+                        rerun = job_id in self._rerun_jobs
+                        self._rerun_jobs.discard(job_id)
+
+            if not rerun or self._shutting_down:
+                return
+
+    def check_boundary(self, job_id: str) -> None:
+        if self._shutting_down or self.preemption.requested(job_id):
+            raise CheckpointInterrupted()
+        with self.sessions() as session:
+            status = session.get_one(Job, job_id).status
+        if status in {JobStatus.PAUSED, JobStatus.CANCELLING, JobStatus.CANCELLED}:
+            raise CheckpointInterrupted()
+
+    async def close(self) -> None:
+        self._shutting_down = True
+        if self._tasks:
+            await asyncio.gather(*tuple(self._tasks), return_exceptions=True)
+        hook = getattr(self.runner, "close", None)
+        if hook is not None:
+            await asyncio.to_thread(hook)
 
     def run_next(self, job_id: str) -> bool:
         with self.sessions.begin() as session:
@@ -287,6 +363,11 @@ class ClassroomPipeline:
             if job.status is JobStatus.CANCELLING:
                 self.state.acknowledge_cancel(job)
                 self.broker.publish(job_id, "job_cancelled", stage=job.stage.value)
+                return False
+            if self._shutting_down:
+                if job.status is JobStatus.RUNNING:
+                    job.status = JobStatus.PENDING
+                self.broker.publish(job_id, "job_shutdown_yield", stage=job.stage.value)
                 return False
             if self.preemption.consume(job_id) or self.preemption.blocks_new_dispatch:
                 event_kind = "job_paused"
@@ -372,6 +453,9 @@ class ClassroomPipeline:
 
         try:
             self.state.run_checkpoint(self.sessions, job_id, checkpoint_id, operation)
+        except CheckpointInterrupted:
+            self.broker.publish(job_id, "checkpoint_yielded", run_id=run_id, stage=stage)
+            return True
         except Exception as exc:
             self.broker.publish(
                 job_id,
@@ -388,6 +472,10 @@ class ClassroomPipeline:
         if key == "moss_structure":
             self._ensure_segment_checkpoints(job_id)
         snapshot = self.snapshot(job_id)
+        if snapshot["stage"] != stage:
+            hook = getattr(self.runner, "release_cpu", None)
+            if hook is not None:
+                hook(job_id)
         activity = self.broker.activity(job_id) or {}
         self.broker.publish(
             job_id,
@@ -401,6 +489,9 @@ class ClassroomPipeline:
             segment_id=segment_id,
             progress=snapshot["progress"],
         )
+        if snapshot["status"] == JobStatus.CANCELLED.value:
+            self.broker.publish(job_id, "job_cancelled", stage=stage)
+            return False
         if snapshot["status"] == JobStatus.COMPLETED.value:
             self.broker.publish(job_id, "job_completed", stage=JobStage.COMPLETED.value)
             return False
@@ -501,11 +592,19 @@ class ClassroomPipeline:
         identifiers = self.request_safe_preemption()
         async with asyncio.timeout(timeout_seconds):
             while True:
-                with self.sessions() as session:
-                    running = session.scalar(
-                        select(func.count()).select_from(Job).where(Job.status == JobStatus.RUNNING)
-                    )
-                if not running:
+                usage = getattr(self.runner, "uses_gpu", None)
+                gpu_busy = usage() if usage is not None else None
+                if gpu_busy is None:
+                    with self.sessions() as session:
+                        running = session.scalar(
+                            select(func.count())
+                            .select_from(Job)
+                            .where(Job.status == JobStatus.RUNNING)
+                        )
+                    ready = not running and not self.has_running_jobs()
+                else:
+                    ready = not gpu_busy
+                if ready:
                     return identifiers
                 await asyncio.sleep(0.01)
 
@@ -611,3 +710,6 @@ class ClassroomPipeline:
                             )
                         )
             self.state.create_checkpoints(session, job, specs)
+            hook = getattr(self.runner, "prepare_review_checkpoints", None)
+            if hook is not None:
+                hook(session, job, segments)

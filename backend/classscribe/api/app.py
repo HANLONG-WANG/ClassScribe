@@ -67,6 +67,7 @@ def create_app(
     async def lifespan(_application: FastAPI) -> AsyncIterator[None]:
         lease_server: GPULeaseIPCServer | None = None
         resident_workers: Any | None = None
+        pipeline = None
         try:
             concrete = api_service.get() if isinstance(api_service, LazyService) else api_service
             pipeline = concrete.pipeline
@@ -123,6 +124,8 @@ def create_app(
                 await resident_workers.start()
             yield
         finally:
+            if pipeline is not None:
+                await pipeline.close()
             if lease_server is not None:
                 await lease_server.close()
             if resident_workers is not None:

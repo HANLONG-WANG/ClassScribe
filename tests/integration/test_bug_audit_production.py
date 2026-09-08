@@ -63,8 +63,10 @@ def make_runner(tmp_path: Path, invoke: Any) -> ProductionStageRunner:
     paths.ensure()
 
     class Installed:
-        def resolve_for_runtime(self, model_id: str) -> Path:
+        def installed_revision_metadata(self, model_id: str) -> Path:
             return tmp_path / model_id
+
+        resolve_for_runtime = installed_revision_metadata
 
     return ProductionStageRunner(
         paths,

@@ -105,14 +105,17 @@ def _pyannote_response(request: RPCRequest) -> RPCResponse:
 def test_ninety_minute_pipeline_uses_twelve_minute_windows_without_overlap_duplicates() -> None:
     duration = 90 * 60 * SAMPLE_RATE
     windows = make_structure_windows(duration)
+    order: list[str] = []
     moss_calls: list[int] = []
     pyannote_calls: list[int] = []
 
     async def moss(request: RPCRequest) -> RPCResponse:
+        order.append("moss")
         moss_calls.append(int(request.params["window_ordinal"]))
         return _moss_response(request)
 
     async def pyannote(request: RPCRequest) -> RPCResponse:
+        order.append("pyannote")
         pyannote_calls.append(int(request.params["window_ordinal"]))
         return _pyannote_response(request)
 
@@ -128,6 +131,7 @@ def test_ninety_minute_pipeline_uses_twelve_minute_windows_without_overlap_dupli
     assert len(windows) == 8
     assert moss_calls == list(range(8))
     assert pyannote_calls == list(range(8))
+    assert order == ["moss"] * 8 + ["pyannote"] * 8
     assert all(item.path is WindowStructurePath.MOSS for item in result.windows)
     assert len(result.dedup_diagnostics) == 7
     assert len(result.segments) == 15
@@ -340,3 +344,75 @@ def test_overlap_only_speakers_without_embeddings_keep_anonymous_identity(tmp_pa
     assert len(set(window.speaker_mapping.values())) == 2
     assert all(span.speaker_global for span in window.speaker_spans)
     assert any(span.overlap for span in window.speaker_spans)
+
+
+def test_structural_passes_resume_without_repeating_completed_windows(tmp_path: Path) -> None:
+    import pytest
+    from classscribe.classroom.journal import ResponseJournal
+    from classscribe.jobs.state_machine import CheckpointInterrupted
+
+    duration = 24 * 60 * SAMPLE_RATE
+    windows = make_structure_windows(duration)
+    calls: list[tuple[str, int]] = []
+    journal = ResponseJournal(tmp_path / "journal")
+
+    async def moss(request: RPCRequest) -> RPCResponse:
+        async def invoke() -> RPCResponse:
+            calls.append(("moss", int(request.params["window_ordinal"])))
+            return _moss_response(request)
+
+        return await journal.call(
+            request, {"model_id": "moss_td_0_9b", "revision": MOSS_REVISION}, invoke
+        )
+
+    async def pyannote(request: RPCRequest) -> RPCResponse:
+        async def invoke() -> RPCResponse:
+            calls.append(("pyannote", int(request.params["window_ordinal"])))
+            return _pyannote_response(request)
+
+        return await journal.call(
+            request, {"model_id": "pyannote_community_1", "revision": PYANNOTE_REVISION}, invoke
+        )
+
+    def boundary() -> None:
+        if len(calls) == 1:
+            raise CheckpointInterrupted()
+
+    config = load_config(environment={}).classroom
+    with pytest.raises(CheckpointInterrupted):
+        asyncio.run(
+            StructurePipeline(config, moss, pyannote, boundary=boundary).process(
+                job_id="resume",
+                audio_path=Path("/tmp/audio.wav"),
+                windows=windows,
+                speech_spans=(AudioSpan(0, duration),),
+            )
+        )
+    assert calls == [("moss", 0)]
+    resumed = asyncio.run(
+        StructurePipeline(config, moss, pyannote).process(
+            job_id="resume",
+            audio_path=Path("/tmp/audio.wav"),
+            windows=windows,
+            speech_spans=(AudioSpan(0, duration),),
+        )
+    )
+    assert calls.count(("moss", 0)) == 1
+    assert len(calls) == len(windows) * 2
+    baseline = asyncio.run(
+        StructurePipeline(
+            config,
+            lambda r: _async_response(_moss_response(r)),
+            lambda r: _async_response(_pyannote_response(r)),
+        ).process(
+            job_id="resume",
+            audio_path=Path("/tmp/audio.wav"),
+            windows=windows,
+            speech_spans=(AudioSpan(0, duration),),
+        )
+    )
+    assert resumed == baseline
+
+
+async def _async_response(response: RPCResponse) -> RPCResponse:
+    return response
