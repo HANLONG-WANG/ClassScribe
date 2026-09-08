@@ -91,6 +91,41 @@ export interface Recording {
   media_url: string;
 }
 
+export interface JobActivity {
+  run_id: string;
+  checkpoint_id: string;
+  checkpoint_key: string;
+  attempt: number;
+  stage: string;
+  operation: string;
+  started_at: string;
+  progress_at: string;
+  model_id?: string;
+  model_name?: string;
+  device?: string;
+  language?: string;
+  completed?: number;
+  total?: number;
+  unit?: string;
+  files_completed?: number;
+  files_total?: number;
+  object?: string;
+  segment_ordinal?: number;
+  segment_total?: number;
+  window_ordinal?: number;
+  window_total?: number;
+  windows_completed?: number;
+  start_sample?: number;
+  end_sample?: number;
+  reason?: string;
+  retry?: boolean;
+  fallback?: boolean;
+  model_attempt?: number;
+  process_alive?: boolean;
+  process_checked_at?: string;
+  timeout_seconds?: number;
+}
+
 export interface Job {
   job_id: string;
   recording_id: string;
@@ -101,6 +136,10 @@ export interface Job {
   current_segment_id?: string | null;
   error_code?: string | null;
   error_detail?: string | null;
+  activity?: JobActivity | null;
+  events?: PipelineEvent[];
+  stage_activity?: Record<string, JobActivity[]>;
+  stage_counts?: Record<string, { completed: number; total: number }>;
   runtime?: {
     model_id?: string;
     segment_ordinal?: number;
@@ -256,31 +295,90 @@ export async function streamJobEvents(
   jobId: string,
   onEvent: (event: PipelineEvent) => void,
   signal: AbortSignal,
+  onConnection?: (connected: boolean) => void,
 ) {
-  const response = await fetch(`/api/v1/jobs/${jobId}/events`, {
-    headers: authHeaders(),
-    signal,
-  });
-  if (!response.ok || response.body === null) {
-    throw new Error(
-      `Unable to open job event stream (${String(response.status)})`,
-    );
-  }
-  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-  let pending = "";
-  while (!signal.aborted) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    pending += value;
-    const blocks = pending.split("\n\n");
-    pending = blocks.pop() ?? "";
-    for (const block of blocks) {
-      const data = block
-        .split("\n")
-        .find((line) => line.startsWith("data: "))
-        ?.slice(6);
-      if (data !== undefined) onEvent(JSON.parse(data) as PipelineEvent);
+  const aborted = () => signal.aborted;
+  let sequence = 0;
+  let delay = 1000;
+  while (!aborted()) {
+    let reader: ReadableStreamDefaultReader<string> | undefined;
+    const connection = new AbortController();
+    const abort = () => {
+      connection.abort();
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    const connectTimer = setTimeout(abort, 10000);
+    try {
+      const headers = new Headers(authHeaders());
+      headers.set("Last-Event-ID", String(sequence));
+      const response = await fetch(`/api/v1/jobs/${jobId}/events`, {
+        headers,
+        signal: connection.signal,
+      });
+      clearTimeout(connectTimer);
+      if (!response.ok || response.body === null)
+        throw new Error("SSE disconnected");
+      reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      let pending = "";
+      while (!aborted()) {
+        const watchdog = setTimeout(() => {
+          onConnection?.(false);
+          void reader?.cancel().catch(() => undefined);
+        }, 10000);
+        let result: ReadableStreamReadResult<string>;
+        try {
+          result = await reader.read();
+        } finally {
+          clearTimeout(watchdog);
+        }
+        const { done, value } = result;
+        if (done) break;
+        onConnection?.(true);
+        delay = 1000;
+        pending += value;
+        const blocks = pending.split("\n\n");
+        pending = blocks.pop() ?? "";
+        for (const block of blocks) {
+          const data = block
+            .split("\n")
+            .find((line) => line.startsWith("data: "))
+            ?.slice(6);
+          if (data !== undefined) {
+            const event = JSON.parse(data) as PipelineEvent;
+            if (event.job_id !== jobId) continue;
+            if (event.kind === "stream_reset") {
+              sequence = 0;
+              onEvent(event);
+              continue;
+            }
+            if (event.sequence <= sequence) continue;
+            sequence = event.sequence;
+            onEvent(event);
+          }
+        }
+      }
+    } catch {
+      if (aborted()) return;
+      // The snapshot query remains a fallback while SSE reconnects.
+    } finally {
+      clearTimeout(connectTimer);
+      signal.removeEventListener("abort", abort);
+      connection.abort();
+      await reader?.cancel().catch(() => undefined);
+      reader?.releaseLock();
     }
+    if (aborted()) return;
+    onConnection?.(false);
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, delay);
+      signal.addEventListener("abort", finish, { once: true });
+    });
+    delay = Math.min(delay * 2, 15000);
   }
 }
 

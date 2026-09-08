@@ -8,11 +8,13 @@ import shutil
 import threading
 import wave
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
 from classscribe_protocol import Priority, ProtocolError, RPCRequest, RPCResponse
 
+from classscribe.activity import report_activity
 from classscribe.models.environment import WorkerEnvironmentProvisioner
 from classscribe.models.manager import ModelManager
 from classscribe.models.registry import ModelEntry
@@ -44,6 +46,19 @@ class SandboxedModelInvoker:
         self._gpu_lock = threading.Lock()
 
     async def __call__(self, entry: ModelEntry, request: RPCRequest) -> RPCResponse:
+        report_activity(
+            "waiting_resource",
+            model_id=entry.id,
+            model_name=entry.display_name,
+            device="auto",
+            request_id=request.request_id,
+            force=True,
+            **{
+                key: request.params[key]
+                for key in ("start_sample", "end_sample", "language")
+                if key in request.params
+            },
+        )
         if self.before_gpu_use is not None:
             await asyncio.to_thread(self.before_gpu_use)
         await asyncio.to_thread(self._gpu_lock.acquire)
@@ -53,10 +68,12 @@ class SandboxedModelInvoker:
             self._gpu_lock.release()
 
     async def _invoke_locked(self, entry: ModelEntry, request: RPCRequest) -> RPCResponse:
-        model_path = self.manager.resolve_for_runtime(entry.id)
+        report_activity("verify_model")
+        model_path = await asyncio.to_thread(self.manager.resolve_for_runtime, entry.id)
         if model_path.name != entry.revision:
             raise ProtocolError("active model revision differs from the registry route")
-        project = self.provisioner.resolve(entry.worker)
+        report_activity("prepare_environment")
+        project = await asyncio.to_thread(self.provisioner.resolve, entry.worker)
         worker = provisioned_worker_command(project)
         self.runtime_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.runtime_directory.chmod(0o700)
@@ -66,6 +83,15 @@ class SandboxedModelInvoker:
         output_directory.mkdir(mode=0o700)
         input_audio, remove_input = self._input_audio(request, identity)
         sandbox = self.sandbox or WorkerSandbox.detect()
+        gpu_devices = nvidia_devices()
+        # A visible NVIDIA compute device must not silently turn a Qwen job into
+        # CPU inference when its isolated CUDA runtime is broken.
+        requested_device = (
+            "cuda:0"
+            if entry.worker == "qwen"
+            and any(device.name.removeprefix("nvidia").isdigit() for device in gpu_devices)
+            else "auto"
+        )
         command = sandbox.command(
             worker_python=Path(worker[0]),
             worker_entrypoint=Path(worker[1]),
@@ -73,7 +99,7 @@ class SandboxedModelInvoker:
             input_audio=input_audio,
             output_directory=output_directory,
             socket_directory=self.runtime_directory,
-            gpu_devices=nvidia_devices(),
+            gpu_devices=gpu_devices,
         )
         process = WorkerProcess(
             WorkerProcessSpec(
@@ -85,8 +111,26 @@ class SandboxedModelInvoker:
                 data_root_arguments=(Path("/input"),),
             )
         )
+
+        async def observe() -> None:
+            while True:
+                report_activity(
+                    measured=False,
+                    process_alive=process.running,
+                    process_checked_at=datetime.now(UTC).isoformat(),
+                )
+                await asyncio.sleep(1)
+
+        report_activity("load_model", timeout_seconds=120)
+        observer = asyncio.create_task(observe())
         try:
             await process.start(timeout_seconds=120)
+            report_activity(
+                "load_model",
+                force=True,
+                timeout_seconds=request.deadline_ms / 1000,
+                started_at=datetime.now(UTC).isoformat(),
+            )
             loaded = await process.call(
                 RPCRequest(
                     request_id=f"{request.request_id}:load",
@@ -98,7 +142,7 @@ class SandboxedModelInvoker:
                         "model_id": entry.id,
                         "model_revision": entry.revision,
                         "model_path": "/model",
-                        "device": "auto",
+                        "device": requested_device,
                     },
                 )
             )
@@ -106,8 +150,17 @@ class SandboxedModelInvoker:
                 raise ProtocolError(
                     f"model load failed: {loaded.error_code}: {loaded.error_detail}"
                 )
-            return await process.call(_sandbox_request(request))
+            report_activity(
+                "process_audio",
+                timeout_seconds=request.deadline_ms / 1000,
+                internal_progress=False,
+                device=loaded.result.get("device", requested_device),
+            )
+            response = await process.call(_sandbox_request(request))
+            report_activity("audio_processed" if response.ok else "model_error", force=True)
+            return response
         finally:
+            report_activity("release_model", timeout_seconds=30)
             if process.running:
                 with contextlib.suppress(Exception):
                     await process.call(
@@ -121,6 +174,10 @@ class SandboxedModelInvoker:
                         )
                     )
             await process.stop()
+            observer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await observer
+            report_activity("model_released", process_alive=False, force=True)
             if output_directory.exists() and not output_directory.is_symlink():
                 shutil.rmtree(output_directory)
             if remove_input:

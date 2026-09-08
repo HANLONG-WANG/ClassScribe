@@ -270,3 +270,28 @@ def test_application_lifespan_recovers_once_and_preserves_pause(
     with factory() as session:
         assert session.get_one(Job, paused).status is JobStatus.PAUSED
         assert session.get_one(JobCheckpoint, checkpoint_id).status is CheckpointStatus.RETRYABLE
+
+
+def test_activity_snapshot_is_visible_before_checkpoint_transaction_commits(
+    database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    from classscribe.activity import report_activity
+
+    _, factory, _ = database
+    job_id = make_job(factory)
+    snapshots = []
+
+    def handler(session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
+        # Hold an uncommitted write while a separate session reads the activity.
+        job.error_detail = "uncommitted"
+        session.flush()
+        report_activity("verify_model", completed=123, total=456, force=True)
+        snapshots.append(pipeline.snapshot(job.id))
+
+    pipeline = ClassroomPipeline(factory, ComposableStageRunner({"audio_import": handler}))
+    pipeline.initialize(job_id, {})
+    pipeline.run_next(job_id)
+    assert snapshots[0]["activity"]["completed"] == 123
+    assert snapshots[0]["activity"]["attempt"] == 1
+    assert snapshots[0]["error_detail"] != "uncommitted"
+    assert pipeline.snapshot(job_id)["activity"] is None

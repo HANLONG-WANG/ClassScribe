@@ -816,3 +816,34 @@ def test_metadata_planning_does_not_hash_but_runtime_still_rejects_changed_paylo
     monkeypatch.setattr(manager, "_verify_payload", original)
     with pytest.raises(ClassScribeError):
         manager.resolve_for_runtime(spec.model_id)
+
+
+def test_runtime_verification_reports_actual_bytes_and_never_counts_bad_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from classscribe.activity import ActivityReporter, activity_scope
+
+    description, content = manifest(model=b"x" * (3 * 1024 * 1024 + 17))
+    for relative, data in content.items():
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    events: list[dict[str, Any]] = []
+    clock = iter(range(100))
+    monkeypatch.setattr("classscribe.activity.time.monotonic", lambda: float(next(clock)))
+    with activity_scope(ActivityReporter(lambda **payload: events.append(payload))):
+        ModelManager._verify_payload(tmp_path, description)
+    assert events[0]["completed"] == 0
+    assert events[-1]["completed"] == sum(map(len, content.values()))
+    assert events[-1]["files_completed"] == 2
+    counters = [item["completed"] for item in events]
+    assert counters == sorted(counters)
+    assert any(1024 * 1024 < value < 3 * 1024 * 1024 for value in counters)
+    (tmp_path / "weights/model.bin").write_bytes(b"bad")
+    events.clear()
+    with (
+        activity_scope(ActivityReporter(lambda **payload: events.append(payload))),
+        pytest.raises(ClassScribeError),
+    ):
+        ModelManager._verify_payload(tmp_path, description)
+    assert events[-1]["files_completed"] == 1

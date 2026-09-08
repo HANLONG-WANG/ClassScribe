@@ -10,6 +10,8 @@ from pathlib import Path
 
 from classscribe.errors import ClassScribeError, ErrorCode
 
+_NVIDIA_MODULE_PATHS = (Path("/sys/module/nvidia"), Path("/sys/module/nvidia_uvm"))
+
 
 def _canonical(path: Path, *, directory: bool) -> Path:
     absolute = path.absolute()
@@ -153,6 +155,9 @@ class WorkerSandbox:
             "--symlink",
             "usr/lib64",
             "/lib64",
+            "--symlink",
+            "usr/sbin",
+            "/sbin",
             "--ro-bind",
             str(worker_root),
             "/worker",
@@ -169,6 +174,31 @@ class WorkerSandbox:
             str(socket),
             "/run/classscribe",
         ]
+        # CUDA 13 queries both driver modules during initialization. /dev bindings
+        # alone cause cudaGetDeviceCount() to fail (304 / unknown error).
+        # Expose only these read-only module directories, never the whole host /sys.
+        if gpu_devices:
+            # Triton locates the CUDA driver through /sbin/ldconfig -p.
+            linker_cache = Path("/etc/ld.so.cache")
+            if linker_cache.exists():
+                cache = _canonical(linker_cache, directory=False)
+                command.extend(("--ro-bind", str(cache), str(cache)))
+            # Fedora's /usr/bin/ld points through /etc/alternatives. Preserve
+            # only the linker alternative used by Triton's JIT compiler.
+            linker_alternative = Path("/etc/alternatives/ld")
+            if linker_alternative.is_symlink():
+                linker = linker_alternative.resolve(strict=True)
+                if not linker.is_relative_to(Path("/usr")):
+                    raise ClassScribeError(
+                        ErrorCode.PATH_OUTSIDE_ALLOWED_ROOT,
+                        "sandbox linker alternative must resolve below /usr",
+                    )
+                linker = _canonical(linker, directory=False)
+                command.extend(("--ro-bind", str(linker), str(linker_alternative)))
+            for module_path in _NVIDIA_MODULE_PATHS:
+                if module_path.exists():
+                    module = _canonical(module_path, directory=True)
+                    command.extend(("--ro-bind", str(module), str(module)))
         for device in gpu_devices:
             canonical_device = _canonical_nvidia_device(device)
             command.extend(("--dev-bind", str(canonical_device), str(canonical_device)))

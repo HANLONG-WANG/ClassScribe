@@ -8,10 +8,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
+from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from classscribe.activity import ActivityReporter, activity_scope
 from classscribe.db.models import (
     CheckpointStatus,
     Job,
@@ -41,9 +43,45 @@ class PipelineEventBroker:
         self._events: dict[str, list[PipelineEvent]] = {}
         self._sequence: dict[str, int] = {}
         self._lock = threading.Lock()
+        self._activity: dict[str, dict[str, Any]] = {}
+        self._runs: dict[str, str] = {}
+        self._recent: dict[str, list[PipelineEvent]] = {}
+        self._stage_activity: dict[str, dict[str, list[dict[str, Any]]]] = {}
 
-    def publish(self, job_id: str, kind: str, **payload: Any) -> PipelineEvent:
+    def publish(self, job_id: str, kind: str, **payload: Any) -> PipelineEvent | None:
         with self._lock:
+            previous = self._activity.get(job_id, {})
+            if (
+                kind in {"checkpoint_completed", "checkpoint_failed"}
+                and payload.get("run_id") is not None
+                and self._runs.get(job_id) not in {None, payload["run_id"]}
+            ):
+                return None
+            if kind == "checkpoint_started":
+                self._runs[job_id] = payload.get("run_id", "")
+                self._activity.pop(job_id, None)
+            if kind == "activity":
+                if payload.get("run_id") != self._runs.get(job_id):
+                    return None
+                self._activity[job_id] = dict(payload)
+                steps = self._stage_activity.setdefault(job_id, {}).setdefault(payload["stage"], [])
+                identity = ("run_id", "request_id", "operation", "model_id")
+                if steps and all(steps[-1].get(key) == payload.get(key) for key in identity):
+                    steps[-1] = dict(payload)
+                else:
+                    steps.append(dict(payload))
+                    del steps[:-12]
+            if kind in {
+                "checkpoint_completed",
+                "checkpoint_failed",
+                "job_completed",
+                "job_cancelled",
+                "job_paused",
+                "job_cancelling",
+                "job_deferred",
+            }:
+                self._activity.pop(job_id, None)
+                self._runs.pop(job_id, None)
             sequence = self._sequence.get(job_id, 0) + 1
             self._sequence[job_id] = sequence
             event = PipelineEvent(
@@ -53,10 +91,33 @@ class PipelineEventBroker:
                 datetime.now(UTC).isoformat(),
                 dict(payload),
             )
+            if kind != "activity" or any(
+                previous.get(key) != payload.get(key)
+                for key in ("operation", "request_id", "run_id", "window_ordinal", "model_id")
+            ):
+                recent = self._recent.setdefault(job_id, [])
+                recent.append(event)
+                del recent[:-64]
             events = self._events.setdefault(job_id, [])
             events.append(event)
             del events[: max(0, len(events) - self._retained)]
             return event
+
+    def activity(self, job_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            value = self._activity.get(job_id)
+            return dict(value) if value else None
+
+    def stage_activity(self, job_id: str) -> dict[str, list[dict[str, Any]]]:
+        with self._lock:
+            return {
+                stage: [dict(step) for step in steps]
+                for stage, steps in self._stage_activity.get(job_id, {}).items()
+            }
+
+    def recent(self, job_id: str) -> tuple[PipelineEvent, ...]:
+        with self._lock:
+            return tuple(self._recent.get(job_id, ()))
 
     def after(self, job_id: str, sequence: int = 0) -> tuple[PipelineEvent, ...]:
         with self._lock:
@@ -255,16 +316,59 @@ class ClassroomPipeline:
             stage = checkpoint.stage.value
             key = checkpoint.checkpoint_key
             segment_id = checkpoint.segment_id
+            attempt = checkpoint.attempt_count + 1
+        run_id = uuid4().hex
         self.broker.publish(
             job_id,
             "checkpoint_started",
+            run_id=run_id,
+            checkpoint_id=checkpoint_id,
+            attempt=attempt,
             stage=stage,
             checkpoint_key=key,
             segment_id=segment_id,
         )
 
         def operation(session: Session, checkpoint: JobCheckpoint) -> None:
-            self.runner.run(session, session.get_one(Job, job_id), checkpoint)
+            reporter = ActivityReporter(
+                lambda **payload: self.broker.publish(job_id, "activity", **payload),
+                run_id=run_id,
+                checkpoint_id=checkpoint.id,
+                checkpoint_key=key,
+                attempt=checkpoint.attempt_count,
+                stage=stage,
+                segment_id=segment_id,
+            )
+            with activity_scope(reporter):
+                reporter.report(key)
+                if segment_id:
+                    segments = list(
+                        session.execute(
+                            select(
+                                TranscriptSegment.id,
+                                TranscriptSegment.start_sample,
+                                TranscriptSegment.end_sample,
+                                TranscriptSegment.language,
+                            )
+                            .where(
+                                TranscriptSegment.job_id == job_id,
+                                TranscriptSegment.is_active.is_(True),
+                            )
+                            .order_by(TranscriptSegment.start_sample, TranscriptSegment.id)
+                        )
+                    )
+                    for ordinal, segment in enumerate(segments, 1):
+                        if segment.id == segment_id:
+                            reporter.report(
+                                force=True,
+                                segment_ordinal=ordinal,
+                                segment_total=len(segments),
+                                start_sample=segment.start_sample,
+                                end_sample=segment.end_sample,
+                                language=segment.language.value,
+                            )
+                            break
+                self.runner.run(session, session.get_one(Job, job_id), checkpoint)
 
         try:
             self.state.run_checkpoint(self.sessions, job_id, checkpoint_id, operation)
@@ -272,6 +376,9 @@ class ClassroomPipeline:
             self.broker.publish(
                 job_id,
                 "checkpoint_failed",
+                run_id=run_id,
+                checkpoint_id=checkpoint_id,
+                attempt=attempt,
                 stage=stage,
                 checkpoint_key=key,
                 segment_id=segment_id,
@@ -281,9 +388,14 @@ class ClassroomPipeline:
         if key == "moss_structure":
             self._ensure_segment_checkpoints(job_id)
         snapshot = self.snapshot(job_id)
+        activity = self.broker.activity(job_id) or {}
         self.broker.publish(
             job_id,
             "checkpoint_completed",
+            run_id=run_id,
+            checkpoint_id=checkpoint_id,
+            attempt=attempt,
+            segment_ordinal=activity.get("segment_ordinal"),
             stage=stage,
             checkpoint_key=key,
             segment_id=segment_id,
@@ -442,6 +554,31 @@ class ClassroomPipeline:
                 "error_code": job.error_code,
                 "error_detail": job.error_detail,
                 "runtime": telemetry,
+                "activity": self.broker.activity(job_id)
+                if job.status is JobStatus.RUNNING
+                else None,
+                "events": [
+                    {
+                        "sequence": e.sequence,
+                        "job_id": e.job_id,
+                        "kind": e.kind,
+                        "occurred_at": e.occurred_at,
+                        "payload": e.payload,
+                    }
+                    for e in self.broker.recent(job_id)[-20:]
+                ],
+                "stage_activity": self.broker.stage_activity(job_id),
+                "stage_counts": {
+                    stage.value: {
+                        "completed": sum(
+                            c.status is CheckpointStatus.COMPLETED
+                            for c in job.checkpoints
+                            if c.stage is stage
+                        ),
+                        "total": sum(c.stage is stage for c in job.checkpoints),
+                    }
+                    for stage in JobStage
+                },
             }
 
     def _ensure_segment_checkpoints(self, job_id: str) -> None:

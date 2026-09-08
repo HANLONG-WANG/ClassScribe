@@ -24,9 +24,11 @@ interface WorkbenchState {
   setLowConfidenceOnly: (value: boolean) => void;
 }
 
+const restoredJobId = sessionStorage.getItem("classscribe-current-job");
+
 export const useWorkbench = create<WorkbenchState>((set) => ({
-  page: "upload",
-  currentJobId: null,
+  page: restoredJobId ? "job" : "upload",
+  currentJobId: restoredJobId,
   selectedSegmentId: null,
   textLayer: "smart",
   lowConfidenceOnly: false,
@@ -34,6 +36,7 @@ export const useWorkbench = create<WorkbenchState>((set) => ({
     set({ page });
   },
   setCurrentJob: (currentJobId) => {
+    sessionStorage.setItem("classscribe-current-job", currentJobId);
     set({ currentJobId, page: "job", selectedSegmentId: null });
   },
   selectSegment: (selectedSegmentId) => {

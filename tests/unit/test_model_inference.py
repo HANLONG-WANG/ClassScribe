@@ -143,6 +143,7 @@ def test_sandboxed_invoker_runs_complete_offline_lifecycle(
     process = Process.instances[0]
     assert [item.method for item in process.calls] == ["load", "transcribe_batch", "unload"]
     assert process.calls[1].params["audio_path"] == "/input/audio"
+    assert process.calls[0].params["device"] == "cuda:0"
     assert process.stopped
     assert sandbox.arguments["model_revision"] == model
     assert sandbox.arguments["input_audio"] == audio
@@ -161,6 +162,7 @@ def test_invoker_cleans_synthetic_input_and_reports_load_failure(
     Process.instances.clear()
     Process.load_ok = False
     monkeypatch.setattr(inference, "WorkerProcess", Process)
+    monkeypatch.setattr(inference, "nvidia_devices", lambda: ())
     invoker = SandboxedModelInvoker(
         cast(ModelManager, InstalledModel(model)),
         cast(WorkerEnvironmentProvisioner, ProvisionedEnvironment(environment(tmp_path))),
@@ -173,6 +175,7 @@ def test_invoker_cleans_synthetic_input_and_reports_load_failure(
         asyncio.run(invoker(entry, request))
 
     assert [item.method for item in Process.instances[0].calls] == ["load", "unload"]
+    assert Process.instances[0].calls[0].params["device"] == "auto"
     assert Process.instances[0].stopped
     assert not tuple((tmp_path / "runtime").glob("*-silence.wav"))
     assert not tuple((tmp_path / "runtime").glob("*-output"))
@@ -211,3 +214,65 @@ def test_invoker_rejects_revision_drift_and_noncanonical_audio(tmp_path: Path) -
             ),
             "fixture",
         )
+
+
+def test_process_heartbeat_is_observed_without_fabricating_model_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from classscribe.activity import ActivityReporter, activity_scope
+    from classscribe.models import inference
+
+    class SlowProcess(Process):
+        async def call(self, request: RPCRequest) -> RPCResponse:
+            if request.method == "transcribe_batch":
+                await asyncio.sleep(1.1)
+            return await super().call(request)
+
+    SlowProcess.load_ok = True
+    monkeypatch.setattr(inference, "WorkerProcess", SlowProcess)
+    entry = load_registry(Path("config/model-registry.v1.yaml")).model("qwen3_asr_1_7b")
+    model = tmp_path / entry.revision
+    model.mkdir()
+    invoker = SandboxedModelInvoker(
+        cast(ModelManager, InstalledModel(model)),
+        cast(WorkerEnvironmentProvisioner, ProvisionedEnvironment(environment(tmp_path))),
+        tmp_path / "runtime",
+        sandbox=cast(Any, Sandbox()),
+    )
+    events: list[dict[str, Any]] = []
+    with activity_scope(ActivityReporter(lambda **payload: events.append(payload))):
+        asyncio.run(
+            invoker(
+                entry,
+                RPCRequest(
+                    "request",
+                    "job",
+                    5000,
+                    Priority.BACKGROUND,
+                    "transcribe_batch",
+                    {
+                        "audio_path": str(audio_file(tmp_path / "input.wav")),
+                        "start_sample": 0,
+                        "end_sample": 160,
+                        "sample_rate": 16000,
+                    },
+                ),
+            )
+        )
+    operations = [event["operation"] for event in events]
+    for operation in (
+        "waiting_resource",
+        "verify_model",
+        "prepare_environment",
+        "load_model",
+        "process_audio",
+        "release_model",
+        "model_released",
+    ):
+        assert operation in operations
+    processing = [event for event in events if event["operation"] == "process_audio"]
+    assert len(processing) >= 2
+    assert processing[-1]["process_alive"] is True
+    assert processing[-1]["progress_at"] == processing[0]["progress_at"]
+    assert all("completed" not in event for event in processing)
+    assert events[-1]["process_alive"] is False

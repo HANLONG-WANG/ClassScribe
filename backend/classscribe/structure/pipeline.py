@@ -11,6 +11,7 @@ from pathlib import Path
 
 from classscribe_protocol import RPCRequest, RPCResponse
 
+from classscribe.activity import report_activity
 from classscribe.audio.segmentation import (
     BoundaryCue,
     BoundaryKind,
@@ -165,11 +166,20 @@ class StructurePipeline:
         outcomes: list[WindowStructureOutcome] = []
         previous_stitched: tuple[StructureSegment, ...] = ()
         for window in windows:
+            report_activity(
+                "structure_window",
+                window_ordinal=window.ordinal + 1,
+                window_total=len(windows),
+                windows_completed=len(outcomes),
+                start_sample=window.span.start_sample,
+                end_sample=window.span.end_sample,
+            )
             moss, health, moss_attempts, moss_errors = await self._run_moss(
                 job_id, audio_path, window, speech_spans, language, hotwords
             )
             relevant_speech = tuple(span for span in speech_spans if span.overlaps(window.span))
             should_run_pyannote = bool(relevant_speech or (moss and moss.segments))
+            report_activity("speaker_analysis", fallback=moss is None or health.needs_fallback)
             pyannote, pyannote_attempts, pyannote_errors = (
                 await self._run_pyannote(job_id, audio_path, window)
                 if should_run_pyannote
@@ -252,6 +262,9 @@ class StructurePipeline:
                 speaker_id_switches=stitched.speaker_id_switches,
             )
             outcomes.append(outcome)
+            report_activity(
+                "structure_window_completed", windows_completed=len(outcomes), path=path.value
+            )
             previous_stitched = stitched.segments
 
         deduplicated, dedup_diagnostics = deduplicate_structure_segments(
@@ -298,6 +311,13 @@ class StructurePipeline:
         latest_result: StructureResult | None = None
         latest_health = StructureHealthReport.worker_failure("MOSS was not attempted")
         for attempt in range(1, self.max_window_attempts + 1):
+            report_activity(
+                "structure_attempt",
+                fallback=False,
+                model_attempt=attempt,
+                retry=attempt > 1,
+                reason="; ".join(errors[-1:]),
+            )
             request = build_moss_structure_request(
                 request_id=f"{job_id}:structure:{window.ordinal}:moss:{attempt}",
                 job_id=job_id,
@@ -325,6 +345,12 @@ class StructurePipeline:
     ) -> tuple[PyannoteResult | None, int, tuple[str, ...]]:
         errors: list[str] = []
         for attempt in range(1, self.max_window_attempts + 1):
+            report_activity(
+                "speaker_analysis",
+                model_attempt=attempt,
+                retry=attempt > 1,
+                reason="; ".join(errors[-1:]),
+            )
             request = build_pyannote_request(
                 request_id=f"{job_id}:structure:{window.ordinal}:pyannote:{attempt}",
                 job_id=job_id,

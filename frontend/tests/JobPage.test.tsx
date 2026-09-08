@@ -90,3 +90,68 @@ it.each([
     expect(step).not.toHaveClass("active");
   }
 });
+
+it("restores real verification counters and clears the operation on completion", async () => {
+  const update = setup("running", "transcription", 0.4);
+  await screen.findByText("主 ASR", { selector: "strong" });
+  await update({
+    activity: {
+      run_id: "attempt-1",
+      checkpoint_id: "cp-1",
+      checkpoint_key: "primary_asr",
+      attempt: 1,
+      stage: "transcription",
+      operation: "verify_model",
+      started_at: new Date().toISOString(),
+      progress_at: new Date().toISOString(),
+      model_id: "qwen3_asr_1_7b",
+      completed: 2.1 * 1024 ** 3,
+      total: 3.5 * 1024 ** 3,
+      unit: "bytes",
+      files_completed: 4,
+      files_total: 7,
+      segment_ordinal: 38,
+      segment_total: 126,
+    },
+  });
+  expect(await screen.findByText("正在校验模型文件")).toBeVisible();
+  expect(screen.getByText(/已校验 2.10 GiB \/ 3.50 GiB/)).toBeVisible();
+  expect(screen.getByRole("progressbar", { name: "任务进度" })).toHaveAttribute(
+    "aria-valuenow",
+    "40",
+  );
+  await update({ status: "completed", stage: "completed", progress: 1 });
+  expect(await screen.findByText("任务已完成")).toBeVisible();
+  expect(screen.queryByText("正在校验模型文件")).not.toBeInTheDocument();
+});
+
+it("distinguishes a live model from actual progress and uses no invented percentage", async () => {
+  const update = setup("running", "structure", 0.3);
+  await screen.findByText("结构", { selector: "strong" });
+  await update({
+    activity: {
+      run_id: "attempt-2",
+      checkpoint_id: "cp-2",
+      checkpoint_key: "moss_structure",
+      attempt: 2,
+      stage: "structure",
+      operation: "process_audio",
+      started_at: new Date(Date.now() - 90000).toISOString(),
+      progress_at: new Date(Date.now() - 60000).toISOString(),
+      process_checked_at: new Date().toISOString(),
+      process_alive: true,
+      window_ordinal: 3,
+      window_total: 20,
+      windows_completed: 2,
+    },
+  });
+  expect(
+    await screen.findByText("模型处理中，暂不提供内部百分比"),
+  ).toBeVisible();
+  expect(screen.getByText("模型进程：存活")).toBeVisible();
+  expect(screen.getByText(/没有新的实际进展/)).toBeVisible();
+  expect(screen.getAllByRole("progressbar")).toHaveLength(1);
+  await update({ status: "paused" });
+  expect(await screen.findByText("任务已暂停")).toBeVisible();
+  expect(screen.queryByText(/本次操作已运行/)).not.toBeInTheDocument();
+});

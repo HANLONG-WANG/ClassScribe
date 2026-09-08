@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from classscribe.activity import report_activity
 from classscribe.db.models import ModelHealth, ModelInstallation
 from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.paths import validate_restricted_directory
@@ -656,6 +657,7 @@ class ModelManager:
     def resolve_for_runtime(self, model_id: str) -> Path:
         """Resolve and revalidate the active revision without any downloader/network path."""
 
+        report_activity("verify_model", model_id=model_id)
         self._validate_identifier(model_id)
         revision = self._active_revision(model_id)
         if revision is None:
@@ -859,7 +861,18 @@ class ModelManager:
                 f"manifest mismatch; missing={missing}, extra={extra}",
             )
         aggregate = hashlib.sha256()
-        for relative in sorted(expected):
+        total = sum(spec.size_bytes for spec in expected.values())
+        completed = 0
+        report_activity(
+            "verify_model",
+            completed=0,
+            total=total,
+            unit="bytes",
+            files_completed=0,
+            files_total=len(expected),
+            force=True,
+        )
+        for ordinal, relative in enumerate(sorted(expected)):
             spec = expected[relative]
             path = payload / relative
             digest = hashlib.sha256()
@@ -868,10 +881,22 @@ class ModelManager:
                 for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                     size += len(chunk)
                     digest.update(chunk)
+                    completed += len(chunk)
+                    report_activity(
+                        completed=completed,
+                        total=total,
+                        unit="bytes",
+                        files_completed=ordinal,
+                        files_total=len(expected),
+                        object=relative,
+                    )
             if size != spec.size_bytes or digest.hexdigest() != spec.sha256:
                 raise ClassScribeError(
                     ErrorCode.MODEL_INTEGRITY_FAILED, f"hash or size mismatch: {relative}"
                 )
+            report_activity(
+                completed=completed, files_completed=ordinal + 1, force=ordinal + 1 == len(expected)
+            )
             aggregate.update(relative.encode("utf-8"))
             aggregate.update(b"\0")
             aggregate.update(spec.sha256.encode("ascii"))

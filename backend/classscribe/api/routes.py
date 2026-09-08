@@ -94,6 +94,19 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
     ) -> StreamingResponse:
         async def stream() -> AsyncIterator[str]:
             sequence = last_event_id
+            retained = service.pipeline.broker.after(job_id) if service.pipeline else ()
+            if sequence > (retained[-1].sequence if retained else 0):
+                sequence = 0
+                reset = json.dumps(
+                    {
+                        "sequence": 0,
+                        "job_id": job_id,
+                        "kind": "stream_reset",
+                        "occurred_at": "",
+                        "payload": {},
+                    }
+                )
+                yield f"event: stream_reset\ndata: {reset}\n\n"
             while True:
                 events = service.pipeline.broker.after(job_id, sequence) if service.pipeline else ()
                 for event in events:
@@ -122,7 +135,7 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
                     break
                 if not events:
                     yield ": keepalive\n\n"
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(1)
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 

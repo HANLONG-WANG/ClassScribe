@@ -19,6 +19,7 @@ from classscribe_protocol import Priority, RPCRequest, RPCResponse
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from classscribe.activity import report_activity
 from classscribe.alignment import (
     AlignedToken,
     AlignmentGateInput,
@@ -315,7 +316,16 @@ class ProductionStageRunner:
             observations: list[LIDObservation] = []
             from classscribe.audio.lid import sliding_lid_windows
 
-            for ordinal, span in enumerate(sliding_lid_windows(total)):
+            windows = tuple(sliding_lid_windows(total))
+            for ordinal, span in enumerate(windows):
+                report_activity(
+                    "lid_window",
+                    window_ordinal=ordinal + 1,
+                    window_total=len(windows),
+                    windows_completed=ordinal,
+                    start_sample=span.start_sample,
+                    end_sample=span.end_sample,
+                )
                 response = asyncio.run(
                     self.invoke(
                         entry,
@@ -334,6 +344,7 @@ class ProductionStageRunner:
                         ),
                     )
                 )
+                report_activity("lid_window_completed", windows_completed=ordinal + 1)
                 if not response.ok or response.language not in {"zh", "ja", "en"}:
                     raise RuntimeError("LID worker returned no supported language")
                 supplied = response.result.get("language_probabilities")
@@ -555,6 +566,11 @@ class ProductionStageRunner:
             )
         )
         if secondary_decision.run_secondary and fallbacks:
+            report_activity(
+                "review",
+                model_id=fallbacks[0].id,
+                reason=", ".join(item.value for item in secondary_decision.triggers),
+            )
             if secondary_decision.retry is not None:
                 pieces = tuple(
                     self._transcribe(
@@ -587,6 +603,11 @@ class ProductionStageRunner:
             )
             tertiary_decision = router.tertiary(primary_report, secondary_report, comparison)
             if tertiary_decision.run_tertiary and len(fallbacks) > 1:
+                report_activity(
+                    "review",
+                    model_id=fallbacks[1].id,
+                    reason=", ".join(item.value for item in tertiary_decision.triggers),
+                )
                 tertiary_evidence = self._transcribe(
                     session, job, segment, fallbacks[1], CandidateRole.TERTIARY
                 )
@@ -1097,8 +1118,17 @@ class ProductionStageRunner:
             )
             if enabled
         )
+        exported = 0
         for layer in layers:
             for output_format in outputs:
+                report_activity(
+                    "export",
+                    completed=exported,
+                    total=len(layers) * len(outputs),
+                    unit="files",
+                    object=f"{layer.value}.{output_format.value}",
+                    force=True,
+                )
                 content = render_export(
                     segments,
                     output_format=output_format,
@@ -1111,6 +1141,8 @@ class ProductionStageRunner:
                 relative = Path("jobs", job.id, "exports", f"{artifact_id}.{suffix}")
                 target = self.paths.data_path(*relative.parts)
                 atomic_write_text(target, content)
+                exported += 1
+                report_activity(completed=exported, force=True)
                 session.add(
                     ExportArtifact(
                         id=artifact_id,
@@ -1136,6 +1168,7 @@ class ProductionStageRunner:
         *,
         span: AudioSpan | None = None,
     ) -> ASRCandidateEvidence:
+        report_activity("transcribe_segment", model_id=entry.id, role=role.value)
         requested = span or self._span(segment)
         chunk = TranscriptChunk(
             0,
@@ -1678,6 +1711,11 @@ class ProductionStageRunner:
     def _installed(self, model_id: str, *, verify_files: bool = True) -> bool:
         try:
             if verify_files:
+                report_activity(
+                    "verify_model",
+                    model_id=model_id,
+                    model_name=self.registry.model(model_id).display_name,
+                )
                 self.manager.resolve_for_runtime(model_id)
             else:
                 self.manager.installed_revision_metadata(model_id)

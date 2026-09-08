@@ -11,6 +11,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any
 
+from classscribe.activity import report_activity
 from classscribe.audio.media import AudioMaster, ImportedMedia
 from classscribe.timeline import SAMPLE_RATE, AudioSpan
 
@@ -104,6 +105,9 @@ class PCMQualityAnalyzer:
             window_squares = [0] * channels
             window_count = 0
             window_rms: list[list[float]] = [[] for _ in range(channels)]
+            processed_frames = 0
+            total_frames = recording.getnframes()
+            report_activity("audio_qc", completed=0, total=total_frames / rate, unit="seconds")
             while True:
                 raw = recording.readframes(min(window_frames - window_count, 8192))
                 if not raw:
@@ -124,6 +128,10 @@ class PCMQualityAnalyzer:
                         self._close_window(window_squares, window_count, window_rms)
                         window_squares = [0] * channels
                         window_count = 0
+                processed_frames += frames
+                if processed_frames // rate != (processed_frames - frames) // rate:
+                    report_activity(completed=processed_frames / rate)
+            report_activity(completed=processed_frames / rate, force=True)
             if window_count:
                 self._close_window(window_squares, window_count, window_rms)
         return tuple(

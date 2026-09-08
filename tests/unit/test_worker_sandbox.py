@@ -114,3 +114,41 @@ def test_worker_sandbox_rejects_symlinked_input(tmp_path: Path) -> None:
             socket_directory=socket,
         )
     assert raised.value.code is ErrorCode.PATH_OUTSIDE_ALLOWED_ROOT
+
+
+@pytest.mark.parametrize("with_gpu", [False, True])
+def test_only_gpu_workers_receive_readonly_nvidia_module_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_gpu: bool
+) -> None:
+    import classscribe.worker_sandbox as sandbox_module
+
+    bwrap = tmp_path / "bwrap"
+    bwrap.touch()
+    worker = tmp_path / "worker"
+    (worker / "bin").mkdir(parents=True)
+    (worker / "bin/python").touch()
+    (worker / "worker.py").touch()
+    audio = tmp_path / "audio"
+    audio.touch()
+    modules = (tmp_path / "nvidia", tmp_path / "nvidia_uvm")
+    for module in modules:
+        module.mkdir()
+    monkeypatch.setattr(sandbox_module, "_NVIDIA_MODULE_PATHS", modules)
+    monkeypatch.setattr(sandbox_module, "_canonical_nvidia_device", lambda path: path)
+    command = WorkerSandbox(bwrap).command(
+        worker_python=worker / "bin/python",
+        worker_entrypoint=worker / "worker.py",
+        model_revision=worker,
+        input_audio=audio,
+        output_directory=tmp_path,
+        socket_directory=tmp_path,
+        gpu_devices=(Path("/dev/nvidia0"),) if with_gpu else (),
+    )
+    mounts = [command[i : i + 3] for i, value in enumerate(command) if value == "--ro-bind"]
+    for module in modules:
+        assert (("--ro-bind", str(module), str(module)) in mounts) is with_gpu
+    assert "/sys" not in command
+    assert "usr/sbin\0/sbin" in "\0".join(command)
+    if Path("/etc/ld.so.cache").exists():
+        assert (("--ro-bind", "/etc/ld.so.cache", "/etc/ld.so.cache") in mounts) is with_gpu
+    assert "--unshare-all" in command

@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import tempfile
+import time
 import wave
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from classscribe.activity import report_activity
 from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.paths import validate_restricted_directory
 from classscribe.timeline import SAMPLE_RATE
@@ -248,7 +250,17 @@ class FFmpegMediaPipeline:
             ("-ac", "1", "-ar", str(SAMPLE_RATE), "-c:a", "pcm_s16le", "-y", str(temporary))
         )
         try:
-            completed = self._execute(tuple(command), ErrorCode.MEDIA_DECODE_FAILED)
+            report_activity(
+                "normalize_audio",
+                completed=0,
+                total=float(metadata.duration_seconds),
+                unit="seconds",
+            )
+            completed = (
+                self._normalize_progress(command, float(metadata.duration_seconds))
+                if self._runner is _run
+                else self._execute(tuple(command), ErrorCode.MEDIA_DECODE_FAILED)
+            )
             if completed.returncode:
                 raise ClassScribeError(
                     ErrorCode.MEDIA_DECODE_FAILED,
@@ -264,6 +276,48 @@ class FFmpegMediaPipeline:
             )
         finally:
             temporary.unlink(missing_ok=True)
+
+    def _normalize_progress(
+        self, command: list[str], duration: float
+    ) -> subprocess.CompletedProcess[str]:
+        # FFmpeg writes actual output timestamps. File-backed stderr avoids pipe deadlocks.
+        with (
+            tempfile.NamedTemporaryFile(mode="r+", prefix="classscribe-progress-") as progress,
+            tempfile.TemporaryFile(mode="w+") as errors,
+        ):
+            process = subprocess.Popen(
+                [*command[:1], "-progress", progress.name, *command[1:]],
+                stdout=subprocess.DEVNULL,
+                stderr=errors,
+                text=True,
+            )
+            started = time.monotonic()
+            try:
+                while True:
+                    finished = process.poll() is not None
+                    for line in progress.readlines():
+                        if line.startswith("out_time_us="):
+                            value = line.strip().partition("=")[2]
+                            if value.lstrip("-").isdigit():
+                                report_activity(
+                                    completed=min(duration, max(0, int(value) / 1e6)),
+                                    force=finished,
+                                )
+                    if finished:
+                        break
+                    if time.monotonic() - started > 3600:
+                        raise subprocess.TimeoutExpired(command, 3600)
+                    time.sleep(0.2)
+                errors.seek(0)
+                return subprocess.CompletedProcess(
+                    command, process.returncode, "", errors.read(500)
+                )
+            except (OSError, subprocess.SubprocessError) as error:
+                raise ClassScribeError(ErrorCode.MEDIA_DECODE_FAILED, str(error)) from error
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
 
     @staticmethod
     def _inspect_master(path: Path) -> AudioMaster:

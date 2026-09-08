@@ -1204,3 +1204,56 @@ details summary {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.current-activity h2 {
+  margin: 0.35rem 0 1rem;
+  font-size: 1.5rem;
+}
+.current-activity progress {
+  width: 100%;
+  accent-color: var(--accent, #3d8475);
+}
+.activity-health {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 2rem;
+}
+.job-stages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.job-stages li {
+  border-left: 3px solid #d6dcd9;
+  padding: 0.7rem 1rem;
+}
+.job-stages li.active {
+  border-color: #32796b;
+  background: #eef6f3;
+}
+.job-stages li.done {
+  border-color: #86a69d;
+}
+.job-stages summary {
+  cursor: pointer;
+}
+.job-stages summary span {
+  float: right;
+  color: #65736e;
+  font-size: 0.85rem;
+}
+.job-events time {
+  color: #65736e;
+  font-variant-numeric: tabular-nums;
+  margin-right: 0.75rem;
+}
+.current-activity .mono {
+  overflow-wrap: anywhere;
+}
+
+.current-activity,
+.job-flow,
+.job-recent,
+.job-technical {
+  padding: 22px;
+}

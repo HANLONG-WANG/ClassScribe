@@ -178,3 +178,21 @@ def test_equal_downmix_is_explicit_and_does_not_add_enhancement_filters(tmp_path
     master_quality = PCMQualityAnalyzer().analyze_channels(prepared.master.path)[0]
     assert master_quality.rms < 1 / 32768
     assert prepared.quality.processing_policy == "no_denoise_no_aec_no_aggressive_normalization"
+
+
+def test_ffmpeg_reports_output_audio_time(tmp_path: Path) -> None:
+    from typing import Any
+
+    from classscribe.activity import ActivityReporter, activity_scope
+
+    events: list[dict[str, Any]] = []
+    with activity_scope(ActivityReporter(lambda **payload: events.append(payload))):
+        master = FFmpegMediaPipeline().normalize(
+            write_stereo_wave(tmp_path / "lecture.wav"),
+            tmp_path / "derived/audio_master.wav",
+        )
+    assert events[0]["operation"] == "normalize_audio"
+    assert events[0]["completed"] == 0
+    assert events[-1]["completed"] == pytest.approx(master.duration_samples / SAMPLE_RATE)
+    assert events[-1]["total"] == 2
+    assert events[-1]["unit"] == "seconds"
