@@ -59,6 +59,7 @@ const installStages: Record<string, string> = {
 };
 const busyStages = new Set(["downloading", "verifying", "checking"]);
 const installationLabels: Record<string, string> = {
+  运行环境需修复: "运行环境需修复",
   not_installed: "未安装",
   downloading: "下载中",
   verifying: "文件校验中",
@@ -105,6 +106,11 @@ export function ModelsPage() {
     mutationFn: (id: string) =>
       api(`/models/${id}/verify`, { method: "POST", body: "{}" }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["models"] }),
+  });
+  const repair = useMutation({
+    mutationFn: (id: string) =>
+      api(`/models/${id}/environment/repair`, { method: "POST", body: "{}" }),
+    onSettled: () => client.invalidateQueries({ queryKey: ["models"] }),
   });
   const remove = useMutation({
     mutationFn: ({ id, revision }: { id: string; revision: string }) =>
@@ -528,7 +534,11 @@ export function ModelsPage() {
                 <dt>安装状态</dt>
                 <dd>
                   {installationLabels[
-                    model.install_stage ?? model.installation.state
+                    model.worker_environment &&
+                    model.worker_environment.status !== "ready" &&
+                    isInstalled(model)
+                      ? "运行环境需修复"
+                      : (model.install_stage ?? model.installation.state)
                   ] ?? model.installation.state}
                 </dd>
               </div>
@@ -607,6 +617,34 @@ export function ModelsPage() {
                   此模型只能在独立专家启用流程完成后安装；普通安装不会更改注册表策略。
                 </p>
               )}
+            {isInstalled(model) &&
+              model.worker_environment &&
+              model.worker_environment.status !== "ready" && (
+                <p className="notice" role="status">
+                  运行环境需更新或修复。模型文件已安装；修复会保留权重，必要时下载运行依赖。
+                </p>
+              )}
+            {isInstalled(model) && model.worker_environment && (
+              <button
+                type="button"
+                disabled={
+                  repair.isPending || busyStages.has(model.install_stage ?? "")
+                }
+                onClick={() => {
+                  repair.mutate(model.id);
+                }}
+              >
+                {repair.isPending && repair.variables === model.id
+                  ? "正在修复运行环境…"
+                  : "修复运行环境"}
+              </button>
+            )}
+            {repair.variables === model.id && repair.isError && (
+              <p role="alert">运行环境修复失败：{repair.error.message}</p>
+            )}
+            {repair.variables === model.id && repair.isSuccess && (
+              <p role="status">运行环境已准备好。请重试转录以验证实际推理。</p>
+            )}
             <div className="toolbar compact">
               <button
                 aria-describedby={

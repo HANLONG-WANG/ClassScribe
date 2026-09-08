@@ -72,6 +72,7 @@ def build_default_service(config: AppConfig | None = None) -> ClassScribeService
         model_manager=manager,
         model_downloader=HuggingFaceDownloader(token=credentials.get("HF_TOKEN")),
         model_health_check=InstalledModelHealthChecker(provisioner, paths.runtime),
+        worker_environments=provisioner,
         model_licenses=model_licenses,
         manifest_bundle=manifest_bundle,
         resident_workers=resident_workers,

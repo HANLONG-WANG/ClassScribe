@@ -100,11 +100,7 @@ class LifecycleWorker(StreamingWorker):
             model_revision=self.revision,
             raw_text=text,
             normalized_text=text,
-            segments=(
-                ({"start_sample": 0, "end_sample": 8_000, "text": text},)
-                if text
-                else ()
-            ),
+            segments=(({"start_sample": 0, "end_sample": 8_000, "text": text},) if text else ()),
             metrics={"backend": "faster_whisper_cpu_int8"},
             result={"loaded": request.method == "load"},
         )
@@ -130,9 +126,7 @@ def test_streaming_only_health_check_pushes_audio_and_flushes(tmp_path: Path) ->
 def test_installed_health_checker_explicitly_loads_infers_and_unloads(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    entry = load_registry(Path("config/model-registry.v1.yaml")).model(
-        "whisper_tiny_reference"
-    )
+    entry = load_registry(Path("config/model-registry.v1.yaml")).model("whisper_tiny_reference")
     audio = wav(tmp_path / "health.wav")
     worker = LifecycleWorker(entry.revision)
     monkeypatch.setattr("classscribe.models.health.WorkerProcess", lambda _spec: worker)
@@ -172,9 +166,7 @@ def test_installed_health_checker_explicitly_loads_infers_and_unloads(
 def test_health_checker_uses_bounded_socket_name_without_model_id(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    entry = load_registry(Path("config/model-registry.v1.yaml")).model(
-        "whisper_tiny_reference"
-    )
+    entry = load_registry(Path("config/model-registry.v1.yaml")).model("whisper_tiny_reference")
     project = tmp_path / "worker"
     (project / ".venv/bin").mkdir(parents=True)
     (project / ".venv/bin/python").write_bytes(b"python")
@@ -186,6 +178,9 @@ def test_health_checker_uses_bounded_socket_name_without_model_id(
     captured: list[WorkerProcessSpec] = []
 
     class Provisioner:
+        def inspect(self, _worker_id: str) -> dict[str, str]:
+            return {"lock_sha256": "lock", "source_sha256": "source"}
+
         def ensure(self, _worker_id: str) -> Path:
             return project
 
@@ -219,6 +214,9 @@ def test_health_checker_uses_bounded_socket_name_without_model_id(
     )
 
     assert result.healthy is True
+    assert result.environment["worker_source_sha256"] == "source"
+    assert result.environment["worker_lock_sha256"] == "lock"
+    assert result.environment["requested_device"] == "auto"
     assert len(captured) == 1
     assert captured[0].socket_path.name.startswith("h-")
     assert "whisper_tiny_reference" not in captured[0].socket_path.name

@@ -65,6 +65,7 @@ from classscribe.models import (
     ModelManifest,
     ModelRegistry,
 )
+from classscribe.models.environment import WorkerEnvironmentProvisioner
 from classscribe.models.manager import ModelDownloader
 from classscribe.models.support import model_installability, worker_implemented
 from classscribe.paths import AppPaths
@@ -116,6 +117,7 @@ class ClassScribeService:
         model_manager: ModelManager | None = None,
         model_downloader: ModelDownloader | None = None,
         model_health_check: ModelHealthCheck | None = None,
+        worker_environments: WorkerEnvironmentProvisioner | None = None,
         model_licenses: Mapping[str, ModelLicense] | None = None,
         manifest_bundle: LoadedManifestBundle | None = None,
         resident_workers: DictationWorkerSupervisor | None = None,
@@ -129,6 +131,7 @@ class ClassScribeService:
         self.model_manager = model_manager
         self.model_downloader = model_downloader
         self.model_health_check = model_health_check
+        self.worker_environments = worker_environments
         self.model_licenses = dict(model_licenses or {})
         self.manifest_bundle = manifest_bundle
         self.resident_workers = resident_workers
@@ -559,6 +562,7 @@ class ClassScribeService:
 
     def models(self) -> list[dict[str, Any]]:
         immutable_resources = resource_root()
+        environments: dict[str, dict[str, str]] = {}
         with self.sessions() as session:
             installations = {
                 (item.model_id, item.revision): item
@@ -566,6 +570,11 @@ class ClassScribeService:
             }
             result: list[dict[str, Any]] = []
             for entry in self.registry.models:
+                if self.worker_environments is not None and entry.worker not in environments:
+                    try:
+                        environments[entry.worker] = self.worker_environments.inspect(entry.worker)
+                    except (OSError, ValueError, ClassScribeError):
+                        environments[entry.worker] = {"status": "unavailable"}
                 manifest_metadata = self._manifest_metadata(entry.id)
                 manifest = manifest_metadata[0] if manifest_metadata is not None else None
                 worker_is_implemented = worker_implemented(entry, immutable_resources)
@@ -594,6 +603,7 @@ class ClassScribeService:
                         "disable_reason": entry.disable_reason,
                         "enabled": entry.enabled,
                         "experimental": entry.experimental,
+                        "worker_environment": environments.get(entry.worker),
                         "install_stage": (
                             self.model_manager.installation_stage(entry.id, entry.revision)
                             if self.model_manager is not None
@@ -827,6 +837,8 @@ class ClassScribeService:
     def verify_model(self, model_id: str) -> dict[str, Any]:
         entry = self._registry_model(model_id)
         self._model_manager().resolve_for_runtime(model_id)
+        if self.worker_environments is not None:
+            self.worker_environments.resolve(entry.worker)
         with self.sessions.begin() as session:
             installation = session.scalar(
                 select(ModelInstallation).where(
@@ -838,6 +850,31 @@ class ClassScribeService:
                 installation.health_status = ModelHealth.HEALTHY
                 installation.checked_at = datetime.now(UTC)
         return {"model_id": model_id, "revision": entry.revision, "verified": True}
+
+    def repair_model_environment(self, model_id: str) -> dict[str, Any]:
+        """Prepare current worker sources while retaining verified model weights."""
+        entry = self._registry_model(model_id)
+        if self.worker_environments is None:
+            raise ClassScribeError(
+                ErrorCode.MODEL_HEALTH_CHECK_FAILED, "worker environment repair is unavailable"
+            )
+        if self.pipeline is not None and self.pipeline.has_running_jobs():
+            raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "请在课堂任务结束后修复运行环境")
+        self._model_manager().resolve_for_runtime(model_id)
+        if self.resident_workers is not None:
+            try:
+                self.resident_workers.suspend_for_classroom_sync()
+            except RuntimeError as error:
+                raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, str(error)) from error
+        self.worker_environments.ensure(entry.worker, repair=True)
+        self.worker_environments.resolve(entry.worker)
+        if self.resident_workers is not None:
+            self.resident_workers.request_refresh()
+        return {
+            "model_id": model_id,
+            "worker_environment": self.worker_environments.inspect(entry.worker),
+            "repaired": True,
+        }
 
     def delete_model(self, model_id: str, revision: str) -> dict[str, Any]:
         self._model_manager().delete_revision(model_id, revision)

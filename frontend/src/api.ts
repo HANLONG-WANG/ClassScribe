@@ -224,6 +224,7 @@ export interface ModelInfo {
   known_defects?: string[];
   disable_reason?: string | null;
   install_stage?: string;
+  worker_environment?: { status: string; worker_id?: string } | null;
   id: string;
   name: string;
   revision: string;

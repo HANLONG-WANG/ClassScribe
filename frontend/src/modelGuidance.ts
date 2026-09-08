@@ -144,6 +144,8 @@ export function bodyModel(model: ModelInfo, language: string) {
   );
 }
 export function modelReady(model: ModelInfo) {
+  if (model.worker_environment && model.worker_environment.status !== "ready")
+    return false;
   return model.install_stage
     ? model.install_stage === "complete"
     : ["healthy", "installed"].includes(model.installation.state);

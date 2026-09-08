@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import Mock
 from urllib.parse import urlencode, urlsplit
 
 import pytest
@@ -490,6 +491,27 @@ def test_injected_bundle_drives_complete_installation_transaction(tmp_path: Path
     assert audit["health_check"]["healthy"] is True
     assert service.verify_model(manifest.model_id)["verified"] is True
     assert user_manifest_files() == []
+
+    # A healthy weight audit must not hide stale worker sources or trigger a redownload.
+    from classscribe.models.environment import WorkerEnvironmentProvisioner
+
+    provisioner = Mock(spec=WorkerEnvironmentProvisioner)
+    provisioner.inspect.return_value = {"worker_id": manifest.worker, "status": "source_changed"}
+    provisioner.resolve.side_effect = ClassScribeError(
+        ErrorCode.MODEL_HEALTH_CHECK_FAILED, "source_changed"
+    )
+    service.worker_environments = provisioner
+    listed = next(item for item in service.models() if item["id"] == manifest.model_id)
+    assert listed["worker_environment"]["status"] == "source_changed"
+    with pytest.raises(ClassScribeError, match="source_changed"):
+        service.verify_model(manifest.model_id)
+    provisioner.resolve.side_effect = None
+    provisioner.inspect.return_value = {"worker_id": manifest.worker, "status": "ready"}
+    repaired = service.repair_model_environment(manifest.model_id)
+    assert repaired["repaired"] is True
+    provisioner.ensure.assert_called_once_with(manifest.worker, repair=True)
+    assert lifecycle == ["download", "health"]
+    assert manager.resolve_for_runtime(manifest.model_id) == active
 
 
 def test_aligner_confirmation_requires_exact_text_before_download(tmp_path: Path) -> None:

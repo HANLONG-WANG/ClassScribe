@@ -17,7 +17,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function setup(initialStage = "not_installed", withSecondModel = false) {
+function setup(
+  initialStage = "not_installed",
+  withSecondModel = false,
+  environmentStatus?: string,
+) {
   let stage = initialStage;
   let finish: (response: Response) => void = () => {
     throw new Error("No pending install");
@@ -44,6 +48,10 @@ function setup(initialStage = "not_installed", withSecondModel = false) {
   const json = (value: unknown, status = 200) =>
     new Response(JSON.stringify(value), { status });
   const fetch = vi.fn((url: string) => {
+    if (url.endsWith("/environment/repair")) {
+      environmentStatus = "ready";
+      return Promise.resolve(json({ repaired: true }));
+    }
     if (url.endsWith("/verify")) {
       return new Promise<Response>((resolve) => {
         finishVerification = resolve;
@@ -89,7 +97,13 @@ function setup(initialStage = "not_installed", withSecondModel = false) {
       );
     return Promise.resolve(
       json([
-        { ...model, install_stage: stage },
+        {
+          ...model,
+          install_stage: stage,
+          worker_environment: environmentStatus
+            ? { status: environmentStatus }
+            : null,
+        },
         ...(withSecondModel
           ? [
               {
@@ -274,4 +288,20 @@ it("shows verification progress and results on the correct card and prevents dup
   );
   expect(first.getByRole("button", { name: "校验模型文件" })).toBeEnabled();
   expect(second.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("repairs stale worker sources without reinstalling model weights", async () => {
+  const { fetch } = setup("complete", false, "source_changed");
+  await screen.findByText("运行环境需修复");
+  fireEvent.click(screen.getByRole("button", { name: "修复运行环境" }));
+  await screen.findByText("运行环境已准备好。请重试转录以验证实际推理。");
+  await waitFor(() =>
+    expect(screen.queryByText("运行环境需修复")).not.toBeInTheDocument(),
+  );
+  expect(
+    fetch.mock.calls.some(([url]) => url.endsWith("/environment/repair")),
+  ).toBe(true);
+  expect(fetch.mock.calls.some(([url]) => url.endsWith("/install"))).toBe(
+    false,
+  );
 });

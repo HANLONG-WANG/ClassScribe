@@ -230,7 +230,11 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
 
     @router.post("/models/{model_id}/verify")
     async def verify_model(model_id: str) -> dict[str, object]:
-        return service.verify_model(model_id)
+        return await asyncio.to_thread(service.verify_model, model_id)
+
+    @router.post("/models/{model_id}/environment/repair")
+    async def repair_model_environment(model_id: str) -> dict[str, object]:
+        return await asyncio.to_thread(service.repair_model_environment, model_id)
 
     @router.delete("/models/{model_id}")
     async def delete_model(model_id: str, revision: str = Query()) -> dict[str, object]:

@@ -1,7 +1,8 @@
-"""Reproducible per-worker environments created only during user-confirmed installs."""
+"""Reproducible per-worker environments created during explicit installs or repairs."""
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -48,7 +49,28 @@ class WorkerEnvironmentProvisioner:
         self.runner = runner
         self._ensure_root()
 
-    def ensure(self, worker_id: str) -> Path:
+    def ensure(self, worker_id: str, *, repair: bool = False) -> Path:
+        """Build separately from runtime; serialize publishers across threads/processes."""
+        if not worker_id.replace("_", "").isalnum():
+            raise ValueError("unsafe worker ID")
+        if (self.cache_root / worker_id).is_symlink():
+            raise ValueError("worker environment root may not be a symlink")
+        lock_path = self.cache_root / f".{worker_id}.lock"
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            if repair:
+                state = self.inspect(worker_id)
+                target = Path(state["target"])
+                if target.parent.is_symlink() or target.is_symlink():
+                    raise ValueError("worker environment path may not be a symlink")
+                if state["status"] == "incomplete" and target.exists():
+                    # Keep the damaged copy for diagnosis; never change a live environment.
+                    backup = Path(tempfile.mkdtemp(prefix=".damaged-", dir=target.parent))
+                    os.replace(target, backup / "environment")
+            return self._ensure(worker_id)
+
+    def _ensure(self, worker_id: str) -> Path:
         if not worker_id.replace("_", "").isalnum():
             raise ValueError("unsafe worker ID")
         source = self.source_root / "workers" / worker_id
@@ -184,9 +206,47 @@ class WorkerEnvironmentProvisioner:
                 return lock_root / "workers" / worker_id
             raise ClassScribeError(
                 ErrorCode.MODEL_HEALTH_CHECK_FAILED,
-                f"worker environment is not provisioned for the pinned lock: {worker_id}",
+                f"worker environment is not provisioned for the pinned lock/source: {worker_id}; "
+                f"{self.inspect(worker_id)['status']}; "
+                "请在模型管理中点击“修复运行环境”后重试。源码更新也需要重建环境",
             )
         return target / "workers" / worker_id
+
+    def inspect(self, worker_id: str) -> dict[str, str]:
+        """Read readiness without installing, downloading, or modifying cached sources."""
+        if not worker_id.replace("_", "").isalnum():
+            raise ValueError("unsafe worker ID")
+        source = self.source_root / "workers" / worker_id
+        protocol = self.source_root / "protocol" / "python"
+        lock_digest = hashlib.sha256((source / "uv.lock").read_bytes()).hexdigest()
+        source_digest = _source_sha256(source, protocol)
+        worker_root = self.cache_root / worker_id
+        lock_root = worker_root / lock_digest
+        target = lock_root / source_digest
+        if self._is_complete(target, worker_id, lock_digest, source_digest) or (
+            self._is_compatible_legacy(lock_root, worker_id, lock_digest, source_digest)
+        ):
+            status = "ready"
+        elif (
+            target.exists()
+            or target.is_symlink()
+            or lock_root.is_symlink()
+            or worker_root.is_symlink()
+        ):
+            status = "incomplete"
+        elif (lock_root / "complete.json").is_file() or any(lock_root.glob("*/complete.json")):
+            status = "source_changed"
+        elif any(worker_root.glob("*/complete.json")) or any(worker_root.glob("*/*/complete.json")):
+            status = "lock_changed"
+        else:
+            status = "missing"
+        return {
+            "worker_id": worker_id,
+            "status": status,
+            "lock_sha256": lock_digest,
+            "source_sha256": source_digest,
+            "target": str(target),
+        }
 
     def _ensure_root(self) -> None:
         if self.cache_root.is_symlink():
@@ -196,9 +256,7 @@ class WorkerEnvironmentProvisioner:
         validate_restricted_directory(self.cache_root)
 
     @staticmethod
-    def _is_complete(
-        target: Path, worker_id: str, lock_digest: str, source_digest: str
-    ) -> bool:
+    def _is_complete(target: Path, worker_id: str, lock_digest: str, source_digest: str) -> bool:
         try:
             value = json.loads((target / "complete.json").read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):
@@ -206,6 +264,8 @@ class WorkerEnvironmentProvisioner:
         project = target / "workers" / worker_id
         protocol = target / "protocol" / "python"
         python = project / ".venv" / "bin" / "python"
+        if not isinstance(value, dict):
+            return False
         metadata_matches = (
             not target.is_symlink()
             and value.get("schema_version") == 1
@@ -236,6 +296,8 @@ class WorkerEnvironmentProvisioner:
         project = target / "workers" / worker_id
         protocol = target / "protocol" / "python"
         python = project / ".venv" / "bin" / "python"
+        if not isinstance(value, dict):
+            return False
         metadata_matches = (
             not target.is_symlink()
             and value.get("schema_version") == 1

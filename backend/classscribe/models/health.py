@@ -6,6 +6,7 @@ import asyncio
 import shutil
 import wave
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
@@ -58,6 +59,7 @@ class InstalledModelHealthChecker:
         if language not in entry.languages and "auto" not in entry.languages:
             return HealthCheckOutcome(False, None, "health language is unsupported", {})
         project = self.provisioner.ensure(entry.worker)
+        identity_info = self.provisioner.inspect(entry.worker)
         worker_command = provisioned_worker_command(project)
         self.runtime_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.runtime_directory.chmod(0o700)
@@ -84,8 +86,17 @@ class InstalledModelHealthChecker:
             data_root_arguments=(Path("/input"),),
         )
         try:
-            return asyncio.run(
+            outcome = asyncio.run(
                 self._run(spec, entry, audio_path, environment, language, transcript)
+            )
+            return replace(
+                outcome,
+                environment={
+                    **outcome.environment,
+                    "worker_lock_sha256": identity_info["lock_sha256"],
+                    "worker_source_sha256": identity_info["source_sha256"],
+                    "requested_device": environment.get("device", "auto"),
+                },
             )
         except Exception as exc:
             return HealthCheckOutcome(

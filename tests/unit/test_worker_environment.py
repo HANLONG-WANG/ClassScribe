@@ -90,9 +90,10 @@ def test_worker_environment_is_lock_and_source_addressed_atomic_and_reused(
     assert not (project.parent.parent / "uv.toml").exists()
     assert metadata["worker_id"] == "qwen"
     assert len(metadata["source_sha256"]) == 64
-    assert project.parents[2].name == hashlib.sha256(
-        (tmp_path / "source/workers/qwen/uv.lock").read_bytes()
-    ).hexdigest()
+    assert (
+        project.parents[2].name
+        == hashlib.sha256((tmp_path / "source/workers/qwen/uv.lock").read_bytes()).hexdigest()
+    )
     assert provisioner.ensure("qwen") == project
     assert provisioner.resolve("qwen") == project
     assert len(calls) == 1
@@ -184,14 +185,10 @@ def test_unchanged_legacy_lock_only_environment_remains_runtime_compatible(
     source = source_tree(tmp_path / "source")
     project = legacy_environment(source, tmp_path / "cache", "qwen")
 
-    def unexpected_run(
-        _command: Sequence[str], _cwd: Path, _environment: dict[str, str]
-    ) -> None:
+    def unexpected_run(_command: Sequence[str], _cwd: Path, _environment: dict[str, str]) -> None:
         raise AssertionError("a compatible legacy environment must remain read-only")
 
-    provisioner = WorkerEnvironmentProvisioner(
-        source, tmp_path / "cache", runner=unexpected_run
-    )
+    provisioner = WorkerEnvironmentProvisioner(source, tmp_path / "cache", runner=unexpected_run)
     assert provisioner.resolve("qwen") == project
     assert provisioner.ensure("qwen") == project
 
@@ -237,8 +234,7 @@ def test_firered_worker_directly_locks_python_312_fbank_runtime() -> None:
         "kaldi-native-fbank",
     }
     requirements = {
-        requirement["name"]: requirement
-        for requirement in worker["metadata"]["requires-dist"]
+        requirement["name"]: requirement for requirement in worker["metadata"]["requires-dist"]
     }
     assert requirements["kaldi-native-fbank"]["specifier"] == "==1.19.0"
 
@@ -257,8 +253,7 @@ def test_granite_worker_directly_locks_matching_torchaudio_runtime() -> None:
         "torchaudio",
     }
     requirements = {
-        requirement["name"]: requirement
-        for requirement in worker["metadata"]["requires-dist"]
+        requirement["name"]: requirement for requirement in worker["metadata"]["requires-dist"]
     }
     assert requirements["torchaudio"]["specifier"] == "==2.11.0"
 
@@ -281,11 +276,57 @@ def test_nemotron_worker_locks_official_prompt_model_source() -> None:
     assert nemo["source"] == {"git": f"{repository}?rev={revision}#{revision}"}
     worker = packages["classscribe-worker-nemotron"]
     requirements = {
-        requirement["name"]: requirement
-        for requirement in worker["metadata"]["requires-dist"]
+        requirement["name"]: requirement for requirement in worker["metadata"]["requires-dist"]
     }
     assert requirements["nemo-toolkit"] == {
         "name": "nemo-toolkit",
         "extras": ["asr"],
         "git": f"{repository}?rev={revision}",
     }
+
+
+def test_environment_inspection_and_explicit_repair(tmp_path: Path) -> None:
+    def run(_command: Sequence[str], _cwd: Path, environment: dict[str, str]) -> None:
+        python = Path(environment["UV_PROJECT_ENVIRONMENT"]) / "bin" / "python"
+        python.parent.mkdir(parents=True)
+        python.symlink_to(sys.executable)
+
+    source = source_tree(tmp_path / "source")
+    provisioner = WorkerEnvironmentProvisioner(source, tmp_path / "cache", runner=run)
+    assert provisioner.inspect("qwen")["status"] == "missing"
+    old_project = provisioner.ensure("qwen")
+    assert provisioner.inspect("qwen")["status"] == "ready"
+    (source / "workers/qwen/adapter.py").write_text("ADAPTER = 3\n")
+    assert provisioner.inspect("qwen")["status"] == "source_changed"
+    with pytest.raises(ClassScribeError, match=r"source_changed.*修复运行环境"):
+        provisioner.resolve("qwen")
+    project = provisioner.ensure("qwen", repair=True)
+    assert old_project.exists()
+    marker = project.parents[1] / "complete.json"
+    marker.write_text("[]")
+    assert provisioner.inspect("qwen")["status"] == "incomplete"
+    provisioner.ensure("qwen", repair=True)
+    assert provisioner.resolve("qwen") == project
+    assert list(project.parents[2].glob(".damaged-*/environment/complete.json"))
+    (source / "workers/qwen/uv.lock").write_text("version = 2\n")
+    assert provisioner.inspect("qwen")["status"] == "lock_changed"
+
+
+def test_concurrent_environment_repairs_build_once(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    calls: list[str] = []
+
+    def run(_command: Sequence[str], _cwd: Path, environment: dict[str, str]) -> None:
+        calls.append("build")
+        python = Path(environment["UV_PROJECT_ENVIRONMENT"]) / "bin" / "python"
+        python.parent.mkdir(parents=True)
+        python.symlink_to(sys.executable)
+
+    provisioner = WorkerEnvironmentProvisioner(
+        source_tree(tmp_path / "source"), tmp_path / "cache", runner=run
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(provisioner.ensure, "qwen", repair=True) for _ in range(2)]
+        assert futures[0].result() == futures[1].result()
+    assert calls == ["build"]

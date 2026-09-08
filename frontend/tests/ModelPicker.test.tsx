@@ -7,6 +7,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { modelReady } from "../src/modelGuidance";
 import type { ModelInfo } from "../src/api";
 import { ModelPicker } from "../src/pages/ModelPicker";
 
@@ -106,4 +107,21 @@ it("keeps an empty list usable and confines Tab navigation to the open picker", 
   expect(close).toHaveFocus();
   fireEvent.keyDown(close, { key: "Tab", shiftKey: true });
   expect(automatic).toHaveFocus();
+});
+
+it("does not mark installed weights ready while the worker environment is stale", () => {
+  expect(
+    modelReady({
+      ...model,
+      install_stage: "complete",
+      worker_environment: { status: "source_changed" },
+    }),
+  ).toBe(false);
+  expect(
+    modelReady({
+      ...model,
+      install_stage: "complete",
+      worker_environment: { status: "ready" },
+    }),
+  ).toBe(true);
 });
