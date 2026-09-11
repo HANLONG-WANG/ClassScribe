@@ -11,3 +11,7 @@ dependencies = ["msgspec>=0.19,<1"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["classscribe_protocol"]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

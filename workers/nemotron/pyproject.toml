@@ -20,3 +20,7 @@ package = false
 [tool.uv.sources]
 classscribe-protocol = { path = "../../protocol/python", editable = true }
 nemo-toolkit = { git = "https://github.com/NVIDIA/NeMo.git", rev = "c9040511b2dbefe64767d9b8853b3a20d63a2cd2" }
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

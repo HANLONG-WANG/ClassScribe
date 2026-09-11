@@ -20,3 +20,7 @@ classscribe-protocol = { path = "../../protocol/python", editable = true }
 
 [tool.uv]
 package = false
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

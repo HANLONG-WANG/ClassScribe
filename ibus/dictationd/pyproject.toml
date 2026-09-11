@@ -16,3 +16,7 @@ packages = ["classscribe_dictationd"]
 
 [tool.uv.sources]
 classscribe-protocol = { path = "../../protocol/python", editable = true }
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"

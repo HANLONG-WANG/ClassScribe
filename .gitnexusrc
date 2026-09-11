@@ -1,0 +1,8 @@
+{
+  "embeddings": 0,
+  "embeddingDevice": "cuda",
+  "embeddingBatchSize": 256,
+  "embeddingSubBatchSize": 128,
+  "skipAgentsMd": false,
+  "skipSkills": false
+}
