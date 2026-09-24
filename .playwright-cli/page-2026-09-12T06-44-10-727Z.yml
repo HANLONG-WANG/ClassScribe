@@ -1,0 +1,161 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - button "CS ClassScribe local speech workspace" [ref=e5] [cursor=pointer]:
+      - generic [ref=e6]: CS
+      - generic [ref=e7]:
+        - strong [ref=e8]: ClassScribe
+        - generic [ref=e9]: local speech workspace
+    - navigation "主导航" [ref=e10]:
+      - button "导入" [ref=e11] [cursor=pointer]:
+        - generic [ref=e12]: ↑
+      - button "任务队列" [ref=e14] [cursor=pointer]:
+        - generic [ref=e15]: ◌
+      - button "转录稿" [ref=e17] [cursor=pointer]:
+        - generic [ref=e18]: ≡
+      - button "导出" [ref=e20] [cursor=pointer]:
+        - generic [ref=e21]: ↓
+      - button "词典" [ref=e23] [cursor=pointer]:
+        - generic [ref=e24]: Aa
+      - button "模型" [ref=e26] [cursor=pointer]:
+        - generic [ref=e27]: ◇
+      - button "IBus" [ref=e29] [cursor=pointer]:
+        - generic [ref=e30]: ●
+      - button "设置" [ref=e32] [cursor=pointer]:
+        - generic [ref=e33]: ⚙
+    - generic [ref=e37]:
+      - strong [ref=e38]: 本机模式
+      - generic [ref=e39]: 无遥测 · 无上传
+  - main [ref=e40]:
+    - region [ref=e41]:
+      - generic [ref=e42]:
+        - generic [ref=e43]:
+          - paragraph [ref=e44]: Classroom workspace
+          - heading "批量导入课堂" [level=1] [ref=e45]
+          - paragraph [ref=e46]: 文件留在本机。任务会自动完成到导出，不要求先进入校对页。
+        - generic [ref=e47]: 离线推理
+      - paragraph [ref=e48]: 已入队的课堂在关闭浏览器后继续处理；尚未上传完成的文件需要保持此浏览器开启。
+      - generic [ref=e49]:
+        - generic [ref=e50]:
+          - button "＋ 拖放音频或视频，或点此多选 按列表顺序逐个上传；本批次共用下方设置。" [ref=e51]
+          - generic [ref=e52]: ＋
+          - strong [ref=e53]: 拖放音频或视频，或点此多选
+          - generic [ref=e54]: 按列表顺序逐个上传；本批次共用下方设置。
+        - list
+        - generic [ref=e55]:
+          - generic [ref=e56]:
+            - generic [ref=e57]: 语言
+            - combobox "语言" [ref=e58]:
+              - option "自动 / 混合" [selected]
+              - option "中文"
+              - option "日本語"
+              - option "English"
+          - generic [ref=e59]:
+            - generic [ref=e60]: 课程词典
+            - combobox "课程词典" [ref=e61]:
+              - option "不使用" [selected]
+          - generic [ref=e62]:
+            - generic [ref=e63]: 说话人数
+            - combobox "说话人数" [ref=e64]:
+              - option "自动" [selected]
+              - option "1"
+              - option "2"
+              - option "3–4"
+              - option "5+"
+          - generic [ref=e65]:
+            - generic [ref=e66]: 主模型
+            - button "主模型 自动最佳" [ref=e67] [cursor=pointer]:
+              - generic [ref=e68]: 自动最佳
+              - generic [aria-hidden] [ref=e69]: ▾
+        - group "处理模式" [ref=e70]:
+          - generic [ref=e72]:
+            - generic [ref=e73]:
+              - radio "快速" [ref=e74]
+              - generic [ref=e75]: 快速
+              - generic [ref=e76]: 按语言选择主模型，质量异常时调用备用模型复核。
+            - generic [ref=e77]:
+              - radio "平衡" [checked] [ref=e78]
+              - generic [ref=e79]: 平衡
+              - generic [ref=e80]: 按语言选择主模型，质量异常时调用备用模型复核。
+            - generic [ref=e81]:
+              - radio "最高精度" [ref=e82]
+              - generic [ref=e83]: 最高精度
+              - generic [ref=e84]: 按语言选择主模型，质量异常时调用备用模型复核。
+            - generic [ref=e85]:
+              - radio "严格单模型" [ref=e86]
+              - generic [ref=e87]: 严格单模型
+              - generic [ref=e88]: 指定正文模型，不调用备用 ASR；辅助模型仍使用。
+        - region "本次处理使用的模型" [ref=e89]:
+          - heading "本次处理使用的模型" [level=2] [ref=e90]
+          - paragraph [ref=e91]: 当前版本的快速、平衡、最高精度使用相同的主模型与质量门控复核策略，尚未按这三个档位切换模型。严格单模型只关闭正文的第二、第三模型复核。
+          - paragraph [ref=e92]: 自动／混合语言会按片段语言选择正文模型；下方分别列出中、日、英的候选。
+          - generic [ref=e93]:
+            - article [ref=e94]:
+              - heading "中文正文" [level=3] [ref=e95]
+              - paragraph [ref=e96]:
+                - strong [ref=e97]: 预计主模型：
+                - text: FireRedASR2-AED（尚未就绪）
+              - paragraph [ref=e98]:
+                - strong [ref=e99]: 按需复核：
+                - text: 当前无已就绪的备用正文模型
+              - group [ref=e100]:
+                - generic "查看候选优先顺序" [ref=e101] [cursor=pointer]
+            - article [ref=e102]:
+              - heading "日语正文" [level=3] [ref=e103]
+              - paragraph [ref=e104]:
+                - strong [ref=e105]: 预计主模型：
+                - text: Granite Speech 4.1 2B（尚未就绪）
+              - paragraph [ref=e106]:
+                - strong [ref=e107]: 按需复核：
+                - text: 当前无已就绪的备用正文模型
+              - group [ref=e108]:
+                - generic "查看候选优先顺序" [ref=e109] [cursor=pointer]
+            - article [ref=e110]:
+              - heading "英语正文" [level=3] [ref=e111]
+              - paragraph [ref=e112]:
+                - strong [ref=e113]: 预计主模型：
+                - text: MOSS Transcribe Preview 2B（尚未就绪）
+              - paragraph [ref=e114]:
+                - strong [ref=e115]: 按需复核：
+                - text: 当前无已就绪的备用正文模型
+              - group [ref=e116]:
+                - generic "查看候选优先顺序" [ref=e117] [cursor=pointer]
+          - paragraph [ref=e118]: 自动最佳优先选择有效排名中已安装的兼容模型；复核只在质量检查触发时执行，最多再调用两个正文模型。上方名单用于预览，开始任务时仍会校验模型文件和运行条件。
+          - heading "所有模式共用的辅助模型" [level=3] [ref=e119]
+          - list [ref=e120]:
+            - listitem [ref=e121]: 语音区间检测：FireRedVAD（尚未就绪）；说话人和粗时间轴：MOSS Transcribe-Diarize 0.9B（尚未就绪）。两者为当前课堂流程必需。
+            - listitem [ref=e122]: 自动／混合语言识别：FireRedLID（尚未就绪）（此语言模式必需）。
+            - listitem [ref=e123]: 结构异常时的说话人回退：pyannote Community-1（尚未就绪）。
+            - listitem [ref=e124]: 中文／英语标点补充：FireRedPunc（尚未就绪）（已安装且需要时使用）。
+            - listitem [ref=e125]: 最终文字精细对齐：Qwen3 ForcedAligner 0.6B（尚未就绪）（通过质量门控时使用；无法精细对齐时保留粗时间）。
+        - group "自动输出" [ref=e126]:
+          - generic [ref=e128]:
+            - generic [ref=e129]:
+              - checkbox "TXT" [ref=e130]
+              - text: TXT
+            - generic [ref=e131]:
+              - checkbox "MD" [checked] [ref=e132]
+              - text: MD
+            - generic [ref=e133]:
+              - checkbox "JSON" [checked] [ref=e134]
+              - text: JSON
+            - generic [ref=e135]:
+              - checkbox "SRT" [checked] [ref=e136]
+              - text: SRT
+            - generic [ref=e137]:
+              - checkbox "VTT" [checked] [ref=e138]
+              - text: VTT
+            - generic [ref=e139]:
+              - checkbox "CSV" [ref=e140]
+              - text: CSV
+          - generic [ref=e141]:
+            - generic [ref=e142]:
+              - checkbox "忠实版" [checked] [ref=e143]
+              - text: 忠实版
+            - generic [ref=e144]:
+              - checkbox "智能纠正版" [checked] [ref=e145]
+              - text: 智能纠正版
+            - generic [ref=e146]:
+              - checkbox "说话人" [checked] [ref=e147]
+              - text: 说话人
+        - button "加入转录队列" [disabled] [ref=e148]
+    - generic [ref=e149]: ClassScribe 不承诺零 CER/WER；低置信度会标记，但不会阻塞自动导出。

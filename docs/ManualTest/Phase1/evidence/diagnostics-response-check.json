@@ -1,0 +1,25 @@
+{
+  "status": 200,
+  "content_type": "application/zip",
+  "content_disposition": "attachment; filename=\"classscribe-diagnostics.zip\"",
+  "archive_members": [
+    "diagnostics.json"
+  ],
+  "json_valid": true,
+  "json_keys": [
+    "components",
+    "generated_at",
+    "gpu",
+    "gpu_lease",
+    "gpu_queue",
+    "metrics",
+    "models",
+    "recent_errors",
+    "system",
+    "workers"
+  ],
+  "contains_home_path": false,
+  "contains_test_token": false,
+  "contains_transcript_fixture": false,
+  "bytes": 1363
+}

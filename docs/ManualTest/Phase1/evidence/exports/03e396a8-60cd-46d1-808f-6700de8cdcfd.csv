@@ -1,0 +1,4 @@
+segment_ids,start_sample,end_sample,start,end,speaker,language,requested_layer,resolved_layer,text
+30000000-0000-4000-8000-000000000001,0,64000,00:00:00.000,00:00:04.000,teacher,zh,smart,smart,今天学习量子力学。
+30000000-0000-4000-8000-000000000002,64000,128000,00:00:04.000,00:00:08.000,学生・佐藤,ja,smart,smart,これはテストです。
+30000000-0000-4000-8000-000000000003,128000,192000,00:00:08.000,00:00:12.000,teacher,en,smart,smart,Machine learning costs $12.

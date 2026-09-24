@@ -1,0 +1,28 @@
+{
+  "records": [
+    {
+      "end": "00:00:02.000",
+      "end_sample": 32000,
+      "faithful_text": "跨页测试。",
+      "language": "zh",
+      "raw_text": "跨页测试",
+      "requested_layer": "user",
+      "resolved_layer": "smart",
+      "segment_ids": [
+        "b9ff84bf-2b14-42cd-bcae-28f4ea931ea2"
+      ],
+      "smart_corrected_text": "跨页测试。",
+      "speaker": "test",
+      "start": "00:00:00.000",
+      "start_sample": 0,
+      "text": "跨页测试。",
+      "tokens": [],
+      "user_text": ""
+    }
+  ],
+  "requested_layer": "user",
+  "schema_version": 1,
+  "timeline": "absolute_int64_samples_at_16000_hz",
+  "traditional_chinese_display_variant": false,
+  "view": "sentences"
+}

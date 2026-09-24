@@ -1,0 +1,10 @@
+{
+  "model_id": "firered_vad",
+  "revision": "7990aaccc6b7aec1e527743bd30201f2c4a03b8c",
+  "file_hash_verification": true,
+  "files": 4,
+  "bytes": 4654184,
+  "copied_to_isolated_root": true,
+  "inference_run": false,
+  "health_status": "unknown"
+}

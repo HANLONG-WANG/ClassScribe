@@ -1,0 +1,82 @@
+[
+  {
+    "fixture": "empty.wav",
+    "id": "10000000-0000-4000-8000-000000000101",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "MEDIA_PROBE_FAILED",
+        "detail": "ffprobe exited 1: [LOCAL_PATH] Invalid data found when processing input"
+      }
+    }
+  },
+  {
+    "fixture": "broken.wav",
+    "id": "10000000-0000-4000-8000-000000000102",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "MEDIA_PROBE_FAILED",
+        "detail": "ffprobe exited 1: [LOCAL_PATH] Invalid data found when processing input"
+      }
+    }
+  },
+  {
+    "fixture": "terms.txt",
+    "id": "10000000-0000-4000-8000-000000000103",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "UNSUPPORTED_MEDIA",
+        "detail": "unsupported media suffix"
+      }
+    }
+  },
+  {
+    "fixture": "silence-2s.wav",
+    "id": "10000000-0000-4000-8000-000000000104",
+    "status": 200,
+    "body": {
+      "id": "10000000-0000-4000-8000-000000000104",
+      "source_name": "silence-2s.wav",
+      "sha256": "20eaebffe1816e0ffa6f7f854f5ef4ea80d5349faaf0ce1fec1b713e7fde58fa",
+      "duration_samples": 32000,
+      "sample_rate": 16000,
+      "channels": 1,
+      "audio_qc": {
+        "upload_validated": true,
+        "source_bytes": 64044
+      },
+      "created_at": "2026-09-13T01:59:03.481705",
+      "media_url": "/api/v1/recordings/10000000-0000-4000-8000-000000000104/media"
+    }
+  },
+  {
+    "case": "repeat_same_uuid",
+    "status": 200,
+    "body": {
+      "id": "10000000-0000-4000-8000-000000000104",
+      "source_name": "silence-2s.wav",
+      "sha256": "20eaebffe1816e0ffa6f7f854f5ef4ea80d5349faaf0ce1fec1b713e7fde58fa",
+      "duration_samples": 32000,
+      "sample_rate": 16000,
+      "channels": 1,
+      "audio_qc": {
+        "upload_validated": true,
+        "source_bytes": 64044
+      },
+      "created_at": "2026-09-13T01:59:03.481705",
+      "media_url": "/api/v1/recordings/10000000-0000-4000-8000-000000000104/media"
+    }
+  },
+  {
+    "case": "missing_models_preflight",
+    "status": 409,
+    "body": {
+      "error": {
+        "code": "MODEL_NOT_FULLY_INSTALLED",
+        "detail": "install and health-check required model revisions first: firered_asr2_aed, firered_vad, moss_td_0_9b"
+      }
+    }
+  }
+]

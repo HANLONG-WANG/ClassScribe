@@ -1,0 +1,114 @@
+{
+  "records": [
+    {
+      "end": "00:00:04.000",
+      "end_sample": 64000,
+      "faithful_text": "今天学习量子力学。",
+      "language": "zh",
+      "raw_text": "今天学习量子力学",
+      "requested_layer": "user",
+      "resolved_layer": "smart",
+      "segment_ids": [
+        "30000000-0000-4000-8000-000000000001"
+      ],
+      "smart_corrected_text": "今天学习量子力学。",
+      "speaker": "teacher",
+      "start": "00:00:00.000",
+      "start_sample": 0,
+      "text": "今天学习量子力学。",
+      "tokens": [
+        {
+          "end_sample": 64000,
+          "protected_group": null,
+          "provenance": {
+            "candidate_sources": [
+              {
+                "candidate_id": "3161e8df-9690-43c5-bc55-679f826d124f"
+              }
+            ],
+            "manual_qa_fixture": true,
+            "timing_source": "manual_fixture"
+          },
+          "start_sample": 0,
+          "text": "今天学习量子力学。"
+        }
+      ],
+      "user_text": null
+    },
+    {
+      "end": "00:00:08.000",
+      "end_sample": 128000,
+      "faithful_text": "これはテストです。",
+      "language": "ja",
+      "raw_text": "これはテストです",
+      "requested_layer": "user",
+      "resolved_layer": "user",
+      "segment_ids": [
+        "30000000-0000-4000-8000-000000000002"
+      ],
+      "smart_corrected_text": "これはテストです。",
+      "speaker": "学生・佐藤",
+      "start": "00:00:04.000",
+      "start_sample": 64000,
+      "text": "これはテストです。",
+      "tokens": [
+        {
+          "end_sample": 128000,
+          "protected_group": null,
+          "provenance": {
+            "candidate_sources": [
+              {
+                "candidate_id": "ca813733-164b-45ae-8584-ed21fa1fc261"
+              }
+            ],
+            "manual_qa_fixture": true,
+            "timing_source": "manual_fixture"
+          },
+          "start_sample": 64000,
+          "text": "これはテストです。"
+        }
+      ],
+      "user_text": "これはテストです。"
+    },
+    {
+      "end": "00:00:12.000",
+      "end_sample": 192000,
+      "faithful_text": "Machine learning costs 12 dollars.",
+      "language": "en",
+      "raw_text": "Machine learning costs 12 dollars",
+      "requested_layer": "user",
+      "resolved_layer": "smart",
+      "segment_ids": [
+        "30000000-0000-4000-8000-000000000003"
+      ],
+      "smart_corrected_text": "Machine learning costs $12.",
+      "speaker": "teacher",
+      "start": "00:00:08.000",
+      "start_sample": 128000,
+      "text": "Machine learning costs $12.",
+      "tokens": [
+        {
+          "end_sample": 192000,
+          "protected_group": null,
+          "provenance": {
+            "candidate_sources": [
+              {
+                "candidate_id": "928053fc-8ce0-47bd-80ee-7254ec304769"
+              }
+            ],
+            "manual_qa_fixture": true,
+            "timing_source": "manual_fixture"
+          },
+          "start_sample": 128000,
+          "text": "Machine learning costs 12 dollars."
+        }
+      ],
+      "user_text": null
+    }
+  ],
+  "requested_layer": "user",
+  "schema_version": 1,
+  "timeline": "absolute_int64_samples_at_16000_hz",
+  "traditional_chinese_display_variant": false,
+  "view": "sentences"
+}
