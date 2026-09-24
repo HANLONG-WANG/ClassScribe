@@ -828,18 +828,47 @@ details summary {
 .collection-detail {
   padding: 1.2rem;
 }
+.collection-detail .card-top {
+  flex-wrap: wrap;
+}
+.collection-detail .card-top > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.collection-detail .card-top .file-button {
+  flex: none;
+}
 .term-form {
   display: grid;
-  grid-template-columns: 1fr 1fr 100px auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.5rem;
   margin: 1rem 0;
+}
+.term-edit-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+  margin-top: 1rem;
+}
+.term-edit-form h3,
+.term-edit-form .toolbar {
+  grid-column: 1 / -1;
+}
+.term-edit-form label {
+  display: grid;
+  gap: 0.25rem;
+}
+.term-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
 }
 .term-table {
   display: grid;
 }
 .term-table > div {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr 70px 36px;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) 70px minmax(120px, auto);
   gap: 0.5rem;
   align-items: center;
   padding: 0.65rem 0;
@@ -848,6 +877,10 @@ details summary {
 }
 .term-table button {
   padding: 0.25rem;
+}
+.term-table small {
+  display: block;
+  overflow-wrap: anywhere;
 }
 .export-builder {
   display: grid;
@@ -995,7 +1028,8 @@ details summary {
     display: grid;
   }
   .choice-row,
-  .term-form {
+  .term-form,
+  .term-edit-form {
     grid-template-columns: 1fr;
   }
   .segment-row {
@@ -1262,6 +1296,10 @@ details summary {
 .manuscript-list {
   display: grid;
   gap: 12px;
+}
+.manuscript-entry {
+  display: grid;
+  gap: 0.5rem;
 }
 .manuscript-card {
   display: flex;

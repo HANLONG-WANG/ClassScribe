@@ -128,7 +128,6 @@ def _object_file(path: Path) -> dict[str, Any]:
 
 def _atomic_json(path: Path, value: dict[str, object]) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path.parent.chmod(0o700)
     fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         os.fchmod(fd, 0o600)

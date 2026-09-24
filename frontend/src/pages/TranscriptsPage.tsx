@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, formatSamples } from "../api";
 import { useWorkbench } from "../store";
@@ -6,7 +6,9 @@ import { useWorkbench } from "../store";
 import { type Manuscript, statuses } from "../manuscripts";
 
 export function TranscriptsPage() {
+  const client = useQueryClient();
   const [offset, setOffset] = useState(0);
+  const [deletionNotice, setDeletionNotice] = useState("");
   const setCurrentJob = useWorkbench((state) => state.setCurrentJob);
   const setPage = useWorkbench((state) => state.setPage);
   const query = useQuery({
@@ -15,6 +17,23 @@ export function TranscriptsPage() {
       api<{ items: Manuscript[]; total: number }>(
         `/jobs?limit=30&offset=${String(offset)}`,
       ),
+  });
+  const deleteDerived = useMutation({
+    mutationFn: (id: string) =>
+      api(`/jobs/${id}/derived-data`, { method: "DELETE" }),
+    onSuccess: () => {
+      setDeletionNotice("中间派生数据已清理，稿件与最终导出保留。");
+    },
+  });
+  const deleteJob = useMutation({
+    mutationFn: (id: string) =>
+      api(`/jobs/${id}/local-data`, { method: "DELETE" }),
+    onSuccess: async () => {
+      setDeletionNotice("任务及不再被引用的录音已删除。");
+      await client.invalidateQueries({ queryKey: ["manuscripts"] });
+      await client.invalidateQueries({ queryKey: ["queue"] });
+      if (query.data?.items.length === 1 && offset > 0) setOffset(offset - 30);
+    },
   });
   return (
     <section className="page-stack" aria-labelledby="manuscripts-title">
@@ -33,6 +52,12 @@ export function TranscriptsPage() {
         </button>
       </header>
       {query.isPending && <p role="status">正在加载历史稿件…</p>}
+      {deletionNotice && <p role="status">{deletionNotice}</p>}
+      {(deleteDerived.error || deleteJob.error) && (
+        <p role="alert">
+          删除失败：{(deleteDerived.error ?? deleteJob.error)?.message}
+        </p>
+      )}
       {query.isError && (
         <div role="alert">
           <p>{query.error.message}</p>
@@ -56,28 +81,72 @@ export function TranscriptsPage() {
           )}
           <div className="manuscript-list">
             {query.data.items.map((item) => (
-              <button
-                className="panel manuscript-card"
-                key={item.job_id}
-                type="button"
-                onClick={() => {
-                  setCurrentJob(item.job_id);
-                  setPage("transcript");
-                }}
-              >
-                <strong>{item.source_name}</strong>
-                <span>
-                  {new Date(item.created_at).toLocaleString()} ·{" "}
-                  {formatSamples(item.duration_samples)} ·{" "}
-                  {(
-                    { ja: "日语", zh: "中文", en: "英语" } as Record<
-                      string,
-                      string
-                    >
-                  )[item.language] ?? item.language}
-                </span>
-                <span>{statuses[item.status] ?? item.status} · 查看稿件 →</span>
-              </button>
+              <div className="manuscript-entry" key={item.job_id}>
+                <button
+                  className="panel manuscript-card"
+                  type="button"
+                  onClick={() => {
+                    setCurrentJob(item.job_id);
+                    setPage("transcript");
+                  }}
+                >
+                  <strong>{item.source_name}</strong>
+                  <span>
+                    {new Date(item.created_at).toLocaleString()} ·{" "}
+                    {formatSamples(item.duration_samples)} ·{" "}
+                    {(
+                      { ja: "日语", zh: "中文", en: "英语" } as Record<
+                        string,
+                        string
+                      >
+                    )[item.language] ?? item.language}
+                  </span>
+                  <span>
+                    {statuses[item.status] ?? item.status} · 查看稿件 →
+                  </span>
+                </button>
+                <div className="toolbar compact">
+                  <button
+                    type="button"
+                    disabled={
+                      !["completed", "failed", "cancelled"].includes(
+                        item.status,
+                      ) ||
+                      deleteDerived.isPending ||
+                      deleteJob.isPending
+                    }
+                    onClick={() => {
+                      setDeletionNotice("");
+                      deleteDerived.mutate(item.job_id);
+                    }}
+                  >
+                    清理派生数据
+                  </button>
+                  <button
+                    className="danger-button"
+                    type="button"
+                    disabled={
+                      !["completed", "failed", "cancelled"].includes(
+                        item.status,
+                      ) ||
+                      deleteJob.isPending ||
+                      deleteDerived.isPending
+                    }
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `永久删除「${item.source_name}」对应任务、稿件、导出及不再被引用的录音？`,
+                        )
+                      ) {
+                        setDeletionNotice("");
+                        deleteJob.mutate(item.job_id);
+                      }
+                    }}
+                  >
+                    删除任务及录音
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
           <div className="toolbar">

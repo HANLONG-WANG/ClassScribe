@@ -8,12 +8,15 @@ vi.mock("../src/batchImports", () => ({
   useBatchImports: () => [],
   retryImport: vi.fn(),
   stopImports: vi.fn(),
+  clearCompletedImports: vi.fn(),
+  reconcileImports: vi.fn(),
 }));
 import { UploadPage } from "../src/pages/UploadPage";
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   batch.mockReset();
+  sessionStorage.clear();
 });
 it("accepts multiple files, reorders them, and freezes one shared settings snapshot", () => {
   vi.stubGlobal(
@@ -42,4 +45,58 @@ it("accepts multiple files, reorders them, and freezes one shared settings snaps
       accuracy_mode: "balanced",
     }),
   );
+});
+
+it("keeps selected files when clearing the native picker", () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(new Response("[]"))),
+  );
+  const { container } = render(
+    <QueryClientProvider client={new QueryClient()}>
+      <UploadPage />
+    </QueryClientProvider>,
+  );
+  const input = container.querySelector('input[type="file"]');
+  if (!input) throw new Error("missing file picker");
+  let selected: File[] = [new File(["audio"], "lesson.wav")];
+  Object.defineProperty(input, "files", {
+    configurable: true,
+    get: () => selected,
+  });
+  Object.defineProperty(input, "value", {
+    configurable: true,
+    get: () => "",
+    set: () => {
+      selected = [];
+    },
+  });
+  fireEvent.change(input);
+  expect(screen.getByText(/lesson\.wav/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "加入转录队列" })).toBeEnabled();
+});
+
+it("restores import settings after leaving and returning to the page", () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(new Response("[]"))),
+  );
+  const client = new QueryClient();
+  const first = render(
+    <QueryClientProvider client={client}>
+      <UploadPage />
+    </QueryClientProvider>,
+  );
+  fireEvent.change(screen.getByRole("combobox", { name: "语言" }), {
+    target: { value: "en" },
+  });
+  fireEvent.click(screen.getByRole("radio", { name: "最高精度" }));
+  first.unmount();
+  render(
+    <QueryClientProvider client={client}>
+      <UploadPage />
+    </QueryClientProvider>,
+  );
+  expect(screen.getByRole("combobox", { name: "语言" })).toHaveValue("en");
+  expect(screen.getByRole("radio", { name: "最高精度" })).toBeChecked();
 });

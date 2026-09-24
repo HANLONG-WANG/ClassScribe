@@ -103,7 +103,10 @@ test("complete local classroom workflow is operable", async ({ page }) => {
 
     if (path === "/models" && method === "GET") return json(models);
     if (path === "/glossaries" && method === "GET") return json(glossaries);
-    if (path === "/recordings" && method === "POST") {
+    if (/^\/recordings\/[^/]+$/.test(path) && method === "GET") {
+      return json({ error: { detail: "recording not found" } }, 404);
+    }
+    if (/^\/recordings\/[^/]+\/upload$/.test(path) && method === "PUT") {
       writes.push("recording:create");
       return json({
         id: "recording-1",
@@ -117,6 +120,37 @@ test("complete local classroom workflow is operable", async ({ page }) => {
     if (path === "/jobs" && method === "POST") {
       writes.push("job:create");
       return json(job);
+    }
+    if (path === "/jobs" && method === "GET") {
+      return json({
+        items: [
+          {
+            job_id: "job-1",
+            has_transcript: true,
+            source_name: "lesson.wav",
+            duration_samples: 1600,
+            language: "ja",
+            status: "completed",
+            created_at: "2026-09-24T00:00:00Z",
+          },
+        ],
+        total: 1,
+      });
+    }
+    if (path === "/queue" && method === "GET") {
+      return json({
+        paused: false,
+        items: writes.includes("job:create")
+          ? [
+              {
+                job_id: "job-1",
+                source_name: "lesson.wav",
+                status: "completed",
+                progress: 100,
+              },
+            ]
+          : [],
+      });
     }
     if (path === "/jobs/job-1/events") {
       return route.fulfill({
@@ -223,7 +257,9 @@ test("complete local classroom workflow is operable", async ({ page }) => {
   });
 
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "导入一堂课" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "批量导入课堂" }),
+  ).toBeVisible();
   await page
     .locator('input[type="file"][accept="audio/*,video/*"]')
     .setInputFiles({
@@ -231,7 +267,10 @@ test("complete local classroom workflow is operable", async ({ page }) => {
       mimeType: "audio/wav",
       buffer: wav,
     });
-  await page.getByRole("button", { name: "开始自动转录" }).click();
+  await page.getByRole("button", { name: "加入转录队列" }).click();
+  await expect.poll(() => writes.includes("job:create")).toBe(true);
+  await page.getByRole("button", { name: "任务队列" }).click();
+  await page.getByRole("button", { name: "查看任务" }).click();
   await expect(page.getByRole("heading", { name: "课堂任务" })).toBeVisible();
   await expect(page.getByText("100%")).toBeVisible();
   await page.getByRole("button", { name: "打开转录稿" }).click();
@@ -263,6 +302,7 @@ test("complete local classroom workflow is operable", async ({ page }) => {
   ).toBeVisible();
 
   await page.getByRole("button", { name: "导出" }).click();
+  await page.getByRole("button", { name: "全选本页" }).click();
   await page.getByRole("button", { name: "生成导出" }).click();
   await expect(page.getByText("lesson.md")).toBeVisible();
   expect(writes).toEqual([

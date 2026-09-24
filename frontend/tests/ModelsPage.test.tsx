@@ -21,6 +21,7 @@ function setup(
   initialStage = "not_installed",
   withSecondModel = false,
   environmentStatus?: string,
+  rollbackFails = false,
 ) {
   let stage = initialStage;
   let finish: (response: Response) => void = () => {
@@ -39,6 +40,7 @@ function setup(
     enabled: true,
     experimental: false,
     manifest_available: true,
+    manifest_sha256: "b".repeat(64),
     worker_implemented: true,
     installable: true,
     install_block_reason: null,
@@ -57,6 +59,16 @@ function setup(
         finishVerification = resolve;
       });
     }
+    if (url.endsWith("/rollback")) {
+      return Promise.resolve(
+        json(
+          rollbackFails
+            ? { error: { detail: "该版本未安装" } }
+            : { rolled_back: true },
+          rollbackFails ? 409 : 200,
+        ),
+      );
+    }
     if (url.endsWith("/install/confirm")) {
       stage = "downloading";
       return new Promise<Response>((resolve) => {
@@ -69,6 +81,7 @@ function setup(
         json({
           confirmation_token: `token-${String(prepareCount)}`,
           model_id: "model",
+          revision: "a".repeat(40),
           supported_languages: ["en"],
           reusing_download: stage === "awaiting_health_check",
           estimated_download_bytes: 0,
@@ -164,6 +177,10 @@ async function selectAudio() {
 it("blocks unsupported language and shows progress followed by installed status", async () => {
   const state = setup();
   fireEvent.click(await screen.findByRole("button", { name: "准备安装" }));
+  expect(
+    await screen.findByText(`完整 revision：${"a".repeat(40)}`),
+  ).toBeVisible();
+  expect(screen.getByText(`Manifest SHA-256：${"b".repeat(64)}`)).toBeVisible();
   await selectAudio();
   expect(
     screen.getByRole("option", { name: "日语（此模型不支持）" }),
@@ -205,6 +222,18 @@ it("blocks unsupported language and shows progress followed by installed status"
     ),
   ).toBeVisible();
   expect(await screen.findByRole("button", { name: "已安装" })).toBeDisabled();
+});
+
+it("reports rollback conflicts and does not call an unhealthy environment ready", async () => {
+  setup("complete", false, "source_changed", true);
+  await screen.findByRole("heading", { name: "English model" });
+  expect(
+    screen.queryByText("安装完成，健康检查已通过，模型可用。"),
+  ).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "回滚到此版" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "回滚失败：该版本未安装",
+  );
 });
 
 it("offers retry for retained files and reports a failed health check", async () => {

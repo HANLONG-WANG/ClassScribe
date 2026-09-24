@@ -85,6 +85,42 @@ describe("API authentication bootstrap", () => {
       "/home/private-user/models/revision/config.json",
     );
   });
+
+  it("shows validation details returned by framework 422 responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ detail: "材料编码无效, 请使用 UTF-8." }),
+            { status: 422, headers: { "Content-Type": "application/json" } },
+          ),
+        ),
+      ),
+    );
+    const { api } = await import("../src/api");
+    await expect(
+      api("/glossaries/id/documents", { method: "POST" }),
+    ).rejects.toThrow("材料编码无效, 请使用 UTF-8.");
+  });
+
+  it("marks an invalid API token and clears the warning after a successful request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { detail: "invalid token" } }), {
+          status: 403,
+        }),
+      )
+      .mockResolvedValueOnce(new Response("{}"));
+    vi.stubGlobal("fetch", fetchMock);
+    const { api } = await import("../src/api");
+    const { useAuthStatus } = await import("../src/authStatus");
+    await expect(api("/settings")).rejects.toThrow("invalid token");
+    expect(useAuthStatus.getState().invalid).toBe(true);
+    await api("/settings");
+    expect(useAuthStatus.getState().invalid).toBe(false);
+  });
 });
 
 describe("recording upload filenames", () => {

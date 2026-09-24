@@ -1,5 +1,11 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { flushTranscriptSave, useTranscriptSaves } from "./transcriptSaves";
+import {
+  discardTranscriptDraft,
+  flushTranscriptSave,
+  loadLatestTranscriptDraft,
+  saveRebasedTranscriptDraft,
+  useTranscriptSaves,
+} from "./transcriptSaves";
 import { ExportsPage } from "./pages/ExportsPage";
 import { GlossaryPage } from "./pages/GlossaryPage";
 import { IBusPage } from "./pages/IBusPage";
@@ -11,6 +17,7 @@ import { TranscriptPage } from "./pages/TranscriptPage";
 import { TranscriptsPage } from "./pages/TranscriptsPage";
 import { UploadPage } from "./pages/UploadPage";
 import { type Page, useWorkbench } from "./store";
+import { useAuthStatus } from "./authStatus";
 
 const navigation: { id: Page; label: string; mark: string }[] = [
   { id: "upload", label: "导入", mark: "↑" },
@@ -30,14 +37,20 @@ export function App() {
     ([, draft]) => draft.status !== "saved",
   );
   const page = useWorkbench((state) => state.page);
+  const authInvalid = useAuthStatus((state) => state.invalid);
   const setPage = useWorkbench((state) => state.setPage);
+  const selectSegment = useWorkbench((state) => state.selectSegment);
+  function navigate(next: Page) {
+    setPage(next);
+    window.scrollTo(0, 0);
+  }
   return (
     <div className="app-shell">
       <aside className="sidebar">
         <button
           className="brand"
           onClick={() => {
-            setPage("upload");
+            navigate("upload");
           }}
           type="button"
         >
@@ -51,6 +64,7 @@ export function App() {
           {navigation.map((item) => (
             <button
               aria-label={item.label}
+              title={item.label}
               aria-current={
                 page === item.id ||
                 (page === "job" && item.id === "queue") ||
@@ -60,7 +74,7 @@ export function App() {
               }
               key={item.id}
               onClick={() => {
-                setPage(item.id);
+                navigate(item.id);
               }}
               type="button"
             >
@@ -78,6 +92,20 @@ export function App() {
         </div>
       </aside>
       <main className="workspace">
+        {authInvalid && (
+          <div className="error-callout" role="alert">
+            本机 API 鉴权失败，当前数据不可读取。请在设置中重新应用正确的 API
+            token。
+            <button
+              type="button"
+              onClick={() => {
+                navigate("settings");
+              }}
+            >
+              前往设置
+            </button>
+          </div>
+        )}
         {unsaved.length > 0 && (
           <div role="status">
             {unsaved.some(([, draft]) => draft.status === "error")
@@ -86,20 +114,62 @@ export function App() {
             {unsaved
               .filter(([, draft]) => draft.status === "error")
               .map(([id, draft]) => (
-                <button
-                  key={id}
-                  title={draft.error}
-                  onClick={() => {
-                    void flushTranscriptSave(id, client);
-                  }}
-                  type="button"
-                >
-                  重试保存
-                </button>
+                <span key={id}>
+                  {draft.error && <span>{draft.error}</span>}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      selectSegment(id);
+                      navigate("transcript");
+                    }}
+                  >
+                    打开草稿
+                  </button>
+                  {draft.conflict ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void loadLatestTranscriptDraft(id);
+                        }}
+                      >
+                        读取服务器最新版
+                      </button>
+                      {draft.serverVersion !== undefined && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void saveRebasedTranscriptDraft(id, client);
+                          }}
+                        >
+                          确认用草稿保存
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          discardTranscriptDraft(id, client);
+                        }}
+                      >
+                        放弃草稿
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      title={draft.error}
+                      onClick={() => {
+                        void flushTranscriptSave(id, client);
+                      }}
+                      type="button"
+                    >
+                      重试保存
+                    </button>
+                  )}
+                </span>
               ))}
           </div>
         )}
-        <PageContent page={page} />
+        {(!authInvalid || page === "settings") && <PageContent page={page} />}
         <footer>
           ClassScribe 不承诺零 CER/WER；低置信度会标记，但不会阻塞自动导出。
         </footer>

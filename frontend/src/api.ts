@@ -1,3 +1,5 @@
+import { useAuthStatus } from "./authStatus";
+
 export type ApiObject = Record<string, unknown>;
 
 const tokenMeta = document.querySelector<HTMLMetaElement>(
@@ -34,6 +36,7 @@ function publicErrorDetail(detail: string) {
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const requestToken = apiToken;
   const method = init.method?.toUpperCase() ?? "GET";
   const write = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
   const headers = new Headers(authHeaders(write));
@@ -45,16 +48,34 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   const response = await fetch(`/api/v1${path}`, { ...init, headers });
   if (!response.ok) {
+    if (
+      (response.status === 401 || response.status === 403) &&
+      requestToken === apiToken
+    ) {
+      useAuthStatus.setState({ invalid: true });
+    }
     const payload = (await response.json().catch(() => ({}))) as {
       error?: { detail?: string };
+      detail?: string;
     };
-    throw new Error(
-      payload.error?.detail
-        ? publicErrorDetail(payload.error.detail)
+    throw new ApiError(
+      payload.error?.detail || payload.detail
+        ? publicErrorDetail(payload.error?.detail ?? payload.detail ?? "")
         : `${String(response.status)} ${response.statusText}`,
+      response.status,
     );
   }
+  if (requestToken === apiToken) useAuthStatus.setState({ invalid: false });
   return (await response.json()) as T;
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
 }
 
 export function filenameHeaders(filename: string): Record<string, string> {
@@ -198,6 +219,8 @@ export interface Candidate {
   normalized_text: string;
   confidence_raw: number | null;
   confidence_calibrated: number | null;
+  decode_config?: ApiObject;
+  inference_metrics?: ApiObject;
   quality: ApiObject;
   warnings: ApiObject[];
   valid: boolean;

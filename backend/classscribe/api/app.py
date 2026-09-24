@@ -34,6 +34,7 @@ from classscribe.diagnostics import (
     snapshot_payload,
 )
 from classscribe.errors import ClassScribeError, ErrorCode, public_error_detail
+from classscribe.observability import redact
 from classscribe.paths import AppPaths
 from classscribe.scheduler import GPULeaseIPCServer, GPULeaseManager
 from classscribe.version import __version__
@@ -160,13 +161,13 @@ def create_app(
     @application.get("/api/v1/diagnostics")
     async def diagnostics() -> dict[str, Any]:
         result = snapshot_payload(provide_diagnostics())
-        result["ibus"] = await _ibus_status(runtime_paths)
+        result["ibus"] = redact(await _ibus_status(runtime_paths), home=Path.home())
         return result
 
     @application.get("/api/v1/diagnostics/bundle")
     async def diagnostic_bundle() -> Response:
         return Response(
-            diagnostic_bundle_bytes(provide_diagnostics()),
+            diagnostic_bundle_bytes(provide_diagnostics(), ibus=await _ibus_status(runtime_paths)),
             media_type="application/zip",
             headers={"Content-Disposition": 'attachment; filename="classscribe-diagnostics.zip"'},
         )

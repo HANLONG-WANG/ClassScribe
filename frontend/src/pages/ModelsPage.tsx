@@ -244,6 +244,19 @@ export function ModelsPage() {
       {plan && (
         <div className="notice install-plan">
           <strong>安装确认</strong>
+          <p>
+            目标模型：
+            {query.data?.find((item) => item.id === plan.model_id)?.name ??
+              plan.model_id}
+            {" · "}
+            {plan.model_id}
+          </p>
+          <p className="mono">完整 revision：{plan.revision}</p>
+          <p className="mono">
+            Manifest SHA-256：
+            {query.data?.find((item) => item.id === plan.model_id)
+              ?.manifest_sha256 ?? "—"}
+          </p>
           {plan.reusing_download && (
             <p>已找到保留的模型文件，本次将复用文件并重试健康检查。</p>
           )}
@@ -604,7 +617,13 @@ export function ModelsPage() {
             </p>
             {model.install_stage && installStages[model.install_stage] && (
               <p className="notice" role="status">
-                {installStages[model.install_stage]}
+                {(model.install_stage === "complete" ||
+                  model.install_stage === "healthy") &&
+                ((model.worker_environment &&
+                  model.worker_environment.status !== "ready") ||
+                  (verify.variables === model.id && verify.isError))
+                  ? "模型文件已安装，但当前运行环境或文件校验未通过；请先修复或重新校验。"
+                  : installStages[model.install_stage]}
               </p>
             )}
             {!model.enabled &&
@@ -707,6 +726,11 @@ export function ModelsPage() {
               >
                 回滚到此版
               </button>
+              {rollback.variables?.id === model.id && rollback.isError && (
+                <p role="alert">
+                  回滚失败：{rollback.error.message}。请检查该版本是否已安装。
+                </p>
+              )}
               <button
                 className="danger-button"
                 disabled={busyStages.has(model.install_stage ?? "")}

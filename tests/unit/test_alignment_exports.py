@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -225,6 +226,38 @@ def test_all_six_formats_export_each_layer_from_final_time(
         data = json.loads(rendered)
         assert data["records"][0]["resolved_layer"] == "smart"
         assert data["timeline"].endswith("16000_hz")
+
+
+@pytest.mark.parametrize("output_format", tuple(ExportFormat))
+def test_explicitly_empty_user_text_does_not_reappear_from_smart_layer(
+    output_format: ExportFormat,
+) -> None:
+    segment = replace(_export_segment(), user_text="")
+    rendered = render_export((segment,), output_format=output_format, layer=ExportLayer.USER)
+    if output_format is ExportFormat.JSON:
+        record = json.loads(rendered)["records"][0]
+        assert record["resolved_layer"] == "user"
+        assert record["text"] == ""
+    elif output_format is ExportFormat.CSV:
+        assert ",user," in rendered
+        assert "We used 20 mg ClassScribe." not in rendered
+    else:
+        assert "We used 20 mg ClassScribe." not in rendered
+
+
+@pytest.mark.parametrize("output_format", tuple(ExportFormat))
+def test_coarse_timing_is_marked_in_every_export_format(output_format: ExportFormat) -> None:
+    segment = replace(_export_segment(), timing_quality="structure")
+    rendered = render_export((segment,), output_format=output_format, layer=ExportLayer.SMART)
+    if output_format is ExportFormat.JSON:
+        record = json.loads(rendered)["records"][0]
+        assert record["timing_quality"] == "structure"
+        assert record["coarse_timing"] is True
+    elif output_format is ExportFormat.CSV:
+        assert "coarse_timing" in rendered
+        assert "structure,True" in rendered
+    else:
+        assert "粗时间" in rendered
 
 
 def test_subtitle_has_at_most_two_lines_and_never_splits_protected_number_unit() -> None:

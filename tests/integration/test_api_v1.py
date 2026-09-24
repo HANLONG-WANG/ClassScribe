@@ -900,6 +900,11 @@ def test_authenticated_diagnostic_bundle_contains_only_redacted_json(tmp_path: P
         assert response.headers["content-type"] == "application/zip"
         with zipfile.ZipFile(BytesIO(response.content)) as archive:
             content = archive.read("diagnostics.json").decode("utf-8")
+        assert set(json.loads(content)["ibus"]) == {
+            "dictationd",
+            "portal",
+            "ibus_input_source_fallback",
+        }
         assert "private classroom text" not in content
         assert str(Path.home()) not in content
         assert "[REDACTED]" in content
@@ -1502,6 +1507,162 @@ def test_delete_glossary_removes_terms_and_materials_without_affecting_others(
         )
     missing = asyncio.run(request(app, "DELETE", endpoint, headers=auth(token, csrf, write=True)))
     assert missing.status == 404
+
+
+def test_material_import_reports_invalid_input_and_accepts_confirmed_csv(tmp_path: Path) -> None:
+    from classscribe.api.schemas import GlossaryCreate
+
+    service, _sessions = service_fixture(tmp_path)
+    glossary = service.create_glossary(GlossaryCreate(name="CSV import"))
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+    endpoint = f"/api/v1/glossaries/{glossary['id']}/documents"
+
+    async def upload(name: str, content: bytes) -> Response:
+        return await request(
+            app,
+            "POST",
+            endpoint,
+            headers={
+                **auth(token, csrf, write=True),
+                "Content-Type": "application/octet-stream",
+                "X-ClassScribe-Filename": name,
+                "X-ClassScribe-Material-Kind": "csv" if name.endswith(".csv") else "txt",
+                "X-ClassScribe-Language": "ja",
+            },
+            body=content,
+        )
+
+    invalid_encoding = asyncio.run(upload("invalid.txt", b"\xff\xfe"))
+    assert invalid_encoding.status == 422
+    assert "UTF-8" in invalid_encoding.json()["detail"]
+    missing_column = asyncio.run(upload("missing.csv", b"reading\nexample\n"))
+    assert missing_column.status == 422
+    assert "canonical" in missing_column.json()["detail"]
+    invalid_weight = asyncio.run(upload("weight.csv", b"canonical,weight\nexample,invalid\n"))
+    assert invalid_weight.status == 422
+    materials = service.paths.data_path("glossaries", glossary["id"], "materials")
+    assert list(materials.iterdir()) == []
+
+    csv_content = (
+        "canonical,reading,aliases,language,weight,confirmation\n"
+        "人工知能,じんこうちのう,AI|機械知能,ja,0.9,confirmed\n"
+        "量子力学,りょうしりきがく,,ja,0.2,suggested\n"
+    ).encode("utf-8-sig")
+    imported = asyncio.run(upload("terms.csv", csv_content))
+    assert imported.status == 201
+    terms = {term["canonical"]: term for term in service.glossary(glossary["id"])["terms"]}
+    assert terms["人工知能"]["confirmed"] is True
+    assert terms["人工知能"]["weight"] == 0.9
+    assert terms["人工知能"]["aliases"] == ["AI", "機械知能"]
+    assert terms["量子力学"]["confirmed"] is False
+
+
+def test_local_data_deletion_routes_enforce_scope_state_and_confirmation(tmp_path: Path) -> None:
+    from classscribe.db.models import Job, JobStatus
+    from classscribe.deletion import DELETE_ALL_CONFIRMATION
+
+    from tests.integration.test_deletion import create_job_data
+
+    service, sessions = service_fixture(tmp_path)
+    job_id, derived, candidate, export = create_job_data(service.paths, sessions)
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+    derived_url = f"/api/v1/jobs/{job_id}/derived-data"
+    job_url = f"/api/v1/jobs/{job_id}/local-data"
+
+    denied = asyncio.run(request(app, "DELETE", derived_url, headers=auth(token, csrf)))
+    assert denied.status == 403
+    active = asyncio.run(request(app, "DELETE", derived_url, headers=auth(token, csrf, write=True)))
+    assert active.status == 409
+    assert derived.exists()
+    active_clear = asyncio.run(
+        request(
+            app,
+            "POST",
+            "/api/v1/local-data/clear",
+            headers={**auth(token, csrf, write=True), "Content-Type": "application/json"},
+            body=b'{"confirmation":"DELETE ALL CLASSSCRIBE DATA"}',
+        )
+    )
+    assert active_clear.status == 409
+    with sessions.begin() as session:
+        session.get_one(Job, job_id).status = JobStatus.COMPLETED
+
+    cleared_derived = asyncio.run(
+        request(app, "DELETE", derived_url, headers=auth(token, csrf, write=True))
+    )
+    assert cleared_derived.status == 200
+    assert cleared_derived.json()["level"] == "derived_only"
+    assert not derived.exists() and not candidate.exists()
+    assert export.exists()
+
+    deleted_job = asyncio.run(
+        request(app, "DELETE", job_url, headers=auth(token, csrf, write=True))
+    )
+    assert deleted_job.status == 200
+    assert deleted_job.json()["deleted"] is True
+    assert not export.exists()
+    with sessions() as session:
+        assert session.get(Job, job_id) is None
+
+    sentinel = tmp_path / "outside.txt"
+    sentinel.write_text("preserve", encoding="utf-8")
+    private = service.paths.cache / "private.bin"
+    private.write_bytes(b"delete")
+    clear_url = "/api/v1/local-data/clear"
+    wrong = asyncio.run(
+        request(
+            app,
+            "POST",
+            clear_url,
+            headers={**auth(token, csrf, write=True), "Content-Type": "application/json"},
+            body=b'{"confirmation":"wrong"}',
+        )
+    )
+    assert wrong.status == 409
+    assert private.exists()
+    cleared = asyncio.run(
+        request(
+            app,
+            "POST",
+            clear_url,
+            headers={**auth(token, csrf, write=True), "Content-Type": "application/json"},
+            body=json.dumps({"confirmation": DELETE_ALL_CONFIRMATION}).encode(),
+        )
+    )
+    assert cleared.status == 200
+    assert cleared.json()["restart_required"] is True
+    assert not private.exists()
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+    assert str(tmp_path) not in json.dumps(cleared.json())
+
+
+def test_all_local_data_route_removes_database_inside_app_root(tmp_path: Path) -> None:
+    from classscribe.deletion import DELETE_ALL_CONFIRMATION
+
+    paths = AppPaths.from_environment({}, home=tmp_path / "home")
+    paths.ensure()
+    database = paths.data / "classscribe.sqlite3"
+    engine = create_sqlite_engine(database)
+    create_schema(engine)
+    sessions = make_session_factory(engine)
+    service = ClassScribeService(
+        sessions, paths, load_registry(Path("config/model-registry.v1.yaml"))
+    )
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+    response = asyncio.run(
+        request(
+            app,
+            "POST",
+            "/api/v1/local-data/clear",
+            headers={**auth(token, csrf, write=True), "Content-Type": "application/json"},
+            body=json.dumps({"confirmation": DELETE_ALL_CONFIRMATION}).encode(),
+        )
+    )
+    assert response.status == 200
+    assert not database.exists()
 
 
 def test_install_rejects_language_before_download_and_retries_retained_files(

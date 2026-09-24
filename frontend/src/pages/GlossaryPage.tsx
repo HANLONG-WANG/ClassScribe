@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type SyntheticEvent, useState } from "react";
 
-import { api, filenameHeaders, type Glossary } from "../api";
+import { api, filenameHeaders, type Glossary, type GlossaryTerm } from "../api";
 
 export function GlossaryPage() {
   const client = useQueryClient();
@@ -9,7 +9,19 @@ export function GlossaryPage() {
   const [newName, setNewName] = useState("");
   const [canonical, setCanonical] = useState("");
   const [reading, setReading] = useState("");
+  const [aliases, setAliases] = useState("");
+  const [weight, setWeight] = useState("1");
   const [language, setLanguage] = useState<"zh" | "ja" | "en">("ja");
+  const [materialSource, setMaterialSource] = useState<
+    "auto" | "handout" | "textbook"
+  >("auto");
+  const [editing, setEditing] = useState<GlossaryTerm | null>(null);
+  const [editReading, setEditReading] = useState("");
+  const [editAliases, setEditAliases] = useState("");
+  const [editLanguage, setEditLanguage] = useState<"zh" | "ja" | "en">("ja");
+  const [editWeight, setEditWeight] = useState("1");
+  const [editConfirmed, setEditConfirmed] = useState(true);
+  const [termError, setTermError] = useState("");
   const query = useQuery({
     queryKey: ["glossaries"],
     queryFn: () => api<Glossary[]>("/glossaries"),
@@ -58,17 +70,21 @@ export function GlossaryPage() {
     onSuccess: () => client.invalidateQueries({ queryKey: ["glossaries"] }),
   });
   const material = useMutation({
-    mutationFn: ({ glossaryId, file }: { glossaryId: string; file: File }) =>
+    mutationFn: ({
+      glossaryId,
+      file,
+      source,
+    }: {
+      glossaryId: string;
+      file: File;
+      source: string;
+    }) =>
       api(`/glossaries/${glossaryId}/documents`, {
         method: "POST",
         headers: {
           "Content-Type": "application/octet-stream",
           ...filenameHeaders(file.name),
-          "X-ClassScribe-Material-Kind": file.name.endsWith(".csv")
-            ? "csv"
-            : file.name.endsWith(".md")
-              ? "markdown"
-              : "txt",
+          "X-ClassScribe-Material-Kind": source,
           "X-ClassScribe-Language": language,
         },
         body: file,
@@ -78,25 +94,122 @@ export function GlossaryPage() {
   const glossary =
     query.data?.find((item) => item.id === selected) ?? query.data?.[0];
 
+  function importFile(glossaryId: string, file: File) {
+    const suffix = file.name.split(".").pop()?.toLowerCase();
+    const kind = (
+      {
+        txt: "txt",
+        md: "markdown",
+        markdown: "markdown",
+        csv: "csv",
+        pdf: "pdf",
+        pptx: "pptx",
+      } as Record<string, string>
+    )[suffix ?? ""];
+    if (!kind) return;
+    material.mutate({
+      glossaryId,
+      file,
+      source:
+        kind === "csv" || materialSource === "auto" ? kind : materialSource,
+    });
+  }
+
   function addTerm(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!glossary || !canonical.trim() || !reading.trim()) return;
-    update.mutate({
-      id: glossary.id,
-      terms: [
-        {
-          canonical,
-          reading,
-          aliases: [],
-          language,
-          weight: 1,
-          source: "manual",
-          confirmed: true,
+    const parsedAliases = aliases
+      .split(/[,，;；|]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (
+      new Set(parsedAliases).size !== parsedAliases.length ||
+      parsedAliases.includes(canonical.trim())
+    ) {
+      setTermError("别名必须互不重复，且不能与标准写法相同。");
+      return;
+    }
+    setTermError("");
+    update.mutate(
+      {
+        id: glossary.id,
+        terms: [
+          {
+            canonical,
+            reading,
+            aliases: parsedAliases,
+            language,
+            weight: Number(weight),
+            source: "manual",
+            confirmed: true,
+          },
+        ],
+      },
+      {
+        onSuccess: () => {
+          setCanonical("");
+          setReading("");
+          setAliases("");
+          setWeight("1");
         },
-      ],
-    });
-    setCanonical("");
-    setReading("");
+      },
+    );
+  }
+
+  function beginEdit(term: GlossaryTerm) {
+    setEditing(term);
+    setEditReading(term.reading);
+    setEditAliases(term.aliases.join(", "));
+    setEditLanguage(term.language as "zh" | "ja" | "en");
+    setEditWeight(String(term.weight));
+    setEditConfirmed(term.confirmed);
+    setTermError("");
+  }
+
+  async function saveEdit(event: SyntheticEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!glossary || !editing) return;
+    const parsedAliases = editAliases
+      .split(/[,，;；|]/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (
+      new Set(parsedAliases).size !== parsedAliases.length ||
+      parsedAliases.includes(editing.canonical)
+    ) {
+      setTermError("别名必须互不重复，且不能与标准写法相同。");
+      return;
+    }
+    if (!editConfirmed && Number(editWeight) > 0.3) {
+      setTermError("未确认建议的权重不能超过 0.30。");
+      return;
+    }
+    setTermError("");
+    try {
+      await update.mutateAsync({
+        id: glossary.id,
+        terms: [
+          {
+            canonical: editing.canonical,
+            reading: editReading,
+            aliases: parsedAliases,
+            language: editLanguage,
+            weight: Number(editWeight),
+            source: editing.source,
+            confirmed: editConfirmed,
+          },
+        ],
+      });
+      if (editLanguage !== editing.language) {
+        await remove.mutateAsync({
+          glossaryId: glossary.id,
+          termId: editing.id,
+        });
+      }
+      setEditing(null);
+    } catch {
+      /* Mutation errors are shown above the glossary. */
+    }
   }
 
   return (
@@ -116,6 +229,31 @@ export function GlossaryPage() {
           删除失败：{deleteGlossary.error.message}
         </p>
       )}
+      {create.isError && (
+        <p className="error-callout" role="alert">
+          创建词典失败：{create.error.message}
+        </p>
+      )}
+      {update.isError && (
+        <p className="error-callout" role="alert">
+          保存词条失败：{update.error.message}
+        </p>
+      )}
+      {material.isError && (
+        <p className="error-callout" role="alert">
+          材料导入失败：{material.error.message}
+        </p>
+      )}
+      {remove.isError && (
+        <p className="error-callout" role="alert">
+          删除词条失败：{remove.error.message}
+        </p>
+      )}
+      {termError && (
+        <p className="error-callout" role="alert">
+          {termError}
+        </p>
+      )}
       <div className="split-layout">
         <aside className="panel collection-list">
           <form
@@ -126,6 +264,7 @@ export function GlossaryPage() {
           >
             <input
               aria-label="新词典名称"
+              maxLength={256}
               onChange={(event) => {
                 setNewName(event.target.value);
               }}
@@ -134,6 +273,7 @@ export function GlossaryPage() {
             />
             <button type="submit">＋</button>
           </form>
+          <small>词典名称最多 256 字。</small>
           {(query.data ?? []).map((item) => (
             <button
               className={item.id === glossary?.id ? "active" : ""}
@@ -161,18 +301,33 @@ export function GlossaryPage() {
                   <h2>{glossary.name}</h2>
                 </div>
                 <label className="file-button">
-                  导入 TXT / MD / CSV
+                  导入 TXT / MD / CSV / PDF / PPTX
                   <input
-                    accept=".txt,.md,.csv"
+                    accept=".txt,.md,.markdown,.csv,.pdf,.pptx"
                     onChange={(event) => {
-                      const file = event.target.files?.item(0);
-                      if (file)
-                        material.mutate({ glossaryId: glossary.id, file });
+                      const file = event.target.files?.[0];
+                      event.target.value = "";
+                      if (file) importFile(glossary.id, file);
                     }}
                     type="file"
                   />
                 </label>
               </div>
+              <label>
+                材料来源
+                <select
+                  value={materialSource}
+                  onChange={(event) => {
+                    setMaterialSource(
+                      event.target.value as "auto" | "handout" | "textbook",
+                    );
+                  }}
+                >
+                  <option value="auto">按文件类型</option>
+                  <option value="handout">课程讲义</option>
+                  <option value="textbook">教材</option>
+                </select>
+              </label>
               <div className="toolbar compact">
                 <button
                   className="danger-button"
@@ -198,6 +353,8 @@ export function GlossaryPage() {
               </div>
               <form className="term-form" onSubmit={addTerm}>
                 <input
+                  aria-label="标准写法（必填）"
+                  required
                   onChange={(event) => {
                     setCanonical(event.target.value);
                   }}
@@ -205,11 +362,33 @@ export function GlossaryPage() {
                   value={canonical}
                 />
                 <input
+                  aria-label="读音（必填）"
+                  required
                   onChange={(event) => {
                     setReading(event.target.value);
                   }}
                   placeholder="读音 / reading"
                   value={reading}
+                />
+                <input
+                  aria-label="别名（以逗号分隔）"
+                  placeholder="别名（以逗号分隔）"
+                  value={aliases}
+                  onChange={(event) => {
+                    setAliases(event.target.value);
+                  }}
+                />
+                <input
+                  aria-label="权重"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  required
+                  value={weight}
+                  onChange={(event) => {
+                    setWeight(event.target.value);
+                  }}
                 />
                 <select
                   value={language}
@@ -235,28 +414,152 @@ export function GlossaryPage() {
                 </div>
                 {glossary.terms.map((term) => (
                   <div key={term.id} role="row">
-                    <span>{term.canonical}</span>
+                    <span>
+                      {term.canonical}
+                      {term.aliases.length > 0 && (
+                        <small>别名：{term.aliases.join("、")}</small>
+                      )}
+                    </span>
                     <span>{term.reading}</span>
                     <span>
                       {term.language} · {term.source}
                       {term.confirmed ? " · 已确认" : " · 建议"}
                     </span>
                     <span>{term.weight.toFixed(2)}</span>
-                    <button
-                      aria-label={`删除 ${term.canonical}`}
-                      onClick={() => {
-                        remove.mutate({
-                          glossaryId: glossary.id,
-                          termId: term.id,
-                        });
-                      }}
-                      type="button"
-                    >
-                      ×
-                    </button>
+                    <span className="term-actions">
+                      {!term.confirmed && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            update.mutate({
+                              id: glossary.id,
+                              terms: [
+                                {
+                                  canonical: term.canonical,
+                                  reading: term.reading,
+                                  aliases: term.aliases,
+                                  language: term.language,
+                                  weight: 1,
+                                  source: term.source,
+                                  confirmed: true,
+                                },
+                              ],
+                            });
+                          }}
+                        >
+                          确认
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        aria-label={`编辑 ${term.canonical}`}
+                        onClick={() => {
+                          beginEdit(term);
+                        }}
+                      >
+                        编辑
+                      </button>
+                      <button
+                        aria-label={`删除 ${term.canonical}`}
+                        onClick={() => {
+                          remove.mutate({
+                            glossaryId: glossary.id,
+                            termId: term.id,
+                          });
+                        }}
+                        type="button"
+                      >
+                        ×
+                      </button>
+                    </span>
                   </div>
                 ))}
               </div>
+              {editing && (
+                <form
+                  className="term-edit-form"
+                  onSubmit={(event) => {
+                    void saveEdit(event);
+                  }}
+                >
+                  <h3>编辑词条：{editing.canonical}</h3>
+                  <label>
+                    读音
+                    <input
+                      required
+                      value={editReading}
+                      onChange={(event) => {
+                        setEditReading(event.target.value);
+                      }}
+                    />
+                  </label>
+                  <label>
+                    别名（以逗号分隔）
+                    <input
+                      value={editAliases}
+                      onChange={(event) => {
+                        setEditAliases(event.target.value);
+                      }}
+                    />
+                  </label>
+                  <label>
+                    语言
+                    <select
+                      value={editLanguage}
+                      onChange={(event) => {
+                        setEditLanguage(
+                          event.target.value as "zh" | "ja" | "en",
+                        );
+                      }}
+                    >
+                      <option value="zh">中文</option>
+                      <option value="ja">日本語</option>
+                      <option value="en">English</option>
+                    </select>
+                  </label>
+                  <label>
+                    权重
+                    <input
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      required
+                      value={editWeight}
+                      onChange={(event) => {
+                        setEditWeight(event.target.value);
+                      }}
+                    />
+                  </label>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={editConfirmed}
+                      onChange={(event) => {
+                        setEditConfirmed(event.target.checked);
+                      }}
+                    />{" "}
+                    已确认
+                  </label>
+                  <div className="toolbar compact">
+                    <button
+                      className="primary-button"
+                      type="submit"
+                      disabled={update.isPending || remove.isPending}
+                    >
+                      保存词条
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditing(null);
+                      }}
+                    >
+                      取消
+                    </button>
+                  </div>
+                </form>
+              )}
             </>
           )}
         </div>

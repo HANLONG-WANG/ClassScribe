@@ -179,6 +179,14 @@ export function TranscriptPage() {
       ),
     enabled: jobId !== null,
   });
+  const fullTimeline = useQuery({
+    queryKey: ["transcript", jobId, false],
+    queryFn: () =>
+      api<Transcript>(
+        `/jobs/${String(jobId)}/transcript?low_confidence_only=false`,
+      ),
+    enabled: jobId !== null,
+  });
   const recording = useQuery({
     queryKey: ["recording", job.data?.recording_id],
     queryFn: () =>
@@ -253,11 +261,15 @@ export function TranscriptPage() {
   });
 
   if (jobId === null) return <p className="empty-state">请先创建课堂任务。</p>;
-  if (job.isError || transcript.isError)
+  if (job.isError || transcript.isError || fullTimeline.isError)
     return (
-      <p role="alert">{job.error?.message ?? transcript.error?.message}</p>
+      <p role="alert">
+        {job.error?.message ??
+          transcript.error?.message ??
+          fullTimeline.error?.message}
+      </p>
     );
-  if (!job.data || !transcript.data)
+  if (!job.data || !transcript.data || !fullTimeline.data)
     return <p className="loading">正在加载可追溯转录稿…</p>;
   const segments = transcript.data.segments;
   const duration = Math.max(
@@ -314,13 +326,13 @@ export function TranscriptPage() {
         />
         <TimelineTrack
           label="说话人"
-          segments={segments}
+          segments={fullTimeline.data.segments}
           duration={duration}
           value={(item) => item.speaker_name ?? item.speaker_id ?? "未知"}
         />
         <TimelineTrack
           label="语言"
-          segments={segments}
+          segments={fullTimeline.data.segments}
           duration={duration}
           value={(item) => item.language.toUpperCase()}
         />
@@ -403,6 +415,11 @@ export function TranscriptPage() {
             if (detail.data) patch.mutate({ ...value, id: detail.data.id });
           }}
           saveError={patch.error?.message}
+          historyError={
+            history.error
+              ? `${history.variables.action === "redo" ? "重做" : "撤销"}失败：${history.error.message}`
+              : undefined
+          }
           onRerun={() => {
             rerun.mutate();
           }}
@@ -454,6 +471,7 @@ function SegmentInspector({
   adopt,
   savePending,
   saveError,
+  historyError,
 }: {
   segment: Segment | undefined;
   candidates: Candidate[];
@@ -467,6 +485,7 @@ function SegmentInspector({
   adopt: (id: string) => void;
   savePending: boolean;
   saveError: string | undefined;
+  historyError: string | undefined;
 }) {
   const client = useQueryClient();
   const savedDraft = useTranscriptSaves((state) =>
@@ -568,6 +587,17 @@ function SegmentInspector({
         />
       </label>
       {saveError && <p role="alert">{saveError}</p>}
+      {savedDraft?.conflict && savedDraft.serverVersion !== undefined && (
+        <div className="error-callout" role="status">
+          <strong>版本冲突：请比较并编辑上方草稿。</strong>
+          <p>
+            服务器最新版（v{savedDraft.serverVersion}）：
+            {savedDraft.serverText || "空句段"}
+          </p>
+          <p>确认后可在页面顶部保存草稿，或放弃并重新加载。</p>
+        </div>
+      )}
+      {historyError && <p role="alert">{historyError}</p>}
       <div className="toolbar compact">
         <button
           disabled={textBusy || savePending}
@@ -604,6 +634,21 @@ function SegmentInspector({
               </span>
             </div>
             <p>{candidate.normalized_text}</p>
+            <details>
+              <summary>完整候选证据</summary>
+              <p className="mono">完整 revision：{candidate.model_revision}</p>
+              <p>原始候选：{candidate.raw_text}</p>
+              <p>原始置信度：{candidate.confidence_raw ?? "未提供"}</p>
+              <p>校准置信度：{candidate.confidence_calibrated ?? "未校准"}</p>
+              <p>
+                解码参数：
+                <code>{JSON.stringify(candidate.decode_config ?? {})}</code>
+              </p>
+              <p>
+                推理指标：
+                <code>{JSON.stringify(candidate.inference_metrics ?? {})}</code>
+              </p>
+            </details>
             <small>
               {Object.keys(candidate.quality).join(" · ") || "无质量警告"}
             </small>

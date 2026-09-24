@@ -39,7 +39,10 @@ def render_export(
         return _render_vtt(ordered, layer, transform)
     records = _records(ordered, layer, view, transform)
     if output_format is ExportFormat.TXT:
-        return "\n\n".join(str(record["text"]) for record in records) + ("\n" if records else "")
+        return "\n\n".join(
+            ("[粗时间] " if record["coarse_timing"] else "") + str(record["text"])
+            for record in records
+        ) + ("\n" if records else "")
     if output_format is ExportFormat.MARKDOWN:
         return _render_markdown(records)
     if output_format is ExportFormat.CSV:
@@ -137,6 +140,8 @@ def _segment_record(
         "language": segment.language,
         "requested_layer": layer.value,
         "resolved_layer": resolved.value,
+        "timing_quality": segment.timing_quality,
+        "coarse_timing": segment.coarse_timing,
         "text": transform(text, segment.language),
         "raw_text": segment.raw_text,
         "faithful_text": segment.faithful_text,
@@ -167,6 +172,12 @@ def _merge_records(records: list[dict[str, Any]]) -> dict[str, Any]:
         "language": first["language"],
         "requested_layer": first["requested_layer"],
         "resolved_layer": first["resolved_layer"],
+        "timing_quality": (
+            first["timing_quality"]
+            if all(record["timing_quality"] == first["timing_quality"] for record in records)
+            else "mixed"
+        ),
+        "coarse_timing": any(record["coarse_timing"] for record in records),
         "text": " ".join(str(record["text"]).strip() for record in records),
         "sentences": records,
     }
@@ -176,7 +187,8 @@ def _render_markdown(records: list[dict[str, Any]]) -> str:
     lines = ["# ClassScribe transcript", ""]
     for record in records:
         speaker = f" · {record['speaker']}" if record["speaker"] else ""
-        lines.extend((f"## {record['start']}{speaker}", "", str(record["text"]), ""))
+        timing = " · 粗时间" if record["coarse_timing"] else ""
+        lines.extend((f"## {record['start']}{speaker}{timing}", "", str(record["text"]), ""))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -194,6 +206,8 @@ def _render_csv(records: list[dict[str, Any]]) -> str:
             "language",
             "requested_layer",
             "resolved_layer",
+            "timing_quality",
+            "coarse_timing",
             "text",
         ),
         lineterminator="\n",
@@ -213,9 +227,12 @@ def _render_srt(
     segments: tuple[ExportSegment, ...], layer: ExportLayer, transform: TextTransform
 ) -> str:
     blocks: list[str] = []
+    coarse_ids = {segment.segment_id for segment in segments if segment.coarse_timing}
     for index, cue in enumerate(build_subtitle_cues(segments, layer), start=1):
         language = _segment_language(segments, cue.segment_ids[0])
         text = transform("\n".join(cue.lines), language)
+        if any(segment_id in coarse_ids for segment_id in cue.segment_ids):
+            text = f"[粗时间] {text}"
         start = format_sample_timestamp(cue.start_sample).replace(".", ",")
         end = format_sample_timestamp(cue.end_sample).replace(".", ",")
         blocks.append(f"{index}\n{start} --> {end}\n{text}")
@@ -226,12 +243,16 @@ def _render_vtt(
     segments: tuple[ExportSegment, ...], layer: ExportLayer, transform: TextTransform
 ) -> str:
     blocks = ["WEBVTT"]
+    coarse_ids = {segment.segment_id for segment in segments if segment.coarse_timing}
     for cue in build_subtitle_cues(segments, layer):
         language = _segment_language(segments, cue.segment_ids[0])
+        text = transform(chr(10).join(cue.lines), language)
+        if any(segment_id in coarse_ids for segment_id in cue.segment_ids):
+            text = f"[粗时间] {text}"
         blocks.append(
             f"{format_sample_timestamp(cue.start_sample)} --> "
             f"{format_sample_timestamp(cue.end_sample)}\n"
-            f"{transform(chr(10).join(cue.lines), language)}"
+            f"{text}"
         )
     return "\n\n".join(blocks) + "\n"
 

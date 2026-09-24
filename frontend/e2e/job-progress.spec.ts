@@ -47,6 +47,7 @@ test("activity survives refresh and stops on completion at desktop and mobile wi
   };
   await page.addInitScript(() => {
     sessionStorage.setItem("classscribe-current-job", "job-progress");
+    sessionStorage.setItem("classscribe-current-page", "job");
   });
   await page.route("**/api/v1/jobs/job-progress", (route) =>
     route.fulfill({ json: job }),

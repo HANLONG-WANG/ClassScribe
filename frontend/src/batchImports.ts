@@ -195,3 +195,32 @@ export function stopImports() {
   }));
   controller?.abort();
 }
+
+export function clearCompletedImports() {
+  useBatchImports.setState(({ items }) => ({
+    items: items.filter((item) => item.status !== "done"),
+  }));
+}
+
+export async function reconcileImports() {
+  const completed = useBatchImports
+    .getState()
+    .items.filter((item) => item.status === "done");
+  for (const item of completed) {
+    if (!item.jobId) {
+      useBatchImports.setState(({ items }) => ({
+        items: items.filter((current) => current.id !== item.id),
+      }));
+      continue;
+    }
+    try {
+      await api<Job>(`/jobs/${item.jobId}`);
+    } catch (error) {
+      if (error instanceof Error && "status" in error && error.status === 404) {
+        useBatchImports.setState(({ items }) => ({
+          items: items.filter((current) => current.id !== item.id),
+        }));
+      }
+    }
+  }
+}

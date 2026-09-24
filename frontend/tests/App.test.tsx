@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -11,6 +12,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "../src/App";
 import { useWorkbench } from "../src/store";
+import { useAuthStatus } from "../src/authStatus";
+import { useTranscriptSaves } from "../src/transcriptSaves";
+const scrollToMock = vi.fn();
 
 function renderApp() {
   const client = new QueryClient({
@@ -55,6 +59,10 @@ function healthWavFile() {
 
 describe("classroom workbench", () => {
   beforeEach(() => {
+    useAuthStatus.setState({ invalid: false });
+    useTranscriptSaves.setState({ drafts: {} });
+    scrollToMock.mockClear();
+    vi.stubGlobal("scrollTo", scrollToMock);
     useWorkbench.setState({
       page: "upload",
       currentJobId: null,
@@ -141,6 +149,46 @@ describe("classroom workbench", () => {
     expect(screen.getByText("离线推理")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "语言" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "加入转录队列" })).toBeDisabled();
+  });
+
+  it("returns to the top on navigation and labels compact navigation icons", () => {
+    renderApp();
+    const models = screen.getByRole("button", { name: "模型" });
+    expect(models).toHaveAttribute("title", "模型");
+    fireEvent.click(models);
+    expect(scrollToMock).toHaveBeenCalledWith(0, 0);
+  });
+
+  it("hides cached page content when API authentication fails", () => {
+    renderApp();
+    act(() => {
+      useAuthStatus.setState({ invalid: true });
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("鉴权失败");
+    expect(
+      screen.queryByRole("heading", { name: "批量导入课堂" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "前往设置" }));
+    expect(
+      screen.getByRole("heading", { name: "设置与诊断" }),
+    ).toBeInTheDocument();
+  });
+
+  it("opens a restored unsaved draft from the global save notice", () => {
+    useTranscriptSaves.setState({
+      drafts: {
+        segment: {
+          text: "unsaved",
+          version: 1,
+          status: "error",
+          error: "草稿已恢复",
+        },
+      },
+    });
+    renderApp();
+    fireEvent.click(screen.getByRole("button", { name: "打开草稿" }));
+    expect(useWorkbench.getState().selectedSegmentId).toBe("segment");
+    expect(useWorkbench.getState().page).toBe("transcript");
   });
 
   it("navigates to both classroom and live IBus product surfaces", async () => {

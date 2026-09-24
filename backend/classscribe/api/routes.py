@@ -20,6 +20,7 @@ from classscribe.api.schemas import (
     GlossaryTermsUpdate,
     HistoryAction,
     JobCreate,
+    LocalDataClearRequest,
     ModelInstallConfirmation,
     ModelInstallRequest,
     ModelRevisionRequest,
@@ -310,6 +311,18 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
     async def delete_glossary(glossary_id: str) -> dict[str, object]:
         return service.delete_glossary(glossary_id)
 
+    @router.delete("/jobs/{job_id}/derived-data")
+    async def delete_derived_data(job_id: str) -> dict[str, object]:
+        return service.delete_derived_data(job_id)
+
+    @router.delete("/jobs/{job_id}/local-data")
+    async def delete_job_data(job_id: str) -> dict[str, object]:
+        return service.delete_job_data(job_id)
+
+    @router.post("/local-data/clear")
+    async def clear_local_data(value: LocalDataClearRequest) -> dict[str, object]:
+        return service.clear_local_data(value.confirmation)
+
     @router.post("/glossaries/{glossary_id}/documents", status_code=status.HTTP_201_CREATED)
     async def add_glossary_document(
         glossary_id: str,
@@ -318,13 +331,18 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         source_kind: Annotated[TermSource, Header(alias="X-ClassScribe-Material-Kind")],
         language: Annotated[str, Header(alias="X-ClassScribe-Language")],
     ) -> dict[str, object]:
-        return service.add_glossary_document(
-            glossary_id,
-            source_name=source_name,
-            source_kind=source_kind,
-            language=language,
-            content=await request.body(),
-        )
+        try:
+            return service.add_glossary_document(
+                glossary_id,
+                source_name=source_name,
+                source_kind=source_kind,
+                language=language,
+                content=await request.body(),
+            )
+        except UnicodeError as exc:
+            raise HTTPException(status_code=422, detail="材料编码无效, 请使用 UTF-8.") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"材料内容无效: {exc}") from exc
 
     @router.put("/glossaries/{glossary_id}/terms")
     async def update_terms(glossary_id: str, value: GlossaryTermsUpdate) -> dict[str, object]:

@@ -15,6 +15,7 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import func, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from classscribe.api.schemas import (
@@ -55,6 +56,7 @@ from classscribe.db.models import (
     TokenSpan,
     TranscriptSegment,
 )
+from classscribe.deletion import DELETE_ALL_CONFIRMATION, DeletionService
 from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.exports import ExportSegment, ExportToken, render_export
 from classscribe.jobs.audit import ActorType, AuditService, EditableLayer
@@ -601,6 +603,8 @@ class ClassScribeService:
                     "normalized_text": candidate.normalized_text,
                     "confidence_raw": candidate.confidence_raw,
                     "confidence_calibrated": candidate.confidence_calibrated,
+                    "decode_config": candidate.decode_config_json,
+                    "inference_metrics": candidate.inference_metrics_json,
                     "quality": candidate.quality_features_json,
                     "warnings": candidate.warnings_json,
                     "valid": candidate.is_valid,
@@ -1358,6 +1362,71 @@ class ClassScribeService:
             session.delete(record)
         return {"term_id": term, "deleted": True}
 
+    def delete_derived_data(self, job_id: str) -> dict[str, Any]:
+        identifier = _id(job_id, "job_id")
+        with self.sessions() as session:
+            job = session.get(Job, identifier)
+            if job is None:
+                raise _not_found("job")
+            if job.status not in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
+                raise ClassScribeError(
+                    ErrorCode.JOB_STATE_CONFLICT,
+                    "正在处理或可恢复的任务不能删除派生数据",
+                )
+        report = DeletionService(self.paths).delete_derived(identifier)
+        return {
+            "level": report.level.value,
+            "job_id": identifier,
+            "removed_count": len(report.removed),
+        }
+
+    def delete_job_data(self, job_id: str) -> dict[str, Any]:
+        identifier = _id(job_id, "job_id")
+        with self.sessions.begin() as session:
+            job = session.get(Job, identifier)
+            if job is None:
+                raise _not_found("job")
+            if job.status not in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED}:
+                raise ClassScribeError(
+                    ErrorCode.JOB_STATE_CONFLICT,
+                    "请先等待任务结束或取消后再删除",
+                )
+            report = DeletionService(self.paths).delete_job(session, identifier)
+        return {"level": report.level.value, "job_id": identifier, "deleted": True}
+
+    def clear_local_data(self, confirmation: str) -> dict[str, Any]:
+        if confirmation != DELETE_ALL_CONFIRMATION:
+            raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "全量清除确认短语不匹配")
+        with self.sessions() as session:
+            active = session.scalar(
+                select(func.count())
+                .select_from(Job)
+                .where(
+                    Job.status.in_(
+                        (
+                            JobStatus.PENDING,
+                            JobStatus.RUNNING,
+                            JobStatus.PAUSED,
+                            JobStatus.CANCELLING,
+                        )
+                    )
+                )
+            )
+        if active:
+            raise ClassScribeError(
+                ErrorCode.JOB_STATE_CONFLICT,
+                "仍有活动任务, 请先完成或取消这些任务",
+            )
+        bind = self.sessions.kw.get("bind")
+        if isinstance(bind, Engine):
+            bind.dispose()
+        report = DeletionService(self.paths).clear_all(confirmation=confirmation)
+        return {
+            "level": report.level.value,
+            "removed_count": len(report.removed),
+            "restart_required": True,
+        }
+
     def add_glossary_document(
         self,
         glossary_id: str,
@@ -1379,7 +1448,11 @@ class ClassScribeService:
         )
         target = self.paths.data_path(*relative.parts)
         atomic_write_bytes(target, content)
-        imported = import_material(target, language=language, source=source_kind)
+        try:
+            imported = import_material(target, language=language, source=source_kind)
+        except Exception:
+            target.unlink(missing_ok=True)
+            raise
         digest = hashlib.sha256(content).hexdigest()
         with self.sessions.begin() as session:
             session.add(
@@ -1393,9 +1466,13 @@ class ClassScribeService:
                     suggestion_count=len(imported.suggestions),
                 )
             )
-        if imported.suggestions:
+        confirmed = tuple(term for term in imported.suggestions if term.user_confirmed)
+        suggested = tuple(term for term in imported.suggestions if not term.user_confirmed)
+        if confirmed:
+            self._upsert_glossary_terms(identifier, confirmed)
+        if suggested:
             TerminologyRepository(self.sessions).record_suggestions(
-                identifier, imported.suggestions, default_language=language
+                identifier, suggested, default_language=language
             )
         return {
             "file_id": file_id,
@@ -1806,6 +1883,7 @@ class ClassScribeService:
                         speaker=names.get(segment.speaker_id, segment.speaker_id)
                         if segment.speaker_id
                         else None,
+                        timing_quality=segment.timing_quality.value,
                     )
                 )
             return tuple(result)

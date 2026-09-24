@@ -8,13 +8,58 @@ interface Draft {
   version: number;
   status: "waiting" | "saving" | "saved" | "error";
   error?: string | undefined;
+  conflict?: boolean | undefined;
+  serverVersion?: number | undefined;
+  serverText?: string | undefined;
+}
+
+const storageKey = "classscribe-transcript-drafts-v1";
+function restoreDrafts(): Record<string, Draft> {
+  try {
+    const saved = JSON.parse(
+      sessionStorage.getItem(storageKey) ?? "{}",
+    ) as Record<string, Draft>;
+    return Object.fromEntries(
+      Object.entries(saved)
+        .filter(
+          ([, draft]) =>
+            typeof draft.text === "string" && Number.isInteger(draft.version),
+        )
+        .map(([id, draft]) => [
+          id,
+          {
+            ...draft,
+            status: "error" as const,
+            error: draft.error ?? "刷新前的编辑尚未保存，草稿已恢复。",
+          },
+        ]),
+    );
+  } catch {
+    return {};
+  }
 }
 
 export const useTranscriptSaves = create<{ drafts: Record<string, Draft> }>(
   () => ({
-    drafts: {},
+    drafts: restoreDrafts(),
   }),
 );
+useTranscriptSaves.subscribe(({ drafts }) => {
+  try {
+    sessionStorage.setItem(
+      storageKey,
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries(drafts).filter(
+            ([, draft]) => draft.status !== "saved",
+          ),
+        ),
+      ),
+    );
+  } catch {
+    /* Editing remains available when browser storage is full. */
+  }
+});
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const running = new Set<string>();
@@ -31,6 +76,10 @@ export function scheduleTranscriptSave(
   client: QueryClient,
 ) {
   const previous = useTranscriptSaves.getState().drafts[segment.id];
+  if (previous?.conflict) {
+    update(segment.id, { ...previous, text });
+    return;
+  }
   update(segment.id, {
     text,
     version:
@@ -52,7 +101,7 @@ export function scheduleTranscriptSave(
 export async function flushTranscriptSave(id: string, client: QueryClient) {
   if (running.has(id)) return;
   const draft = useTranscriptSaves.getState().drafts[id];
-  if (!draft || draft.status === "saved") return;
+  if (!draft || draft.status === "saved" || draft.conflict) return;
   clearTimeout(timers.get(id));
   timers.delete(id);
   running.add(id);
@@ -81,6 +130,8 @@ export async function flushTranscriptSave(id: string, client: QueryClient) {
       ...latest,
       status: "error",
       error: error instanceof Error ? error.message : "保存失败",
+      conflict:
+        error instanceof Error && "status" in error && error.status === 409,
     });
   } finally {
     running.delete(id);
@@ -91,4 +142,76 @@ export async function flushTranscriptSave(id: string, client: QueryClient) {
   ) {
     void flushTranscriptSave(id, client);
   }
+}
+
+export async function loadLatestTranscriptDraft(id: string) {
+  const draft = useTranscriptSaves.getState().drafts[id];
+  if (!draft) return;
+  try {
+    const latest = await api<Segment>(`/segments/${id}`);
+    update(id, {
+      ...draft,
+      conflict: true,
+      status: "error",
+      serverVersion: latest.version,
+      serverText: latest.user_text ?? latest.smart_corrected_text,
+      error: "版本冲突：请比较服务器最新版与当前草稿，再选择保存或放弃。",
+    });
+  } catch (error) {
+    update(id, {
+      ...draft,
+      status: "error",
+      error: error instanceof Error ? error.message : "读取最新版失败",
+    });
+  }
+}
+
+export async function saveRebasedTranscriptDraft(
+  id: string,
+  client: QueryClient,
+) {
+  const draft = useTranscriptSaves.getState().drafts[id];
+  if (!draft || draft.serverVersion === undefined) return;
+  let latest: Segment;
+  try {
+    latest = await api<Segment>(`/segments/${id}`);
+  } catch (error) {
+    update(id, {
+      ...draft,
+      error: error instanceof Error ? error.message : "读取最新版失败",
+    });
+    return;
+  }
+  if (latest.version !== draft.serverVersion) {
+    update(id, {
+      ...draft,
+      serverVersion: latest.version,
+      serverText: latest.user_text ?? latest.smart_corrected_text,
+      error: "服务器内容再次变化，请重新比较后再保存。",
+    });
+    return;
+  }
+  update(id, {
+    ...draft,
+    version: latest.version,
+    conflict: false,
+    serverVersion: undefined,
+    serverText: undefined,
+    status: "waiting",
+    error: undefined,
+  });
+  await flushTranscriptSave(id, client);
+}
+
+export function discardTranscriptDraft(id: string, client: QueryClient) {
+  clearTimeout(timers.get(id));
+  timers.delete(id);
+  useTranscriptSaves.setState(({ drafts }) => {
+    const next = Object.fromEntries(
+      Object.entries(drafts).filter(([key]) => key !== id),
+    );
+    return { drafts: next };
+  });
+  void client.invalidateQueries({ queryKey: ["segment", id] });
+  void client.invalidateQueries({ queryKey: ["transcript"] });
 }

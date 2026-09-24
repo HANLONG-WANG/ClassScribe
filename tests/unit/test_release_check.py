@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from classscribe.models import ModelRegistry, load_registry
 from classscribe.release_check import (
+    _architecture_errors,
     _load_release_waiver,
     _model_license_errors,
     _model_manifest_bundle_errors,
@@ -63,9 +64,7 @@ def test_release_license_inventory_covers_component_sources() -> None:
     assert _model_license_errors(licenses_path, registry, lock, inventory) == ()
 
     missing_source = deepcopy(inventory)
-    del missing_source["model_weights"]["licenses"][
-        "pyannote/wespeaker-voxceleb-resnet34-LM"
-    ]
+    del missing_source["model_weights"]["licenses"]["pyannote/wespeaker-voxceleb-resnet34-LM"]
     assert _model_license_errors(licenses_path, registry, lock, missing_source) == (
         "source inventory model license map differs from frozen disclosure",
     )
@@ -107,11 +106,22 @@ def test_release_check_applies_exact_waiver_without_changing_raw_evidence() -> N
     }
 
 
+def test_release_check_uses_the_full_architecture_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "classscribe.release_check.runpy.run_path",
+        lambda _path: {"check": lambda _root: ["forbidden consensus matcher"]},
+    )
+    assert "forbidden consensus matcher" in _architecture_errors(ROOT)
+    result = validate_release(ROOT)
+    assert result.checks["final_architecture"] is False
+    assert result.effective_checks["final_architecture"] is False
+
+
 def test_frozen_release_readiness_matches_current_fail_closed_result() -> None:
     result = validate_release(ROOT)
-    frozen = json.loads(
-        (ROOT / "release/release-readiness.json").read_text(encoding="utf-8")
-    )
+    frozen = json.loads((ROOT / "release/release-readiness.json").read_text(encoding="utf-8"))
     release_manifest = json.loads(
         (ROOT / "release/release-manifest.v1.json").read_text(encoding="utf-8")
     )
@@ -151,17 +161,13 @@ def _canonical_json(value: dict[str, Any]) -> bytes:
         ("gate_inventory", "release manifest gates differ from checker gates"),
     ],
 )
-def test_release_waiver_attacks_fail_closed(
-    tmp_path: Path, attack: str, expected: str
-) -> None:
+def test_release_waiver_attacks_fail_closed(tmp_path: Path, attack: str, expected: str) -> None:
     release = tmp_path / "release"
     release.mkdir()
     waiver_path = release / "release-waivers.v1.json"
     source = ROOT / "release/release-waivers.v1.json"
     waiver_path.write_bytes(source.read_bytes())
-    manifest = json.loads(
-        (ROOT / "release/release-manifest.v1.json").read_text(encoding="utf-8")
-    )
+    manifest = json.loads((ROOT / "release/release-manifest.v1.json").read_text(encoding="utf-8"))
     release_gates = tuple(manifest["release_gates"])
 
     if attack == "missing":
@@ -209,22 +215,16 @@ def test_release_waiver_attacks_fail_closed(
 
 
 def test_fail_closed_policy_does_not_apply_an_unreferenced_waiver() -> None:
-    manifest = json.loads(
-        (ROOT / "release/release-manifest.v1.json").read_text(encoding="utf-8")
-    )
+    manifest = json.loads((ROOT / "release/release-manifest.v1.json").read_text(encoding="utf-8"))
     manifest["release_policy"] = "fail_closed"
     del manifest["release_waiver"]
-    waiver, errors = _load_release_waiver(
-        ROOT, manifest, tuple(manifest["release_gates"])
-    )
+    waiver, errors = _load_release_waiver(ROOT, manifest, tuple(manifest["release_gates"]))
     assert waiver is None
     assert errors == ()
 
 
 def test_release_waiver_never_covers_an_engineering_gate() -> None:
-    manifest = json.loads(
-        (ROOT / "release/release-manifest.v1.json").read_text(encoding="utf-8")
-    )
+    manifest = json.loads((ROOT / "release/release-manifest.v1.json").read_text(encoding="utf-8"))
     checks = dict.fromkeys(manifest["release_gates"], True)
     checks["artifact_inventory"] = False
     for gate in ("source_license", "phase12_acceptance", "desktop_matrix"):
@@ -238,9 +238,7 @@ def test_release_waiver_never_covers_an_engineering_gate() -> None:
     )
     assert result.status == "blocked"
     assert result.effective_checks["artifact_inventory"] is False
-    assert result.blocking_reasons == (
-        "release gate remains blocked: artifact_inventory",
-    )
+    assert result.blocking_reasons == ("release gate remains blocked: artifact_inventory",)
     assert result.waived_gates == (
         "source_license",
         "phase12_acceptance",
@@ -344,9 +342,7 @@ def test_release_check_rejects_every_model_bundle_release_attack(
             "config/model-manifests/v1/ark_asr_3b.json"
         )
     elif attack == "generator_lock":
-        release_manifest["dependency_lock_hashes"]["tools/model-manifest/uv.lock"] = (
-            "0" * 64
-        )
+        release_manifest["dependency_lock_hashes"]["tools/model-manifest/uv.lock"] = "0" * 64
     else:  # pragma: no cover - exhaustive parametrization guard
         raise AssertionError(attack)
 

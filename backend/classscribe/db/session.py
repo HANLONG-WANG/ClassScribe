@@ -18,7 +18,12 @@ from classscribe.db.base import Base
 def create_sqlite_engine(path: Path, *, echo: bool = False) -> Engine:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     url = f"sqlite:///{path}"
-    engine = create_engine(url, echo=echo, connect_args={"check_same_thread": False})
+    engine = create_engine(
+        url,
+        echo=echo,
+        hide_parameters=True,
+        connect_args={"check_same_thread": False},
+    )
 
     @event.listens_for(engine, "connect")
     def configure_connection(connection: sqlite3.Connection, _: object) -> None:

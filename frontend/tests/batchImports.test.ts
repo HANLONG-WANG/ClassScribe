@@ -6,7 +6,13 @@ vi.mock("../src/api", () => ({
   authHeaders: () => ({}),
   filenameHeaders: () => ({}),
 }));
-import { addImports, retryImport, useBatchImports } from "../src/batchImports";
+import {
+  addImports,
+  clearCompletedImports,
+  reconcileImports,
+  retryImport,
+  useBatchImports,
+} from "../src/batchImports";
 
 afterEach(() => {
   remote.mockReset();
@@ -51,4 +57,40 @@ it("submits files sequentially, continues after an error, and reuses the submiss
   expect(localStorage.getItem("classscribe-batch-imports-v1")).not.toContain(
     '"file":',
   );
+});
+
+it("removes completed entries missing on the server and allows clearing retained history", async () => {
+  useBatchImports.setState({
+    items: [
+      {
+        id: "old",
+        name: "old.wav",
+        size: 1,
+        options: {},
+        status: "done",
+        progress: 100,
+        jobId: "missing",
+      },
+      {
+        id: "new",
+        name: "new.wav",
+        size: 1,
+        options: {},
+        status: "done",
+        progress: 100,
+        jobId: "present",
+      },
+    ],
+  });
+  remote.mockImplementation((path: string) => {
+    if (path === "/jobs/missing")
+      throw Object.assign(new Error("missing"), { status: 404 });
+    return Promise.resolve({ job_id: "present" });
+  });
+  await reconcileImports();
+  expect(useBatchImports.getState().items.map((item) => item.id)).toEqual([
+    "new",
+  ]);
+  clearCompletedImports();
+  expect(useBatchImports.getState().items).toEqual([]);
 });

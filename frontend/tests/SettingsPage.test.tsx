@@ -49,3 +49,42 @@ it("loads saved controls and sends only changed groups", async () => {
     }),
   );
 });
+
+it("requires the exact phrase before clearing all local data", async () => {
+  const fetch = vi.fn((_url: string, init?: RequestInit) =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify(
+          init?.method === "POST"
+            ? { restart_required: true }
+            : { retention: { derived_days: 30 }, ibus: { save_audio: false } },
+        ),
+      ),
+    ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <SettingsPage />
+    </QueryClientProvider>,
+  );
+  const confirmation = screen.getByRole("textbox", {
+    name: "全量清除确认短语",
+  });
+  const button = screen.getByRole("button", { name: "清除全部本地数据" });
+  expect(button).toBeDisabled();
+  fireEvent.change(confirmation, { target: { value: "wrong" } });
+  expect(button).toBeDisabled();
+  fireEvent.change(confirmation, {
+    target: { value: "DELETE ALL CLASSSCRIBE DATA" },
+  });
+  fireEvent.click(button);
+  expect(await screen.findByText(/本地数据已清除/)).toBeVisible();
+  expect(fetch).toHaveBeenCalledWith(
+    "/api/v1/local-data/clear",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ confirmation: "DELETE ALL CLASSSCRIBE DATA" }),
+    }),
+  );
+});

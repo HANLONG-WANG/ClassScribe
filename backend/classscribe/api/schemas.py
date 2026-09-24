@@ -14,6 +14,10 @@ class APIModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class LocalDataClearRequest(APIModel):
+    confirmation: str
+
+
 class JobCreate(APIModel):
     submission_key: str | None = None
     recording_id: str

@@ -14,9 +14,9 @@
     {
       "id": "funasr-infinite-loop",
       "historical_failure": "A short Japanese phrase repeated indefinitely.",
-      "invariant": "Four repeated 3-10 token n-grams are rejected before consensus.",
+      "invariant": "Repeated phrases request full-coverage review and a model switch while preserving the candidate for consensus.",
       "tests": [
-        "tests/unit/test_quality_gate.py::test_infinite_anata_loop_is_rejected_then_split_with_full_coverage_and_model_switch",
+        "tests/unit/test_quality_gate.py::test_infinite_anata_loop_remains_usable_and_requests_review_with_full_coverage",
         "tests/integration/test_body_asr_workers.py::test_funasr_real_wav_is_expert_gated_and_rejects_detected_generation_loop"
       ]
     },

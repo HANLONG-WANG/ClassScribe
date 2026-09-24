@@ -163,35 +163,35 @@ def dependency_names(manifest: Path) -> set[str]:
     return names
 
 
-def check() -> list[str]:
+def check(root: Path = ROOT) -> list[str]:
     errors: list[str] = []
     for relative in REQUIRED_PATHS:
-        if not (ROOT / relative).exists():
+        if not (root / relative).exists():
             errors.append(f"missing required repository path: {relative}")
 
-    core_manifest_dependencies = dependency_names(ROOT / "pyproject.toml")
+    core_manifest_dependencies = dependency_names(root / "pyproject.toml")
     forbidden_dependencies = core_manifest_dependencies & HEAVY_IMPORTS
     if forbidden_dependencies:
         errors.append(
             f"core manifest includes model/runtime dependencies: {sorted(forbidden_dependencies)}"
         )
 
-    for path in python_files(ROOT / "backend" / "classscribe"):
+    for path in python_files(root / "backend" / "classscribe"):
         forbidden = imported_roots(path) & (HEAVY_IMPORTS | {"workers", "ibus"})
         if forbidden:
             errors.append(
-                f"core boundary violation in {path.relative_to(ROOT)}: {sorted(forbidden)}"
+                f"core boundary violation in {path.relative_to(root)}: {sorted(forbidden)}"
             )
 
-    for path in python_files(ROOT / "backend" / "classscribe" / "consensus"):
+    for path in python_files(root / "backend" / "classscribe" / "consensus"):
         source = path.read_text(encoding="utf-8")
         if "Sequence" + "Matcher" in source:
             errors.append(
-                f"long-text sequence matching is forbidden in consensus: {path.relative_to(ROOT)}"
+                f"long-text sequence matching is forbidden in consensus: {path.relative_to(root)}"
             )
 
     for subsystem in ("jobs", "classroom"):
-        for path in python_files(ROOT / "backend" / "classscribe" / subsystem):
+        for path in python_files(root / "backend" / "classscribe" / subsystem):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
@@ -200,16 +200,16 @@ def check() -> list[str]:
                 if name in MODEL_INSTALL_ENTRYPOINTS:
                     errors.append(
                         "ordinary job execution/recovery may not enter model installation: "
-                        f"{path.relative_to(ROOT)}:{node.lineno}"
+                        f"{path.relative_to(root)}:{node.lineno}"
                     )
                 if isinstance(node.func, ast.Name) and node.func.id == "HuggingFaceDownloader":
                     errors.append(
                         "ordinary job execution/recovery may not construct a downloader: "
-                        f"{path.relative_to(ROOT)}:{node.lineno}"
+                        f"{path.relative_to(root)}:{node.lineno}"
                     )
 
     for worker in WORKERS:
-        worker_root = ROOT / "workers" / worker
+        worker_root = root / "workers" / worker
         for filename in WORKER_FILES:
             if not (worker_root / filename).is_file():
                 errors.append(f"worker {worker} is missing {filename}")
@@ -219,12 +219,12 @@ def check() -> list[str]:
         for path in python_files(worker_root):
             forbidden = imported_roots(path) & {"classscribe"}
             if forbidden:
-                errors.append(f"worker imports core in {path.relative_to(ROOT)}")
+                errors.append(f"worker imports core in {path.relative_to(root)}")
 
     process_roots = {
-        "IBus engine": ROOT / "ibus" / "engine",
-        "dictation daemon": ROOT / "ibus" / "dictationd",
-        "portal companion": ROOT / "ibus" / "hotkey_portal",
+        "IBus engine": root / "ibus" / "engine",
+        "dictation daemon": root / "ibus" / "dictationd",
+        "portal companion": root / "ibus" / "hotkey_portal",
     }
     for label, process_root in process_roots.items():
         for path in python_files(process_root):
@@ -232,25 +232,25 @@ def check() -> list[str]:
             forbidden = imports & (HEAVY_IMPORTS | {"workers", "classscribe"})
             if forbidden:
                 errors.append(
-                    f"{label} boundary violation in {path.relative_to(ROOT)}: {sorted(forbidden)}"
+                    f"{label} boundary violation in {path.relative_to(root)}: {sorted(forbidden)}"
                 )
 
     product_contract = json.loads(
-        (ROOT / "config" / "product-contract.v1.json").read_text(encoding="utf-8")
+        (root / "config" / "product-contract.v1.json").read_text(encoding="utf-8")
     )
     if product_contract["product_surfaces"] != ["classroom_workbench", "ibus_dictation"]:
         errors.append("product surfaces drifted from the frozen contract")
-    for schema in (ROOT / "protocol" / "schema").rglob("*.schema.json"):
+    for schema in (root / "protocol" / "schema").rglob("*.schema.json"):
         data = json.loads(schema.read_text(encoding="utf-8"))
         properties = data.get("properties", {})
         if schema.name == "model-manifest.schema.json":
             if "manifest_version" not in properties:
-                errors.append(f"model schema lacks manifest_version: {schema.relative_to(ROOT)}")
+                errors.append(f"model schema lacks manifest_version: {schema.relative_to(root)}")
         elif schema.name == "model-manifest-bundle.schema.json":
             if "schema_version" not in properties:
-                errors.append(f"bundle schema lacks schema_version: {schema.relative_to(ROOT)}")
+                errors.append(f"bundle schema lacks schema_version: {schema.relative_to(root)}")
         elif schema.name != "product-contract.schema.json" and "protocol_version" not in properties:
-            errors.append(f"protocol schema lacks protocol_version: {schema.relative_to(ROOT)}")
+            errors.append(f"protocol schema lacks protocol_version: {schema.relative_to(root)}")
     return errors
 
 

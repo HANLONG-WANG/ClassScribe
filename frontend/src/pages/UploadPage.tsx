@@ -1,9 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
-import { type ChangeEvent, type SyntheticEvent, useState } from "react";
+import {
+  type ChangeEvent,
+  type SyntheticEvent,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
 import { api, type Glossary, type ModelInfo } from "../api";
 import {
   addImports,
+  clearCompletedImports,
+  reconcileImports,
   useBatchImports,
   retryImport,
   stopImports,
@@ -14,19 +22,85 @@ import { ModelPicker } from "./ModelPicker";
 
 type Language = "zh" | "ja" | "en" | "auto_mixed";
 type Accuracy = "fast" | "balanced" | "highest" | "strict_single";
+const draftKey = "classscribe-upload-draft-v1";
+interface UploadDraft {
+  language: Language;
+  accuracy: Accuracy;
+  speakerCount: string;
+  glossaryId: string;
+  primaryModel: string;
+  outputs: string[];
+  includeFaithful: boolean;
+  includeSmart: boolean;
+  includeSpeakers: boolean;
+}
+const defaultDraft: UploadDraft = {
+  language: "auto_mixed",
+  accuracy: "balanced",
+  speakerCount: "auto",
+  glossaryId: "",
+  primaryModel: "",
+  outputs: ["json", "md", "srt", "vtt"],
+  includeFaithful: true,
+  includeSmart: true,
+  includeSpeakers: true,
+};
+function loadDraft(): UploadDraft {
+  try {
+    return {
+      ...defaultDraft,
+      ...(JSON.parse(
+        sessionStorage.getItem(draftKey) ?? "{}",
+      ) as Partial<UploadDraft>),
+    };
+  } catch {
+    return defaultDraft;
+  }
+}
 
 export function UploadPage() {
+  const draft = useMemo(loadDraft, []);
   const [files, setFiles] = useState<File[]>([]);
   const imports = useBatchImports((state) => state.items);
-  const [language, setLanguage] = useState<Language>("auto_mixed");
-  const [accuracy, setAccuracy] = useState<Accuracy>("balanced");
-  const [speakerCount, setSpeakerCount] = useState("auto");
-  const [glossaryId, setGlossaryId] = useState("");
-  const [primaryModel, setPrimaryModel] = useState("");
-  const [outputs, setOutputs] = useState(["json", "md", "srt", "vtt"]);
-  const [includeFaithful, setIncludeFaithful] = useState(true);
-  const [includeSmart, setIncludeSmart] = useState(true);
-  const [includeSpeakers, setIncludeSpeakers] = useState(true);
+  useEffect(() => {
+    void reconcileImports();
+  }, []);
+  const [language, setLanguage] = useState<Language>(draft.language);
+  const [accuracy, setAccuracy] = useState<Accuracy>(draft.accuracy);
+  const [speakerCount, setSpeakerCount] = useState(draft.speakerCount);
+  const [glossaryId, setGlossaryId] = useState(draft.glossaryId);
+  const [primaryModel, setPrimaryModel] = useState(draft.primaryModel);
+  const [outputs, setOutputs] = useState(draft.outputs);
+  const [includeFaithful, setIncludeFaithful] = useState(draft.includeFaithful);
+  const [includeSmart, setIncludeSmart] = useState(draft.includeSmart);
+  const [includeSpeakers, setIncludeSpeakers] = useState(draft.includeSpeakers);
+
+  useEffect(() => {
+    sessionStorage.setItem(
+      draftKey,
+      JSON.stringify({
+        language,
+        accuracy,
+        speakerCount,
+        glossaryId,
+        primaryModel,
+        outputs,
+        includeFaithful,
+        includeSmart,
+        includeSpeakers,
+      } satisfies UploadDraft),
+    );
+  }, [
+    language,
+    accuracy,
+    speakerCount,
+    glossaryId,
+    primaryModel,
+    outputs,
+    includeFaithful,
+    includeSmart,
+    includeSpeakers,
+  ]);
 
   const glossaries = useQuery({
     queryKey: ["glossaries"],
@@ -37,10 +111,8 @@ export function UploadPage() {
     queryFn: () => api<ModelInfo[]>("/models"),
   });
   function chooseFile(event: ChangeEvent<HTMLInputElement>) {
-    setFiles((current) => [
-      ...current,
-      ...Array.from(event.target.files ?? []),
-    ]);
+    const chosen = Array.from(event.currentTarget.files ?? []);
+    setFiles((current) => [...current, ...chosen]);
     event.target.value = "";
   }
 
@@ -355,6 +427,13 @@ export function UploadPage() {
               }
             >
               停止未完成的导入
+            </button>
+            <button
+              type="button"
+              disabled={!imports.some((item) => item.status === "done")}
+              onClick={clearCompletedImports}
+            >
+              清除已完成记录
             </button>
           </div>
           <div className="import-progress-list">

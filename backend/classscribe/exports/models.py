@@ -57,6 +57,7 @@ class ExportSegment:
     pause_before_ms: int = 0
     chapter_marker: str | None = None
     semantic_boundary_before: bool = False
+    timing_quality: str = "aligned"
 
     def __post_init__(self) -> None:
         if not self.segment_id or self.language not in {"zh", "ja", "en"}:
@@ -76,7 +77,7 @@ class ExportSegment:
 
     def text_for(self, layer: ExportLayer) -> tuple[str, ExportLayer]:
         if layer is ExportLayer.USER:
-            if self.user_text is not None and self.user_text.strip():
+            if self.user_text is not None:
                 return self.user_text, ExportLayer.USER
             if self.smart_corrected_text:
                 return self.smart_corrected_text, ExportLayer.SMART
@@ -86,11 +87,17 @@ class ExportSegment:
 
     def tokens_for(self, layer: ExportLayer) -> tuple[ExportToken, ...]:
         _, resolved = self.text_for(layer)
+        if resolved is ExportLayer.USER and self.user_text == "":
+            return ()
         if resolved is ExportLayer.USER and self.user_tokens:
             return self.user_tokens
         if resolved is ExportLayer.SMART and self.smart_tokens:
             return self.smart_tokens
         return self.faithful_tokens
+
+    @property
+    def coarse_timing(self) -> bool:
+        return self.timing_quality in {"structure", "invalid"}
 
 
 @dataclass(frozen=True, slots=True)

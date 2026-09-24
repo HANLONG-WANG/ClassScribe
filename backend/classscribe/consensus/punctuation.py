@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import unicodedata
-from difflib import SequenceMatcher
 from typing import Any
 
 from classscribe.consensus.models import ConsensusCandidate, FinalToken
@@ -77,32 +76,32 @@ def restore_native_punctuation(
             continue
         source, _, boundaries = _surface(candidate.evidence.raw_text)
         adopted = 0
-        for block in SequenceMatcher(None, source, target, autojunk=False).get_matching_blocks():
-            if not block.size:
+        for position, mark in boundaries.items():
+            if source == target:
+                mapped = position
+            else:
+                # Only use a short, unique exact anchor around this boundary.
+                # A fuzzy alignment across an utterance could copy punctuation
+                # from words selected from another candidate.
+                left = source[max(0, position - 4) : position]
+                right = source[position : position + 4]
+                anchor = left + right
+                if len(anchor) < 4 or source.count(anchor) != 1 or target.count(anchor) != 1:
+                    continue
+                found = target.find(anchor)
+                if position == 0 and found != 0:
+                    continue
+                if position == len(source) and found + len(anchor) != len(target):
+                    continue
+                mapped = found + len(left)
+            if mapped not in offsets:
                 continue
-            matched = source[block.a : block.a + block.size]
-            if source != target and (
-                block.size < 4 or source.count(matched) != 1 or target.count(matched) != 1
-            ):
+            adjacent = owners[max(0, mapped - 1) : min(len(owners), mapped + 1)]
+            if not adjacent or any(owner != candidate.candidate_id for owner in adjacent):
                 continue
-            for position, mark in boundaries.items():
-                # Require matching context on both sides, or matching utterance edges.
-                interior = block.a < position < block.a + block.size
-                start = position == block.a == block.b == 0
-                end = position == block.a + block.size == len(
-                    source
-                ) and block.b + block.size == len(target)
-                if not (interior or start or end):
-                    continue
-                mapped = block.b + position - block.a
-                if mapped not in offsets:
-                    continue
-                adjacent = owners[max(0, mapped - 1) : min(len(owners), mapped + 1)]
-                if not adjacent or any(owner != candidate.candidate_id for owner in adjacent):
-                    continue
-                ordinal = offsets[mapped]
-                marks.setdefault(ordinal, mark)
-                adopted += 1
+            ordinal = offsets[mapped]
+            marks.setdefault(ordinal, mark)
+            adopted += 1
         if adopted:
             evidence.append(
                 {

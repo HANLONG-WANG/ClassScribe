@@ -55,20 +55,49 @@ it("keeps the player on text-layer changes and seeks on the full recording timel
     tokens: [],
     version: 1,
   };
+  const other = {
+    ...segment,
+    id: "other",
+    start_sample: 0,
+    end_sample: 30 * 16000,
+    smart_corrected_text: "Earlier",
+    low_confidence: false,
+  };
   vi.stubGlobal(
     "fetch",
-    vi.fn((url: string) =>
+    vi.fn((url: string, init?: RequestInit) =>
       Promise.resolve(
         new Response(
           JSON.stringify(
-            url.includes("/transcript?")
-              ? { segments: [segment] }
-              : url.endsWith("/candidates")
-                ? []
-                : url.endsWith("/segments/s")
-                  ? segment
-                  : { job_id: "job", recording_id: "recording" },
+            url.endsWith("/undo") && init?.method === "POST"
+              ? { error: { detail: "没有可撤销的历史" } }
+              : url.includes("low_confidence_only=true")
+                ? { segments: [segment] }
+                : url.includes("/transcript?")
+                  ? { segments: [other, segment] }
+                  : url.endsWith("/candidates")
+                    ? [
+                        {
+                          id: "c",
+                          model_id: "asr",
+                          model_revision: "a".repeat(40),
+                          raw_text: "raw candidate",
+                          normalized_text: "Hello",
+                          confidence_raw: 0.4,
+                          confidence_calibrated: 0.5,
+                          decode_config: { beam: 3 },
+                          inference_metrics: { latency_ms: 8 },
+                          quality: {},
+                          warnings: [],
+                          valid: true,
+                          adopted: false,
+                        },
+                      ]
+                    : url.endsWith("/segments/s")
+                      ? segment
+                      : { job_id: "job", recording_id: "recording" },
           ),
+          { status: url.endsWith("/undo") ? 409 : 200 },
         ),
       ),
     ),
@@ -95,8 +124,20 @@ it("keeps the player on text-layer changes and seeks on the full recording timel
     target: { value: "1.5" },
   });
   expect(player.setPlaybackRate).toHaveBeenCalledWith(1.5);
-  const track = document.querySelector(".timeline-track > div > span");
-  expect(track).toHaveStyle({ left: "25%", width: "25%" });
+  const tracks = document.querySelectorAll(".timeline-track > div > span");
+  expect(tracks).toHaveLength(4);
+  expect(tracks[1]).toHaveStyle({ left: "25%", width: "25%" });
+  expect(
+    screen.queryByRole("button", { name: /Earlier/ }),
+  ).not.toBeInTheDocument();
+  fireEvent.click(await screen.findByText("完整候选证据"));
+  expect(screen.getByText(`完整 revision：${"a".repeat(40)}`)).toBeVisible();
+  expect(screen.getByText(/raw candidate/)).toBeVisible();
+  expect(screen.getByText(/beam/)).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "撤销" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "没有可撤销的历史",
+  );
   fireEvent.click(screen.getByRole("checkbox", { name: /仅低置信度/ }));
   await waitFor(() => {
     expect(player.create).toHaveBeenCalledTimes(1);

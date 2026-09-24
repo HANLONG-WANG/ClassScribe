@@ -131,12 +131,15 @@ def export_diagnostic_bundle(destination: Path, snapshot: DiagnosticSnapshot) ->
     atomic_write_bytes(destination, diagnostic_bundle_bytes(snapshot), mode=0o600)
 
 
-def diagnostic_bundle_bytes(snapshot: DiagnosticSnapshot) -> bytes:
+def diagnostic_bundle_bytes(
+    snapshot: DiagnosticSnapshot, *, ibus: dict[str, object] | None = None
+) -> bytes:
     """Return the same redacted bundle for authenticated HTTP download."""
 
-    serialized = json.dumps(
-        snapshot_payload(snapshot), ensure_ascii=False, indent=2, sort_keys=True
-    ).encode("utf-8")
+    payload = snapshot_payload(snapshot)
+    if ibus is not None:
+        payload["ibus"] = redact(ibus, home=Path.home())
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         info = zipfile.ZipInfo("diagnostics.json")

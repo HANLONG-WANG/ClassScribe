@@ -2,23 +2,55 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { api, authHeaders, type ApiObject, setApiToken } from "../api";
+import { useAuthStatus } from "../authStatus";
+import { useBatchImports } from "../batchImports";
+import { useTranscriptSaves } from "../transcriptSaves";
+
+const deleteAllPhrase = "DELETE ALL CLASSSCRIBE DATA";
 
 export function SettingsPage() {
   const client = useQueryClient();
+  const authInvalid = useAuthStatus((state) => state.invalid);
   const [token, setToken] = useState("");
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [localCleared, setLocalCleared] = useState(false);
   const [retentionEdit, setRetentionDays] = useState<number | undefined>();
   const [audioEdit, setSaveDictationAudio] = useState<boolean | undefined>();
   const settings = useQuery({
     queryKey: ["settings"],
     queryFn: () => api<Record<string, ApiObject>>("/settings"),
   });
+  const settingsData = authInvalid || localCleared ? undefined : settings.data;
+  const clearAll = useMutation({
+    mutationFn: () =>
+      api<{ restart_required: boolean }>("/local-data/clear", {
+        method: "POST",
+        body: JSON.stringify({ confirmation: deleteConfirmation }),
+      }),
+    onSuccess: () => {
+      setLocalCleared(true);
+      setDeleteConfirmation("");
+      setApiToken("");
+      useBatchImports.setState({ items: [] });
+      useTranscriptSaves.setState({ drafts: {} });
+      localStorage.removeItem("classscribe-batch-imports-v1");
+      for (const key of [
+        "classscribe-transcript-drafts-v1",
+        "classscribe-current-job",
+        "classscribe-current-page",
+        "classscribe-upload-draft-v1",
+        "classscribe-token",
+      ])
+        sessionStorage.removeItem(key);
+    },
+  });
   const retentionDays =
     retentionEdit ??
-    (typeof settings.data?.retention?.derived_days === "number"
-      ? settings.data.retention.derived_days
+    (typeof settingsData?.retention?.derived_days === "number"
+      ? settingsData.retention.derived_days
       : 30);
   const saveDictationAudio =
-    audioEdit ?? settings.data?.ibus?.save_audio === true;
+    audioEdit ?? settingsData?.ibus?.save_audio === true;
   const diagnostics = useQuery({
     queryKey: ["diagnostics"],
     queryFn: () => api<ApiObject>("/diagnostics"),
@@ -32,7 +64,7 @@ export function SettingsPage() {
             ...(retentionEdit !== undefined
               ? {
                   retention: {
-                    ...settings.data?.retention,
+                    ...settingsData?.retention,
                     derived_days: retentionDays,
                   },
                 }
@@ -40,7 +72,7 @@ export function SettingsPage() {
             ...(audioEdit !== undefined
               ? {
                   ibus: {
-                    ...settings.data?.ibus,
+                    ...settingsData?.ibus,
                     save_audio: saveDictationAudio,
                   },
                 }
@@ -92,6 +124,7 @@ export function SettingsPage() {
                 value={token}
               />
               <button
+                disabled={localCleared}
                 onClick={() => {
                   setApiToken(token);
                   void client.invalidateQueries();
@@ -103,11 +136,14 @@ export function SettingsPage() {
             </div>
           </label>
           <small>所有写请求同时携带 bearer 与 CSRF token。</small>
+          {localCleared && (
+            <p role="status">本地数据已清除。请重启 ClassScribe 后再使用。</p>
+          )}
           <h2>数据生命周期</h2>
           <label>
             <span>派生缓存保留天数</span>
             <input
-              disabled={!settings.data || save.isPending}
+              disabled={!settingsData || save.isPending}
               min="1"
               onChange={(event) => {
                 setRetentionDays(event.target.valueAsNumber);
@@ -118,7 +154,7 @@ export function SettingsPage() {
           </label>
           <label className="toggle-line">
             <input
-              disabled={!settings.data || save.isPending}
+              disabled={!settingsData || save.isPending}
               checked={saveDictationAudio}
               onChange={(event) => {
                 setSaveDictationAudio(event.target.checked);
@@ -130,7 +166,7 @@ export function SettingsPage() {
           <button
             className="primary-button"
             disabled={
-              !settings.data ||
+              !settingsData ||
               save.isPending ||
               !Number.isInteger(retentionDays) ||
               retentionDays < 1
@@ -145,12 +181,45 @@ export function SettingsPage() {
           {save.error && <p role="alert">{save.error.message}</p>}
           {settings.error && <p role="alert">{settings.error.message}</p>}
           {save.isSuccess && <p role="status">设置已保存</p>}
-          <pre>{JSON.stringify(settings.data ?? {}, null, 2)}</pre>
+          <pre>{JSON.stringify(settingsData ?? {}, null, 2)}</pre>
+          <h2>清除全部本地数据</h2>
+          <p>
+            将清空 ClassScribe
+            的设置、录音、模型缓存、任务和导出。执行后需重启应用。
+          </p>
+          <label>
+            输入确认短语 <code>{deleteAllPhrase}</code>
+            <input
+              aria-label="全量清除确认短语"
+              value={deleteConfirmation}
+              onChange={(event) => {
+                setDeleteConfirmation(event.target.value);
+              }}
+            />
+          </label>
+          <button
+            className="danger-button"
+            type="button"
+            disabled={
+              localCleared ||
+              clearAll.isPending ||
+              deleteConfirmation !== deleteAllPhrase
+            }
+            onClick={() => {
+              clearAll.mutate();
+            }}
+          >
+            {clearAll.isPending ? "正在清除…" : "清除全部本地数据"}
+          </button>
+          {clearAll.error && (
+            <p role="alert">清除失败：{clearAll.error.message}</p>
+          )}
         </article>
         <article className="panel diagnostic-panel">
           <div className="card-top">
             <h2>本机诊断</h2>
             <button
+              disabled={authInvalid || localCleared}
               onClick={() => {
                 void diagnostics.refetch();
               }}
@@ -159,6 +228,7 @@ export function SettingsPage() {
               刷新
             </button>
             <button
+              disabled={authInvalid || localCleared}
               onClick={() => {
                 void downloadDiagnostics();
               }}
@@ -172,7 +242,9 @@ export function SettingsPage() {
           ) : (
             <pre>
               {JSON.stringify(
-                diagnostics.data ?? { error: diagnostics.error?.message },
+                (authInvalid ? undefined : diagnostics.data) ?? {
+                  error: diagnostics.error?.message,
+                },
                 null,
                 2,
               )}

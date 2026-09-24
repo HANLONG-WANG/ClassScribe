@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import runpy
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
@@ -343,9 +344,7 @@ def _release_result(
 ) -> ReleaseCheckResult:
     waiver, waiver_errors = _load_release_waiver(root, manifest, tuple(checks))
     waived_gates = waiver.gates if waiver is not None else ()
-    effective_checks = {
-        gate: passed or gate in waived_gates for gate, passed in checks.items()
-    }
+    effective_checks = {gate: passed or gate in waived_gates for gate, passed in checks.items()}
     unresolved = tuple(
         f"release gate remains blocked: {gate}"
         for gate, passed in effective_checks.items()
@@ -416,12 +415,9 @@ def _load_release_waiver(
     if not isinstance(expected_sha, str) or _SHA256_RE.fullmatch(expected_sha) is None:
         errors.append("release waiver SHA-256 is invalid")
     artifact_groups = manifest.get("required_artifacts")
-    inventoried = (
-        isinstance(artifact_groups, dict)
-        and any(
-            isinstance(group, list) and _WAIVER_RELATIVE.as_posix() in group
-            for group in artifact_groups.values()
-        )
+    inventoried = isinstance(artifact_groups, dict) and any(
+        isinstance(group, list) and _WAIVER_RELATIVE.as_posix() in group
+        for group in artifact_groups.values()
     )
     if not inventoried:
         errors.append("release manifest omits waiver artifact")
@@ -429,11 +425,7 @@ def _load_release_waiver(
         return None, tuple(errors)
 
     path = root / _WAIVER_RELATIVE
-    if (
-        path.is_symlink()
-        or not path.is_file()
-        or not path.resolve().is_relative_to(root.resolve())
-    ):
+    if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(root.resolve()):
         return None, ("release waiver is missing or unsafe",)
     raw = path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
@@ -528,9 +520,7 @@ def _strict_canonical_json_object(raw: bytes) -> dict[str, Any]:
     value = json.loads(text, object_pairs_hook=reject_duplicate_pairs)
     if not isinstance(value, dict):
         raise ValueError("JSON root must be an object")
-    canonical = (
-        json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-    ).encode()
+    canonical = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode()
     if raw != canonical:
         raise ValueError("JSON bytes are not canonical")
     return value
@@ -744,9 +734,7 @@ def _model_manifest_bundle_errors(
     return tuple(errors)
 
 
-def _model_selection_errors(
-    root: Path, bundle: LoadedManifestBundle
-) -> tuple[str, ...]:
+def _model_selection_errors(root: Path, bundle: LoadedManifestBundle) -> tuple[str, ...]:
     selection_path = root / _SELECTION_RELATIVE
     if selection_path.is_symlink() or not selection_path.is_file():
         return ("model file selection is missing or unsafe",)
@@ -848,9 +836,7 @@ def _dependency_lock_errors(root: Path, registry: ModelRegistry) -> tuple[str, .
     return tuple(errors)
 
 
-def _release_dependency_lock_errors(
-    root: Path, manifest: dict[str, Any]
-) -> tuple[str, ...]:
+def _release_dependency_lock_errors(root: Path, manifest: dict[str, Any]) -> tuple[str, ...]:
     raw_locks = manifest.get("dependency_lock_hashes")
     if not isinstance(raw_locks, dict):
         return ("release manifest dependency_lock_hashes must be an object",)
@@ -863,8 +849,10 @@ def _release_dependency_lock_errors(
         if relative.is_absolute() or ".." in relative.parts or relative.as_posix() != raw_path:
             errors.append(f"unsafe release dependency lock path: {raw_path}")
             continue
-        if not isinstance(expected_digest, str) or len(expected_digest) != 64 or any(
-            character not in "0123456789abcdef" for character in expected_digest
+        if (
+            not isinstance(expected_digest, str)
+            or len(expected_digest) != 64
+            or any(character not in "0123456789abcdef" for character in expected_digest)
         ):
             errors.append(f"invalid release dependency lock hash: {raw_path}")
             continue
@@ -882,6 +870,18 @@ def _release_dependency_lock_errors(
 def _architecture_errors(root: Path) -> tuple[str, ...]:
     value = _json_object(root / "config/final-architecture.v1.json")
     errors = list(_architecture_manifest_errors(value))
+    checker_path = root / "scripts/check_architecture.py"
+    if checker_path.is_symlink() or not checker_path.is_file():
+        errors.append("architecture checker is missing or unsafe")
+    else:
+        try:
+            checker = runpy.run_path(str(checker_path)).get("check")
+            if not callable(checker):
+                errors.append("architecture checker has no check function")
+            else:
+                errors.extend(checker(root))
+        except Exception as exc:
+            errors.append(f"architecture checker failed: {type(exc).__name__}")
     evidence = {
         "moss_structure": root / "backend/classscribe/structure/pipeline.py",
         "language_specific_sentence_asr": root / "backend/classscribe/asr/pipeline.py",
