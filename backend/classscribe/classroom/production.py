@@ -30,6 +30,7 @@ from classscribe.alignment import (
     parse_alignment_response,
     select_canonical_timing,
 )
+from classscribe.alignment.provenance import sources_for_span
 from classscribe.alignment.validation import validate_timing
 from classscribe.asr.models import (
     ASRCandidateEvidence,
@@ -1253,6 +1254,7 @@ class ProductionStageRunner:
             for source in token.provenance_json.get("candidate_sources", [])
             if isinstance(source, dict) and source.get("candidate_id")
         }
+        source_values = tuple(sources.values())
         reliability_sources = {
             str(token.provenance_json["reliability_source"])
             for token in old_tokens
@@ -1281,7 +1283,9 @@ class ProductionStageRunner:
                 confidence=None,
                 provenance_json={
                     "source_type": "final_text_alignment",
-                    "candidate_sources": list(sources.values()),
+                    "candidate_sources": sources_for_span(
+                        source_values, token.span.start_sample, token.span.end_sample
+                    ),
                     "reliability_source": (
                         sorted(reliability_sources)[0]
                         if len(reliability_sources) == 1

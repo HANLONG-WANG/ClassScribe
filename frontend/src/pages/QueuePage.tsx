@@ -39,6 +39,9 @@ export function QueuePage() {
   });
   const pending =
     query.data?.items.filter((item) => item.status === "pending") ?? [];
+  const pendingPositions = new Map(
+    pending.map((item, index) => [item.job_id, index]),
+  );
   return (
     <section className="page-stack" aria-labelledby="queue-title">
       <header className="page-header">
@@ -96,9 +99,7 @@ export function QueuePage() {
             </p>
           )}
           {query.data.items.map((item) => {
-            const index = pending.findIndex(
-              (entry) => entry.job_id === item.job_id,
-            );
+            const index = pendingPositions.get(item.job_id) ?? -1;
             return (
               <article className="panel queue-card" key={item.job_id}>
                 <strong>{item.source_name}</strong>

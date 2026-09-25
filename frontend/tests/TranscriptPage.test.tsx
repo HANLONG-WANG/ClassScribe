@@ -52,6 +52,7 @@ it("keeps the player on text-layer changes and seeks on the full recording timel
     smart_corrected_text: "Hello",
     faithful_text: "Hello",
     quality_score: 0.5,
+    low_confidence: true,
     tokens: [],
     version: 1,
   };
@@ -108,6 +109,17 @@ it("keeps the player on text-layer changes and seeks on the full recording timel
     </QueryClientProvider>,
   );
   const row = await screen.findByRole("button", { name: /Hello/ });
+  expect(
+    vi
+      .mocked(fetch)
+      .mock.calls.filter(
+        ([url]) => typeof url === "string" && url.includes("/transcript?"),
+      ),
+  ).toHaveLength(1);
+  expect(fetch).toHaveBeenCalledWith(
+    "/api/v1/jobs/job/transcript?include_tokens=false",
+    expect.anything(),
+  );
   await waitFor(() => {
     expect(player.create).toHaveBeenCalledTimes(1);
   });
@@ -158,5 +170,60 @@ it("keeps the player on text-layer changes and seeks on the full recording timel
         }),
       }),
     );
+  });
+});
+
+it("opens a long transcript before loading its recording waveform", async () => {
+  player.create.mockImplementation(() => ({
+    on: vi.fn(),
+    destroy: player.destroy,
+  }));
+  useWorkbench.setState({
+    currentJobId: "long-job",
+    selectedSegmentId: null,
+    lowConfidenceOnly: false,
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(
+            url.includes("/transcript?")
+              ? {
+                  segments: [
+                    {
+                      id: "long-segment",
+                      start_sample: 0,
+                      end_sample: 60 * 60 * 16000,
+                      language: "en",
+                      smart_corrected_text: "Long recording",
+                      faithful_text: "Long recording",
+                      quality_score: 0.9,
+                      low_confidence: false,
+                      tokens: [],
+                      version: 1,
+                    },
+                  ],
+                }
+              : { job_id: "long-job", recording_id: "recording" },
+          ),
+          { status: 200 },
+        ),
+      ),
+    ),
+  );
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <TranscriptPage />
+    </QueryClientProvider>,
+  );
+  expect(
+    await screen.findByRole("button", { name: /Long recording/ }),
+  ).toBeVisible();
+  expect(player.create).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "加载音频波形" }));
+  await waitFor(() => {
+    expect(player.create).toHaveBeenCalledOnce();
   });
 });

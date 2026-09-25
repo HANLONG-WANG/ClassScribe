@@ -166,6 +166,76 @@ def test_production_uses_matching_existing_timing_before_aligner(
         )
 
 
+def test_forced_alignment_keeps_provenance_local_to_each_token(
+    database: tuple[Engine, sessionmaker[Session], Path], tmp_path: Path
+) -> None:
+    from classscribe.db.models import ASRCandidate, TokenSpan
+
+    async def invoke(*args: Any) -> Any:
+        pytest.fail("native timing should avoid model invocation")
+
+    runner = make_runner(tmp_path, invoke)
+    with database[1].begin() as session:
+        job, segment, checkpoint = setup_segment(session)
+        candidate = ASRCandidate(
+            segment_id=segment.id,
+            model_id="test",
+            model_revision="a" * 40,
+            raw_text="Hello world",
+            normalized_text="Hello world",
+            is_valid=True,
+        )
+        session.add(candidate)
+        session.flush()
+        for index, (word, start, end) in enumerate(
+            (("Hello", 100, 16000), ("world", 16000, 31900))
+        ):
+            session.add(
+                TokenSpan(
+                    segment_id=segment.id,
+                    candidate_id=candidate.id,
+                    token=word,
+                    normalized_token=word,
+                    start_sample=start,
+                    end_sample=end,
+                    provenance_json={"native_model_time": True},
+                )
+            )
+            session.add(
+                TokenSpan(
+                    segment_id=segment.id,
+                    candidate_id=None,
+                    token=word,
+                    normalized_token=word,
+                    start_sample=start,
+                    end_sample=end,
+                    provenance_json={
+                        "candidate_sources": [
+                            {
+                                "candidate_id": candidate.id,
+                                "source_token_index": index,
+                                "source_start_sample": start,
+                                "source_end_sample": end,
+                            }
+                        ]
+                    },
+                )
+            )
+        session.flush()
+        runner._forced_alignment(session, job, checkpoint)
+        session.flush()
+        aligned = session.scalars(
+            select(TokenSpan)
+            .where(TokenSpan.segment_id == segment.id, TokenSpan.candidate_id.is_(None))
+            .order_by(TokenSpan.start_sample)
+        ).all()
+        assert len(aligned) == 2
+        assert [
+            [source["source_token_index"] for source in token.provenance_json["candidate_sources"]]
+            for token in aligned
+        ] == [[0], [1]]
+
+
 @pytest.mark.parametrize("faithful,smart", [(True, False), (False, True), (True, True)])
 def test_automatic_export_honors_layers_and_speakers(
     database: tuple[Engine, sessionmaker[Session], Path],

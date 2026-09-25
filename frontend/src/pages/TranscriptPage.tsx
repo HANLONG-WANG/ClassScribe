@@ -37,8 +37,11 @@ function Waveform({
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [loadRequested, setLoadRequested] = useState(
+    duration <= 30 * 60 * 16000,
+  );
   useEffect(() => {
-    if (target.current === null) return;
+    if (!loadRequested || target.current === null) return;
     const wave = WaveSurfer.create({
       container: target.current,
       url: `/api/v1/recordings/${job.recording_id}/media`,
@@ -75,9 +78,19 @@ function Waveform({
       onReady(null);
       wave.destroy();
     };
-  }, [job.recording_id, onReady]);
+  }, [job.recording_id, loadRequested, onReady]);
   return (
     <>
+      {!loadRequested && (
+        <button
+          type="button"
+          onClick={() => {
+            setLoadRequested(true);
+          }}
+        >
+          加载音频波形
+        </button>
+      )}
       <div
         aria-label={`音频波形，共 ${formatSamples(duration)}`}
         className="waveform"
@@ -136,7 +149,9 @@ function Waveform({
             ))}
           </select>
         </label>
-        {!ready && !error && <span role="status">音频加载中…</span>}
+        {loadRequested && !ready && !error && (
+          <span role="status">音频加载中…</span>
+        )}
       </div>
       <p className="muted">点击波形或句段可定位音频，再按播放开始收听。</p>
       {error && <p role="alert">音频不可播放：{error}</p>}
@@ -169,22 +184,9 @@ export function TranscriptPage() {
     enabled: jobId !== null,
   });
   const transcript = useQuery({
-    queryKey: ["transcript", jobId, lowOnly],
-    placeholderData: (previous, previousQuery) =>
-      previousQuery?.queryKey[1] === jobId ? previous : undefined,
-
+    queryKey: ["transcript", jobId, "summary"],
     queryFn: () =>
-      api<Transcript>(
-        `/jobs/${String(jobId)}/transcript?low_confidence_only=${String(lowOnly)}`,
-      ),
-    enabled: jobId !== null,
-  });
-  const fullTimeline = useQuery({
-    queryKey: ["transcript", jobId, false],
-    queryFn: () =>
-      api<Transcript>(
-        `/jobs/${String(jobId)}/transcript?low_confidence_only=false`,
-      ),
+      api<Transcript>(`/jobs/${String(jobId)}/transcript?include_tokens=false`),
     enabled: jobId !== null,
   });
   const recording = useQuery({
@@ -261,21 +263,20 @@ export function TranscriptPage() {
   });
 
   if (jobId === null) return <p className="empty-state">请先创建课堂任务。</p>;
-  if (job.isError || transcript.isError || fullTimeline.isError)
+  if (job.isError || transcript.isError)
     return (
-      <p role="alert">
-        {job.error?.message ??
-          transcript.error?.message ??
-          fullTimeline.error?.message}
-      </p>
+      <p role="alert">{job.error?.message ?? transcript.error?.message}</p>
     );
-  if (!job.data || !transcript.data || !fullTimeline.data)
+  if (!job.data || !transcript.data)
     return <p className="loading">正在加载可追溯转录稿…</p>;
-  const segments = transcript.data.segments;
+  const fullSegments = transcript.data.segments;
+  const segments = lowOnly
+    ? fullSegments.filter((segment) => segment.low_confidence)
+    : fullSegments;
   const duration = Math.max(
     1,
     mediaDuration || recording.data?.duration_samples || 0,
-    segments.reduce((end, segment) => Math.max(end, segment.end_sample), 0),
+    fullSegments.reduce((end, segment) => Math.max(end, segment.end_sample), 0),
   );
 
   function seek(segment: Segment) {
@@ -326,13 +327,13 @@ export function TranscriptPage() {
         />
         <TimelineTrack
           label="说话人"
-          segments={fullTimeline.data.segments}
+          segments={fullSegments}
           duration={duration}
           value={(item) => item.speaker_name ?? item.speaker_id ?? "未知"}
         />
         <TimelineTrack
           label="语言"
-          segments={fullTimeline.data.segments}
+          segments={fullSegments}
           duration={duration}
           value={(item) => item.language.toUpperCase()}
         />
@@ -388,7 +389,7 @@ export function TranscriptPage() {
                   <span className="anomaly-tag">
                     {segment.repetition_warning.all_candidates
                       ? "所有候选均疑似重复"
-                      : "疑似重复"}{" "}
+                      : "候选疑似重复"}{" "}
                     · 待复核
                   </span>
                 )}

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import os
 import tempfile
 import wave
-from collections.abc import AsyncIterable, Callable, Mapping
+from collections.abc import AsyncIterable, Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from io import BytesIO
 from itertools import pairwise
@@ -18,6 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from classscribe.alignment.provenance import compact_token_provenance
 from classscribe.api.schemas import (
     ApplyRanking,
     BenchmarkCreate,
@@ -176,11 +178,11 @@ class ClassScribeService:
                         raise ClassScribeError(
                             ErrorCode.UPLOAD_TOO_LARGE, "upload exceeds byte limit"
                         )
-                    handle.write(chunk)
+                    await asyncio.to_thread(handle.write, chunk)
                     digest.update(chunk)
-                handle.flush()
-                os.fsync(handle.fileno())
-            metadata = FFmpegMediaPipeline().probe(temporary)
+                await asyncio.to_thread(handle.flush)
+                await asyncio.to_thread(os.fsync, handle.fileno())
+            metadata = await asyncio.to_thread(FFmpegMediaPipeline().probe, temporary)
             duration = int(metadata.duration_seconds * 16000)
             self.upload_limits.validate(
                 source_name=source_name,
@@ -482,7 +484,13 @@ class ClassScribeService:
         pipeline.schedule(identifier)
         return {"job_id": identifier, "segment_id": segment, "checkpoints_queued": count}
 
-    def transcript(self, job_id: str, *, low_confidence_only: bool = False) -> dict[str, Any]:
+    def transcript(
+        self,
+        job_id: str,
+        *,
+        low_confidence_only: bool = False,
+        include_tokens: bool = True,
+    ) -> dict[str, Any]:
         identifier = _id(job_id, "job_id")
         with self.sessions() as session:
             if session.get(Job, identifier) is None:
@@ -502,10 +510,146 @@ class ClassScribeService:
                     for item in segments
                     if item.quality_score is None or item.quality_score < 0.82
                 )
+            speaker_names = {
+                item.speaker_global_id: item.display_name
+                for item in session.scalars(
+                    select(SpeakerDisplayName).where(SpeakerDisplayName.job_id == identifier)
+                )
+            }
+            if include_tokens:
+                payloads: list[dict[str, Any]] = []
+                for start in range(0, len(segments), 8):
+                    batch = segments[start : start + 8]
+                    segment_ids = [item.id for item in batch]
+                    tokens_by_segment: dict[str, list[TokenSpan]] = {}
+                    candidates_by_segment: dict[str, list[ASRCandidate]] = {}
+                    token_query = (
+                        select(TokenSpan)
+                        .where(
+                            TokenSpan.segment_id.in_(segment_ids),
+                            TokenSpan.candidate_id.is_(None),
+                        )
+                        .order_by(TokenSpan.segment_id, TokenSpan.start_sample, TokenSpan.id)
+                    )
+                    for token in session.scalars(token_query):
+                        tokens_by_segment.setdefault(token.segment_id, []).append(token)
+                    candidate_query = select(ASRCandidate).where(
+                        ASRCandidate.segment_id.in_(segment_ids),
+                        ASRCandidate.deleted_at.is_(None),
+                    )
+                    for candidate in session.scalars(candidate_query):
+                        candidates_by_segment.setdefault(candidate.segment_id, []).append(candidate)
+                    payloads.extend(
+                        self._segment_payload(
+                            session,
+                            item,
+                            tokens=tokens_by_segment.get(item.id, []),
+                            candidates=candidates_by_segment.get(item.id, []),
+                            speaker_names=speaker_names,
+                        )
+                        for item in batch
+                    )
+                return {
+                    "job_id": identifier,
+                    "timeline": "absolute_samples_16000_hz",
+                    "segments": payloads,
+                }
+
+            # The workbench list needs segment text and timing, while provenance is
+            # fetched through /segments/{id} only when a segment is selected.
+            from classscribe.quality.models import REPETITION_ISSUES
+
+            repetition_codes = {issue.value for issue in REPETITION_ISSUES}
+            warning_candidates_by_segment: dict[str, list[Any]] = {}
+            candidate_query = (
+                select(
+                    ASRCandidate.segment_id,
+                    ASRCandidate.model_id,
+                    ASRCandidate.is_valid,
+                    ASRCandidate.normalized_text,
+                    ASRCandidate.quality_features_json,
+                )
+                .join(TranscriptSegment, ASRCandidate.segment_id == TranscriptSegment.id)
+                .where(
+                    TranscriptSegment.job_id == identifier,
+                    TranscriptSegment.is_active.is_(True),
+                    ASRCandidate.deleted_at.is_(None),
+                )
+            )
+            for candidate_row in session.execute(candidate_query):
+                warning_candidates_by_segment.setdefault(candidate_row.segment_id, []).append(
+                    candidate_row
+                )
+            summaries = []
+            for segment in segments:
+                candidates = warning_candidates_by_segment.get(segment.id, [])
+                repeated = [
+                    candidate
+                    for candidate in candidates
+                    if candidate.is_valid
+                    and repetition_codes.intersection(
+                        (candidate.quality_features_json or {}).get("issues", [])
+                    )
+                ]
+                repetition_warning = None
+                if repeated:
+                    usable = [
+                        candidate
+                        for candidate in candidates
+                        if candidate.is_valid and candidate.normalized_text.strip()
+                    ]
+                    repetition_warning = {
+                        "all_candidates": len(usable) > 1 and len(repeated) == len(usable),
+                        "candidates": [
+                            {
+                                "model_id": candidate.model_id,
+                                "fragment": (candidate.quality_features_json or {})
+                                .get("text_features", {})
+                                .get("repeated_fragment", ""),
+                                "issues": [
+                                    issue
+                                    for issue in (candidate.quality_features_json or {}).get(
+                                        "issues", []
+                                    )
+                                    if issue in repetition_codes
+                                ],
+                            }
+                            for candidate in repeated
+                        ],
+                    }
+                summaries.append(
+                    {
+                        "id": segment.id,
+                        "job_id": segment.job_id,
+                        "start_sample": segment.start_sample,
+                        "end_sample": segment.end_sample,
+                        "speaker_id": segment.speaker_id,
+                        "speaker_name": (
+                            speaker_names.get(segment.speaker_id) if segment.speaker_id else None
+                        ),
+                        "language": segment.language.value,
+                        "raw_text": segment.raw_text,
+                        "faithful_text": segment.faithful_text,
+                        "smart_corrected_text": segment.smart_corrected_text,
+                        "user_text": segment.user_text,
+                        "auto_final_text": segment.smart_corrected_text or segment.faithful_text,
+                        "quality_score": segment.quality_score,
+                        "repetition_warning": repetition_warning,
+                        "low_confidence": (
+                            segment.quality_score is None or segment.quality_score < 0.82
+                        ),
+                        "review_status": segment.review_status.value,
+                        "timing_quality": segment.timing_quality.value,
+                        "version": segment.version,
+                        "active": segment.is_active,
+                        "supersedes_segment_ids": segment.supersedes_segment_ids_json,
+                        "tokens": [],
+                    }
+                )
             return {
                 "job_id": identifier,
                 "timeline": "absolute_samples_16000_hz",
-                "segments": [self._segment_payload(session, item) for item in segments],
+                "segments": summaries,
             }
 
     def segment(self, segment_id: str) -> dict[str, Any]:
@@ -1623,24 +1767,38 @@ class ClassScribeService:
             ),
         )
 
-    def _segment_payload(self, session: Session, segment: TranscriptSegment) -> dict[str, Any]:
-        tokens = tuple(
-            session.scalars(
-                select(TokenSpan)
-                .where(TokenSpan.segment_id == segment.id, TokenSpan.candidate_id.is_(None))
-                .order_by(TokenSpan.start_sample, TokenSpan.id)
-            ).all()
+    def _segment_payload(
+        self,
+        session: Session,
+        segment: TranscriptSegment,
+        *,
+        tokens: Sequence[TokenSpan] | None = None,
+        candidates: Sequence[ASRCandidate] | None = None,
+        speaker_names: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        if tokens is None:
+            tokens = tuple(
+                session.scalars(
+                    select(TokenSpan)
+                    .where(TokenSpan.segment_id == segment.id, TokenSpan.candidate_id.is_(None))
+                    .order_by(TokenSpan.start_sample, TokenSpan.id)
+                ).all()
+            )
+        token_provenances = tuple(
+            compact_token_provenance(token.provenance_json, token.start_sample, token.end_sample)
+            for token in tokens
         )
         from classscribe.quality.models import REPETITION_ISSUES
 
         repetition_codes = {issue.value for issue in REPETITION_ISSUES}
-        candidates = tuple(
-            session.scalars(
-                select(ASRCandidate).where(
-                    ASRCandidate.segment_id == segment.id, ASRCandidate.deleted_at.is_(None)
+        if candidates is None:
+            candidates = tuple(
+                session.scalars(
+                    select(ASRCandidate).where(
+                        ASRCandidate.segment_id == segment.id, ASRCandidate.deleted_at.is_(None)
+                    )
                 )
             )
-        )
         repeated = [
             c
             for c in candidates
@@ -1649,8 +1807,8 @@ class ClassScribeService:
         ]
         selected_ids = {
             str(source.get("candidate_id"))
-            for token in tokens
-            for source in token.provenance_json.get("candidate_sources", [])
+            for provenance in token_provenances
+            for source in provenance.get("candidate_sources", [])
             if isinstance(source, dict)
         }
         adopted_repeated = [c for c in repeated if c.is_adopted or c.id in selected_ids]
@@ -1676,13 +1834,16 @@ class ClassScribeService:
             }
         speaker_name = None
         if segment.speaker_id:
-            mapping = session.scalar(
-                select(SpeakerDisplayName).where(
-                    SpeakerDisplayName.job_id == segment.job_id,
-                    SpeakerDisplayName.speaker_global_id == segment.speaker_id,
+            if speaker_names is not None:
+                speaker_name = speaker_names.get(segment.speaker_id)
+            else:
+                mapping = session.scalar(
+                    select(SpeakerDisplayName).where(
+                        SpeakerDisplayName.job_id == segment.job_id,
+                        SpeakerDisplayName.speaker_global_id == segment.speaker_id,
+                    )
                 )
-            )
-            speaker_name = mapping.display_name if mapping else None
+                speaker_name = mapping.display_name if mapping else None
         return {
             "id": segment.id,
             "job_id": segment.job_id,
@@ -1711,9 +1872,9 @@ class ClassScribeService:
                     "end_sample": token.end_sample,
                     "text": token.token,
                     "confidence": token.confidence,
-                    "provenance": token.provenance_json,
+                    "provenance": provenance,
                 }
-                for token in tokens
+                for token, provenance in zip(tokens, token_provenances, strict=True)
             ],
         }
 

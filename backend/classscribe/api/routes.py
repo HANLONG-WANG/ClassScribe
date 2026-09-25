@@ -193,10 +193,16 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         return service.retry_segment(job_id, segment_id)
 
     @router.get("/jobs/{job_id}/transcript")
-    async def transcript(
-        job_id: str, low_confidence_only: bool = Query(default=False)
+    def transcript(
+        job_id: str,
+        low_confidence_only: bool = Query(default=False),
+        include_tokens: bool = Query(default=True),
     ) -> dict[str, object]:
-        return service.transcript(job_id, low_confidence_only=low_confidence_only)
+        return service.transcript(
+            job_id,
+            low_confidence_only=low_confidence_only,
+            include_tokens=include_tokens,
+        )
 
     @router.get("/segments/{segment_id}")
     async def segment(segment_id: str) -> dict[str, object]:

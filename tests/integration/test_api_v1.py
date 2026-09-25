@@ -1946,6 +1946,145 @@ def test_stream_upload_idempotence_cleanup_and_job_queue_order(tmp_path: Path) -
     assert not list(service.paths.data_path("recordings", broken_id, "source").iterdir())
 
 
+def test_transcript_summary_skips_large_provenance_with_bounded_queries(tmp_path: Path) -> None:
+    from classscribe.db.models import Job, Recording
+    from sqlalchemy import event
+
+    service, sessions = service_fixture(tmp_path)
+    with sessions.begin() as session:
+        recording = Recording(
+            source_name="long.wav",
+            source_sha256="a" * 64,
+            source_path=str(tmp_path / "long.wav"),
+            duration_samples=20 * 16000,
+            sample_rate=16000,
+            channels=1,
+        )
+        job = Job(recording=recording, language_mode=LanguageMode.ENGLISH, profile_id="fast")
+        session.add(job)
+        session.flush()
+        job_id = job.id
+        for index in range(20):
+            segment = TranscriptSegment(
+                job_id=job_id,
+                start_sample=index * 16000,
+                end_sample=(index + 1) * 16000,
+                language=LanguageMode.ENGLISH,
+                raw_text="word",
+                faithful_text="word",
+                smart_corrected_text="word",
+                quality_score=0.9,
+            )
+            session.add(segment)
+            session.flush()
+            session.add(
+                TokenSpan(
+                    segment_id=segment.id,
+                    candidate_id=None,
+                    start_sample=segment.start_sample,
+                    end_sample=segment.end_sample,
+                    token="word",
+                    normalized_token="word",
+                    provenance_json={
+                        "source_type": "final_text_alignment",
+                        "candidate_sources": [
+                            {
+                                "candidate_id": "a" * 36,
+                                "source_start_sample": segment.start_sample,
+                                "source_end_sample": segment.end_sample,
+                            },
+                            *(
+                                {
+                                    "candidate_id": "b" * 36,
+                                    "source_start_sample": segment.end_sample + extra * 16000,
+                                    "source_end_sample": segment.end_sample + (extra + 1) * 16000,
+                                }
+                                for extra in range(299)
+                            ),
+                        ],
+                    },
+                )
+            )
+
+    statements: list[str] = []
+
+    def count_query(_connection: Any, _cursor: Any, statement: str, *_args: Any) -> None:
+        statements.append(statement)
+
+    engine = sessions.kw["bind"]
+    event.listen(engine, "before_cursor_execute", count_query)
+    try:
+        summary = service.transcript(job_id, include_tokens=False)
+        summary_query_count = len(statements)
+        statements.clear()
+        full = service.transcript(job_id)
+        full_query_count = len(statements)
+    finally:
+        event.remove(engine, "before_cursor_execute", count_query)
+    assert summary_query_count == 4
+    assert full_query_count == 9
+    assert len(summary["segments"]) == 20
+    assert all(segment["tokens"] == [] for segment in summary["segments"])
+    assert len(json.dumps(summary)) < 20_000
+    assert len(full["segments"][0]["tokens"][0]["provenance"]["candidate_sources"]) == 1
+
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+    response = asyncio.run(
+        request(
+            app,
+            "GET",
+            f"/api/v1/jobs/{job_id}/transcript",
+            headers=auth(token, csrf),
+            query={"include_tokens": "false"},
+        )
+    )
+    assert response.status == 200
+    assert response.json()["segments"][0]["tokens"] == []
+
+
+def test_stream_upload_probe_does_not_block_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from threading import Event
+    from uuid import uuid4
+
+    from classscribe.audio.media import FFmpegMediaPipeline
+
+    service, _ = service_fixture(tmp_path)
+    entered, released = Event(), Event()
+    probe_finished_while_released: list[bool] = []
+    original_probe = FFmpegMediaPipeline.probe
+
+    def slow_probe(self: FFmpegMediaPipeline, path: Path) -> Any:
+        entered.set()
+        probe_finished_while_released.append(released.wait(timeout=2))
+        return original_probe(self, path)
+
+    monkeypatch.setattr(FFmpegMediaPipeline, "probe", slow_probe)
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16000)
+        handle.writeframes(b"\x00\x00" * 16000)
+
+    async def chunks() -> AsyncIterator[bytes]:
+        yield buffer.getvalue()
+
+    async def scenario() -> None:
+        task = asyncio.create_task(service.upload_recording(str(uuid4()), "lecture.wav", chunks()))
+        try:
+            assert await asyncio.to_thread(entered.wait, 1)
+            assert service.queue()["items"] == []
+        finally:
+            released.set()
+        await task
+
+    asyncio.run(scenario())
+    assert probe_finished_while_released == [True]
+
+
 def test_stream_upload_route_accepts_binary_media_without_browser_metadata(tmp_path: Path) -> None:
     from uuid import uuid4
 
