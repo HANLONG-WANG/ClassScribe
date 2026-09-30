@@ -13,9 +13,10 @@ export function TranscriptsPage() {
   const setPage = useWorkbench((state) => state.setPage);
   const query = useQuery({
     queryKey: ["manuscripts", offset],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       api<{ items: Manuscript[]; total: number }>(
         `/jobs?limit=30&offset=${String(offset)}`,
+        { signal },
       ),
   });
   const deleteDerived = useMutation({

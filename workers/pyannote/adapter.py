@@ -11,7 +11,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
-from classscribe_protocol.adapter import AdapterError, StatefulAdapter
+from classscribe_protocol.adapter import AdapterError, StatefulAdapter, run_blocking
 from classscribe_protocol.messages import RPCErrorCode
 
 SAMPLE_RATE = 16_000
@@ -75,7 +75,7 @@ class PyannoteAdapter(StatefulAdapter):
             return pipeline, torch, soundfile, device
 
         try:
-            pipeline, torch, soundfile, device = await asyncio.to_thread(load_pipeline)
+            pipeline, torch, soundfile, device = await run_blocking(load_pipeline)
         except AdapterError:
             raise
         except Exception as exc:
@@ -133,7 +133,7 @@ class PyannoteAdapter(StatefulAdapter):
             return output, int(waveform.shape[-1])
 
         try:
-            output, processed_samples = await asyncio.to_thread(infer)
+            output, processed_samples = await run_blocking(infer)
         except asyncio.CancelledError:
             raise
         except Exception as exc:

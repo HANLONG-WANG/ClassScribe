@@ -192,7 +192,7 @@ def validate_method_params(method: str, params: dict[str, Any]) -> None:
         context = params.get("rolling_context", [])
         if (
             not isinstance(context, list)
-            or len(context) > 3
+            or len(context) > 5
             or any(not isinstance(item, str) or not item.strip() for item in context)
             or sum(len(item) for item in context) > 2400
         ):
@@ -423,11 +423,11 @@ def _validate_body_asr_params(params: dict[str, Any], *, start: int, end: int) -
     context = params.get("rolling_context", [])
     if (
         not isinstance(context, list)
-        or len(context) > 3
+        or len(context) > 5
         or any(not isinstance(item, str) or not item.strip() for item in context)
         or sum(len(item) for item in context) > 2400
     ):
-        raise ProtocolError("body ASR rolling context must contain at most three bounded strings")
+        raise ProtocolError("body ASR rolling context must contain at most five bounded strings")
     hints = params["hints"]
     if not isinstance(hints, (list, tuple)) or any(not isinstance(hint, dict) for hint in hints):
         raise ProtocolError("body ASR hints must be a list of objects")

@@ -148,7 +148,7 @@ class QualityReport:
     timing_features: dict[str, int | float | bool | str | None]
     multi_model_features: dict[str, int | float | bool | str | None]
     retry: RetryDirective | None
-    rule_version: str = "quality-gate-v2"
+    rule_version: str = "quality-gate-v3"
 
     def as_dict(self) -> dict[str, Any]:
         return {

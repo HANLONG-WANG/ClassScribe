@@ -17,6 +17,7 @@ import {
   stopImports,
 } from "../batchImports";
 import { bodyModel } from "../modelGuidance";
+import { readStorage, writeStorage } from "../storage";
 import { ClassroomModelGuide } from "./ClassroomModelGuide";
 import { ModelPicker } from "./ModelPicker";
 
@@ -49,9 +50,7 @@ function loadDraft(): UploadDraft {
   try {
     return {
       ...defaultDraft,
-      ...(JSON.parse(
-        sessionStorage.getItem(draftKey) ?? "{}",
-      ) as Partial<UploadDraft>),
+      ...(JSON.parse(readStorage(draftKey) ?? "{}") as Partial<UploadDraft>),
     };
   } catch {
     return defaultDraft;
@@ -76,7 +75,7 @@ export function UploadPage() {
   const [includeSpeakers, setIncludeSpeakers] = useState(draft.includeSpeakers);
 
   useEffect(() => {
-    sessionStorage.setItem(
+    writeStorage(
       draftKey,
       JSON.stringify({
         language,
@@ -104,11 +103,11 @@ export function UploadPage() {
 
   const glossaries = useQuery({
     queryKey: ["glossaries"],
-    queryFn: () => api<Glossary[]>("/glossaries"),
+    queryFn: ({ signal }) => api<Glossary[]>("/glossaries", { signal }),
   });
   const models = useQuery({
     queryKey: ["models"],
-    queryFn: () => api<ModelInfo[]>("/models"),
+    queryFn: ({ signal }) => api<ModelInfo[]>("/models", { signal }),
   });
   function chooseFile(event: ChangeEvent<HTMLInputElement>) {
     const chosen = Array.from(event.currentTarget.files ?? []);

@@ -74,13 +74,13 @@ def pronunciation_context(params: Mapping[str, Any]) -> str:
     rolling = params.get("rolling_context", ())
     if (
         not isinstance(rolling, (list, tuple))
-        or len(rolling) > 3
+        or len(rolling) > 5
         or any(not isinstance(item, str) or not item.strip() for item in rolling)
         or sum(len(item) for item in rolling) > 2400
     ):
         raise AdapterError(
             RPCErrorCode.INVALID_REQUEST,
-            "rolling_context must contain at most three bounded strings",
+            "rolling_context must contain at most five bounded strings",
         )
     hints = params.get("hints", ())
     if not isinstance(hints, (list, tuple)):

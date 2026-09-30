@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import zlib
 from collections import Counter
 from dataclasses import dataclass
@@ -112,7 +113,13 @@ def _shortest_repeated_suffix(tokens: tuple[str, ...]) -> int | None:
 
 
 def _maximum_sentence_count(text: str) -> int:
-    normalized = text
+    # Sentence dots followed by whitespace/end exclude decimals and dotted abbreviations.
+    protected = re.sub(
+        r"\b(?i:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc)\.|\b(?:[A-Za-z]\.){2,}|\b[A-Z]\.",
+        lambda match: match.group().replace(".", "\0"),
+        text,
+    )
+    normalized = re.sub(r"\.(?=\s|$)", "\n", protected)
     for punctuation in ("。", "\uff01", "\uff1f", "!", "?", ";", "\uff1b"):
         normalized = normalized.replace(punctuation, "\n")
     sentences = ["".join(item.split()).casefold() for item in normalized.splitlines()]

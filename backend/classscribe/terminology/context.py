@@ -82,5 +82,38 @@ def select_rolling_context(
         )
     rendered = "\n\n".join(parts)
     if len(rendered) > max_characters:
-        rendered = rendered[:max_characters].rsplit(" ", 1)[0].rstrip()
+        segments = ()
+        terms = ()
+        parts = []
+        segment_header = "Recently confirmed transcript:\n"
+        remaining = max_characters - len(segment_header)
+        bounded_segments: list[str] = []
+        for item in reversed(eligible):
+            if remaining <= 0:
+                break
+            value = item.text.strip()[-remaining:]
+            if value:
+                bounded_segments.insert(0, value)
+                remaining -= len(value) + 1
+        segments = tuple(bounded_segments)
+        if segments:
+            parts.append(segment_header + "\n".join(segments))
+        term_header = "Possible course terms (bias only; use only with acoustic support):\n"
+        available = (
+            max_characters - len("\n\n".join(parts)) - (2 if parts else 0) - len(term_header)
+        )
+        bounded_terms: list[CourseTerm] = []
+        for usage in ranked:
+            size = len(f"{usage.term.canonical} ({usage.term.reading})") + (
+                2 if bounded_terms else 0
+            )
+            if size <= available:
+                bounded_terms.append(usage.term)
+                available -= size
+        terms = tuple(bounded_terms)
+        if terms:
+            parts.append(
+                term_header + "; ".join(f"{term.canonical} ({term.reading})" for term in terms)
+            )
+        rendered = "\n\n".join(parts)
     return ContextBundle(segments, terms, rendered)

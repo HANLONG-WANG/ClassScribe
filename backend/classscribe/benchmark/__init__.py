@@ -35,10 +35,11 @@ from classscribe.benchmark.ranking import (
     assess_automatic_quality,
     rank_candidates,
 )
-from classscribe.benchmark.runner import BenchmarkReport, BenchmarkRunner
+from classscribe.benchmark.runner import SCORE_CONTRACT_VERSION, BenchmarkReport, BenchmarkRunner
 
 __all__ = [
     "REQUIRED_TEST_EVIDENCE",
+    "SCORE_CONTRACT_VERSION",
     "WORKER_CASES",
     "WORKER_IDS",
     "AcceptanceResult",

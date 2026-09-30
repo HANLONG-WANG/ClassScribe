@@ -52,8 +52,7 @@ REQUIRED_RPM_PATHS = {
     "/usr/bin/classscribe-doctor",
 }
 REQUIRED_RPM_PATHS.update(
-    f"/usr/share/classscribe/config/model-manifests/v1/{name}"
-    for name in MANIFEST_NAMES
+    f"/usr/share/classscribe/config/model-manifests/v1/{name}" for name in MANIFEST_NAMES
 )
 
 
@@ -229,9 +228,7 @@ def _exercise_rpm_lifecycle(install_root: Path, first_source: Path, second_sourc
     installed_waiver.write_bytes(installed_waiver.read_bytes() + b" ")
     tampered = validate_installed_release(payload)
     assert tampered.status == "blocked"
-    assert tampered.waiver_errors == (
-        "release waiver SHA-256 differs from release manifest",
-    )
+    assert tampered.waiver_errors == ("release waiver SHA-256 differs from release manifest",)
     assert tampered.effective_checks["source_license"] is False
     installed_waiver.write_bytes(source_waiver.read_bytes())
     assert validate_installed_release(payload).status == "ready_with_waivers"

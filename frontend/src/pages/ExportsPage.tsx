@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { api, authHeaders, formatSamples, type ExportArtifact } from "../api";
+import { api, downloadFile, formatSamples, type ExportArtifact } from "../api";
 import { type Manuscript, statuses } from "../manuscripts";
 
 export function ExportsPage() {
@@ -9,12 +9,21 @@ export function ExportsPage() {
   const [selected, setSelected] = useState<Map<string, Manuscript>>(new Map());
   const [failures, setFailures] = useState<string[]>([]);
   const [downloadError, setDownloadError] = useState("");
+  const [downloading, setDownloading] = useState(false);
+  const downloadController = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      downloadController.current?.abort();
+    },
+    [],
+  );
   const [progress, setProgress] = useState({ completed: 0, total: 0 });
   const query = useQuery({
     queryKey: ["manuscripts", offset],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       api<{ items: Manuscript[]; total: number }>(
         `/jobs?limit=30&offset=${String(offset)}`,
+        { signal },
       ),
   });
   function toggle(item: Manuscript, checked: boolean) {
@@ -65,15 +74,19 @@ export function ExportsPage() {
   });
 
   async function download(artifact: ExportArtifact) {
-    const response = await fetch(artifact.download_url, {
-      headers: authHeaders(),
-    });
-    if (!response.ok) throw new Error("导出下载失败");
-    const anchor = document.createElement("a");
-    anchor.href = URL.createObjectURL(await response.blob());
-    anchor.download = artifact.file_name;
-    anchor.click();
-    URL.revokeObjectURL(anchor.href);
+    const controller = new AbortController();
+    downloadController.current = controller;
+    setDownloading(true);
+    try {
+      await downloadFile(
+        artifact.download_url,
+        artifact.file_name,
+        controller.signal,
+      );
+    } finally {
+      downloadController.current = null;
+      setDownloading(false);
+    }
   }
 
   return (
@@ -273,6 +286,16 @@ export function ExportsPage() {
           {downloadError}
         </p>
       )}
+      {downloading && (
+        <button
+          type="button"
+          onClick={() => {
+            downloadController.current?.abort();
+          }}
+        >
+          取消下载
+        </button>
+      )}
       <div className="artifact-list">
         {artifacts.map((artifact) => (
           <article className="panel" key={artifact.id}>
@@ -286,6 +309,7 @@ export function ExportsPage() {
             </div>
             <span className="mono">SHA {artifact.sha256.slice(0, 12)}</span>
             <button
+              disabled={downloading}
               onClick={() => {
                 setDownloadError("");
                 void download(artifact).catch((error: unknown) => {

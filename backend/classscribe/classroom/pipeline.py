@@ -41,10 +41,14 @@ class PipelineEvent:
 class PipelineEventBroker:
     """Thread-safe bounded replay log used by SSE clients."""
 
-    def __init__(self, *, retained_per_job: int = 512) -> None:
+    def __init__(self, *, retained_per_job: int = 512, retained_jobs: int = 128) -> None:
+        if retained_per_job < 1 or retained_jobs < 1:
+            raise ValueError("event retention bounds must be positive")
         self._retained = retained_per_job
+        self._retained_jobs = retained_jobs
+        self._job_order: dict[str, None] = {}
         self._events: dict[str, list[PipelineEvent]] = {}
-        self._sequence: dict[str, int] = {}
+        self._sequence = 0
         self._lock = threading.Lock()
         self._activity: dict[str, dict[str, Any]] = {}
         self._runs: dict[str, str] = {}
@@ -53,6 +57,13 @@ class PipelineEventBroker:
 
     def publish(self, job_id: str, kind: str, **payload: Any) -> PipelineEvent | None:
         with self._lock:
+            self._job_order.pop(job_id, None)
+            self._job_order[job_id] = None
+            while len(self._job_order) > self._retained_jobs:
+                expired = next((key for key in self._job_order if key not in self._runs), None)
+                if expired is None or expired == job_id:
+                    break
+                self._forget(expired)
             previous = self._activity.get(job_id, {})
             if (
                 kind in {"checkpoint_completed", "checkpoint_failed"}
@@ -87,8 +98,8 @@ class PipelineEventBroker:
             }:
                 self._activity.pop(job_id, None)
                 self._runs.pop(job_id, None)
-            sequence = self._sequence.get(job_id, 0) + 1
-            self._sequence[job_id] = sequence
+            self._sequence += 1
+            sequence = self._sequence
             event = PipelineEvent(
                 sequence,
                 job_id,
@@ -107,6 +118,21 @@ class PipelineEventBroker:
             events.append(event)
             del events[: max(0, len(events) - self._retained)]
             return event
+
+    def _forget(self, job_id: str) -> None:
+        self._job_order.pop(job_id, None)
+        for values in (
+            self._events,
+            self._activity,
+            self._runs,
+            self._recent,
+            self._stage_activity,
+        ):
+            values.pop(job_id, None)
+
+    def forget(self, job_id: str) -> None:
+        with self._lock:
+            self._forget(job_id)
 
     def activity(self, job_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -250,6 +276,7 @@ class ClassroomPipeline:
 
     def initialize(self, job_id: str, parameters: Mapping[str, Any]) -> None:
         with self.sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             job = session.get(Job, job_id)
             if job is None:
                 raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "job does not exist")
@@ -623,6 +650,12 @@ class ClassroomPipeline:
         with self.sessions.begin() as session:
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             job = session.get_one(Job, job_id)
+            if job.status in {JobStatus.RUNNING, JobStatus.CANCELLING} or any(
+                item.status is CheckpointStatus.RUNNING for item in job.checkpoints
+            ):
+                raise ClassScribeError(
+                    ErrorCode.JOB_STATE_CONFLICT, "wait for the active checkpoint before rerunning"
+                )
             segment = session.get(TranscriptSegment, segment_id)
             if segment is None or segment.job_id != job_id or not segment.is_active:
                 raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "active job segment not found")
@@ -639,7 +672,23 @@ class ClassroomPipeline:
                 checkpoint.attempt_count = 0
                 checkpoint.error_code = None
                 checkpoint.error_detail = None
+            for checkpoint in job.checkpoints:
+                rebuild_master = getattr(self.runner, "needs_audio_normalization", None)
+                if checkpoint.checkpoint_key == "automatic_exports" or (
+                    checkpoint.checkpoint_key == "normalize_audio_master"
+                    and rebuild_master is not None
+                    and rebuild_master(job)
+                ):
+                    checkpoint.status = CheckpointStatus.PENDING
+                    checkpoint.attempt_count = 0
+                    checkpoint.error_code = None
+                    checkpoint.error_detail = None
+                    checkpoint.completed_at = None
             job.status = JobStatus.PENDING
+            job.completed_at = None
+            job.progress = sum(
+                item.status is CheckpointStatus.COMPLETED for item in job.checkpoints
+            ) / max(1, len(job.checkpoints))
             job.error_code = None
             job.error_detail = None
             queue_state.append(session, job)
@@ -762,6 +811,7 @@ class ClassroomPipeline:
 
     def _ensure_segment_checkpoints(self, job_id: str) -> None:
         with self.sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             job = session.get_one(Job, job_id)
             existing = {
                 (checkpoint.segment_id, checkpoint.checkpoint_key) for checkpoint in job.checkpoints

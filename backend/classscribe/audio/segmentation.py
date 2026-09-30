@@ -185,9 +185,24 @@ def make_transcript_chunks(
     )
     cores: list[tuple[AudioSpan, str, bool]] = []
     hard_boundaries: set[int] = set()
+    mandatory_boundaries = {
+        cue.sample
+        for cue in ordered_cues
+        if cue.kind in {BoundaryKind.SPEAKER_CHANGE, BoundaryKind.LANGUAGE_SWITCH}
+    }
     start = speech_extent.start_sample
     while start < speech_extent.end_sample:
         remaining = speech_extent.end_sample - start
+        mandatory = [
+            cue
+            for cue in ordered_cues
+            if cue.sample in mandatory_boundaries and start < cue.sample <= start + hard_max_samples
+        ]
+        if mandatory:
+            cue = mandatory[0]
+            cores.append((AudioSpan(start, cue.sample), cue.kind.value, False))
+            start = cue.sample
+            continue
         if remaining <= hard_max_samples:
             cores.append((AudioSpan(start, speech_extent.end_sample), "end_of_speech", False))
             break
@@ -217,7 +232,10 @@ def make_transcript_chunks(
     if len(cores) > 1 and cores[-1][0].duration_samples < minimum_samples:
         previous, final = cores[-2], cores[-1]
         merged = AudioSpan(previous[0].start_sample, final[0].end_sample)
-        if merged.duration_samples <= hard_max_samples:
+        if (
+            merged.duration_samples <= hard_max_samples
+            and previous[0].end_sample not in mandatory_boundaries
+        ):
             hard_boundaries.discard(previous[0].end_sample)
             cores[-2:] = [(merged, final[1], previous[2] or final[2])]
 

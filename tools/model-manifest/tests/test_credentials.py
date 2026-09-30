@@ -74,9 +74,7 @@ def test_hf_token_transport_representation_is_only_authorization_header() -> Non
 
 def test_hf_token_is_redacted_from_diagnostics() -> None:
     token = "hf_diagnostic_secret"
-    failure = RuntimeError(
-        f"request failed token={token} Authorization: Bearer {token}"
-    )
+    failure = RuntimeError(f"request failed token={token} Authorization: Bearer {token}")
 
     diagnostic = redact_for_diagnostics(failure, token=token)
 
@@ -89,9 +87,7 @@ def test_hf_token_cannot_be_serialized_to_outputs(destination: str) -> None:
     token = "hf_output_secret"
 
     with pytest.raises(ValueError, match=f"into {destination}") as failure:
-        assert_hf_token_absent(
-            {"nested": ["public", token]}, token=token, destination=destination
-        )
+        assert_hf_token_absent({"nested": ["public", token]}, token=token, destination=destination)
 
     assert token not in str(failure.value)
 
@@ -140,13 +136,9 @@ def test_public_repository_does_not_require_gated_approval() -> None:
 
 
 def test_license_inventory_marks_only_current_pyannote_repository_as_gated() -> None:
-    inventory = json.loads(
-        (ROOT / "config/model-licenses.v1.json").read_text(encoding="utf-8")
-    )
+    inventory = json.loads((ROOT / "config/model-licenses.v1.json").read_text(encoding="utf-8"))
     gated = {
-        item["repository"]
-        for item in inventory["models"]
-        if item["requires_terms_acceptance"]
+        item["repository"] for item in inventory["models"] if item["requires_terms_acceptance"]
     }
 
     assert gated == {"pyannote/speaker-diarization-community-1"}

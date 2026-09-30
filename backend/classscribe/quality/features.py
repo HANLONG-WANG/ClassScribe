@@ -18,7 +18,7 @@ from classscribe.quality.models import (
     RetryDirective,
     blocking_issues,
 )
-from classscribe.quality.text import normalized_edit_distance, tokenize_for_language
+from classscribe.quality.text import normalized_edit_distance, surface_tokens, tokenize_for_language
 from classscribe.timeline import SAMPLE_RATE, AudioSpan
 
 _PUNCTUATION = frozenset(
@@ -78,7 +78,7 @@ class QualityFeatureExtractor:
         candidate: ASRCandidateEvidence,
         context: QualityContext,
     ) -> QualityReport:
-        if candidate.audio_span != context.requested_span:
+        if context.requested_span not in {candidate.audio_span, candidate.core_span}:
             raise ValueError("quality context and candidate must use the same canonical range")
         voiced_seconds = context.voiced_samples / SAMPLE_RATE
         loop = inspect_decode_loop(
@@ -105,7 +105,7 @@ class QualityFeatureExtractor:
                 unique_issues = (*unique_issues, QualityIssue.LOW_CALIBRATED_QUALITY)
         valid = not blocking_issues(unique_issues)
         retry = (
-            self._retry(candidate.audio_span, unique_issues)
+            self._retry(context.requested_span, unique_issues)
             if not valid or REPETITION_ISSUES.intersection(unique_issues)
             else None
         )
@@ -245,6 +245,11 @@ class QualityFeatureExtractor:
         context: QualityContext,
     ) -> tuple[dict[str, int | float | bool | str | None], tuple[QualityIssue, ...]]:
         tokens = candidate.tokens
+        native_text_complete = tuple(
+            piece
+            for token in tokens
+            for piece in surface_tokens(token.text, candidate.language_requested)
+        ) == surface_tokens(candidate.normalized_text, candidate.language_requested)
         monotonic = all(
             right.span.start_sample >= left.span.start_sample for left, right in pairwise(tokens)
         )
@@ -275,13 +280,16 @@ class QualityFeatureExtractor:
             issues.append(QualityIssue.TIME_OUT_OF_RANGE)
         if excessive_overlap:
             issues.append(QualityIssue.EXCESSIVE_TIME_OVERLAP)
-        if context.voiced_samples >= 2 * SAMPLE_RATE and coverage < 0.45:
+        if (tokens and not native_text_complete) or (
+            context.voiced_samples >= 2 * SAMPLE_RATE and coverage < 0.45
+        ):
             issues.append(QualityIssue.LOW_TIMESTAMP_COVERAGE)
         if late_uncovered:
             issues.append(QualityIssue.LATE_SPEECH_UNCOVERED)
         return (
             {
                 "has_native_word_timing": bool(tokens),
+                "native_word_text_complete": native_text_complete,
                 "word_timestamp_count": len(tokens),
                 "timestamps_monotonic": monotonic,
                 "timestamps_inside_request": in_range,

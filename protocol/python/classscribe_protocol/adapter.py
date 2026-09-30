@@ -30,6 +30,30 @@ class WorkerAdapter(Protocol):
     ) -> Mapping[str, Any]: ...
 
 
+async def run_blocking[ResultT, **ParamsT](
+    operation: Callable[ParamsT, ResultT], *args: ParamsT.args, **kwargs: ParamsT.kwargs
+) -> ResultT:
+    """Keep native execution owned until it really exits, even after cancellation.
+
+    A cancelled asyncio waiter cannot terminate a model-library thread. Retaining
+    the task here keeps the surrounding adapter/model lock held while it drains.
+    """
+    task = asyncio.create_task(asyncio.to_thread(operation, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled():
+            task.exception()  # retrieve any native failure before propagating cancellation
+        raise
+
+
 Handler = Callable[[Mapping[str, Any], asyncio.Event], Awaitable[Mapping[str, Any]]]
 
 

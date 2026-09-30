@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from classscribe.exports.models import ExportLayer, ExportSegment, ExportToken, SubtitleCue
+from classscribe.punctuation.guard import is_punctuation_or_spacing, strip_punctuation_and_spacing
 from classscribe.timeline import SAMPLE_RATE
 
 _NUMBER = re.compile(r"^[+-]?\d+(?:[.,]\d+)?$")
@@ -59,6 +60,7 @@ def build_subtitle_cues(
     for segment in segments:
         text, _ = segment.text_for(layer)
         tokens = segment.tokens_for(layer)
+        tokens = _project_surface(_expand_tokens(tokens, segment.language), text)
         if not text.strip():
             continue
         if not tokens:
@@ -68,6 +70,7 @@ def build_subtitle_cues(
                     segment.span.end_sample,
                     _wrap_text(text, segment.language),
                     (segment.segment_id,),
+                    coarse_timing=True,
                 )
             )
             continue
@@ -108,6 +111,11 @@ def build_subtitle_cues(
                     chunk[-1].end,
                     lines,
                     (segment.segment_id,),
+                    coarse_timing=any(
+                        token.provenance.get("timing_subdivision") is True
+                        for unit in chunk
+                        for token in unit.tokens
+                    ),
                 )
             )
     return tuple(cues)
@@ -140,7 +148,12 @@ def _protected_units(tokens: tuple[ExportToken, ...]) -> tuple[_Unit, ...]:
 def _wrap_units(units: list[_Unit], language: str) -> tuple[str, ...]:
     line_limit = 8 if language == "en" else 18
     if _measure(units, language) <= line_limit:
-        return (_render_units(units, language),)
+        return (_render_units(units, language).strip(),)
+    if len(units) == 1:
+        rendered = _render_units(units, language).strip()
+        if any(token.protected_group for token in units[0].tokens):
+            return (rendered,)
+        return _wrap_text(rendered, language)
     best = min(
         range(1, len(units)),
         key=lambda position: abs(
@@ -148,7 +161,10 @@ def _wrap_units(units: list[_Unit], language: str) -> tuple[str, ...]:
         ),
         default=1,
     )
-    return (_render_units(units[:best], language), _render_units(units[best:], language))
+    return (
+        _render_units(units[:best], language).strip(),
+        _render_units(units[best:], language).strip(),
+    )
 
 
 def _wrap_text(text: str, language: str) -> tuple[str, ...]:
@@ -166,7 +182,7 @@ def _wrap_text(text: str, language: str) -> tuple[str, ...]:
 
 def _measure(units: list[_Unit], language: str) -> int:
     if language == "en":
-        return sum(1 for unit in units for token in unit.tokens if token.text.strip())
+        return sum(len(token.text.split()) for unit in units for token in unit.tokens)
     return len(_comparable(_render_units(units, language)))
 
 
@@ -193,7 +209,13 @@ def _render_tokens(tokens: tuple[ExportToken, ...], language: str) -> str:
         return "".join(token.text for token in tokens)
     output = ""
     for token in tokens:
-        if not output or token.text[:1] in ",.!?;:%)]}" or output[-1:] in "([{$":
+        if (
+            not output
+            or output[-1:].isspace()
+            or token.text[:1].isspace()
+            or token.text[:1] in ",.!?;:%)]}"
+            or output[-1:] in "([{$"
+        ):
             output += token.text
         else:
             output += " " + token.text
@@ -201,8 +223,57 @@ def _render_tokens(tokens: tuple[ExportToken, ...], language: str) -> str:
 
 
 def _ends_sentence(units: list[_Unit]) -> bool:
-    return units[-1].tokens[-1].text[-1:] in _SENTENCE_END
+    return units[-1].tokens[-1].text.rstrip()[-1:] in _SENTENCE_END
 
 
 def _comparable(text: str) -> str:
     return "".join(character for character in text if not character.isspace())
+
+
+def _project_surface(tokens: tuple[ExportToken, ...], text: str) -> tuple[ExportToken, ...]:
+    """Put punctuation/spacing on existing timed words without changing lexical text."""
+    source = "".join(token.text for token in tokens)
+    if not tokens or strip_punctuation_and_spacing(source) != strip_punctuation_and_spacing(text):
+        return tokens
+    positions = [index for index, char in enumerate(text) if not is_punctuation_or_spacing(char)]
+    ordinal = offset = 0
+    result: list[ExportToken] = []
+    for token in tokens:
+        ordinal += len(strip_punctuation_and_spacing(token.text))
+        end = positions[ordinal] if ordinal < len(positions) else len(text)
+        piece = text[offset:end]
+        # Standalone punctuation tokens consume no lexical characters; leave their
+        # surface on a neighbouring timed word instead of creating an empty token.
+        if piece:
+            result.append(replace(token, text=piece))
+        offset = end
+    return tuple(result)
+
+
+def _expand_tokens(tokens: tuple[ExportToken, ...], language: str) -> tuple[ExportToken, ...]:
+    expanded: list[ExportToken] = []
+    for token in tokens:
+        pieces = tuple(re.findall(r"\S+\s*", token.text)) if language == "en" else tuple(token.text)
+        subdivide = not token.protected_group and (
+            len(pieces) > 1
+            if language == "en"
+            else len(strip_punctuation_and_spacing(token.text)) > 18
+        )
+        if not subdivide or token.span.duration_samples < len(pieces):
+            expanded.append(token)
+            continue
+        for index, piece in enumerate(pieces):
+            expanded.append(
+                replace(
+                    token,
+                    text=piece,
+                    span=type(token.span)(
+                        token.span.start_sample
+                        + token.span.duration_samples * index // len(pieces),
+                        token.span.start_sample
+                        + token.span.duration_samples * (index + 1) // len(pieces),
+                    ),
+                    provenance={**token.provenance, "timing_subdivision": True},
+                )
+            )
+    return tuple(expanded)

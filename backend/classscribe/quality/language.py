@@ -106,16 +106,25 @@ def _high_value_conflicts(
     context: ComparisonContext,
 ) -> tuple[str, ...]:
     conflicts: list[str] = []
-    for label, pattern in (("number", _NUMBERS), ("unit", _UNITS)):
-        if set(match.group(0).casefold() for match in pattern.finditer(left)) != set(
-            match.group(0).casefold() for match in pattern.finditer(right)
-        ):
-            conflicts.append(label)
     left_folded = unicodedata.normalize("NFKC", left).casefold()
     right_folded = unicodedata.normalize("NFKC", right).casefold()
-    if {token for token in _NEGATIONS[language] if token in left_folded} != {
-        token for token in _NEGATIONS[language] if token in right_folded
-    }:
+
+    def events(text: str, pattern: re.Pattern[str]) -> tuple[tuple[object, ...], ...]:
+        return tuple(
+            (
+                match.group(0),
+                tokenize_for_language(text[: match.start()], language)[-2:],
+                tokenize_for_language(text[match.end() :], language)[:2],
+            )
+            for match in pattern.finditer(text)
+        )
+
+    for label, pattern in (("number", _NUMBERS), ("unit", _UNITS)):
+        if events(left_folded, pattern) != events(right_folded, pattern):
+            conflicts.append(label)
+    negations = "|".join(re.escape(token) for token in _NEGATIONS[language])
+    negation_pattern = re.compile(rf"\b(?:{negations})\b" if language == "en" else negations)
+    if events(left_folded, negation_pattern) != events(right_folded, negation_pattern):
         conflicts.append("negation")
     for label, values in (
         ("proper_name", context.proper_names),

@@ -22,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--health-check", action="store_true")
     group.add_argument("--check-config", action="store_true")
+    group.add_argument("--print-url", action="store_true")
     return parser
 
 
@@ -34,6 +35,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.check_config:
         print(config.model_dump_json(indent=2))
+        return 0
+    if args.print_url:
+        host = "[::1]" if config.server.host == "::1" else config.server.host
+        print(f"http://{host}:{config.server.port}")
         return 0
     paths.ensure()
     api_token = TokenStore(paths.config / "api-token").load_or_create()

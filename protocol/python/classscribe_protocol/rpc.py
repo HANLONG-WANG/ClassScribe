@@ -64,6 +64,7 @@ class RPCServer:
         self.adapter = adapter
         self.allowed_data_roots = allowed_data_roots
         self._server: asyncio.AbstractServer | None = None
+        self._adapter_lock = asyncio.Lock()
         self._tasks: dict[str, tuple[asyncio.Task[Mapping[str, Any]], asyncio.Event]] = {}
 
     async def start(self) -> None:
@@ -139,15 +140,23 @@ class RPCServer:
                 running[1].set()
                 running[0].cancel()
             return self._success_response(request, {"cancelled": running is not None})
+        if request.request_id in self._tasks:
+            return self._error_response(
+                request, RPCErrorCode.INVALID_REQUEST.value, "request ID is already active"
+            )
         if request.method in {"transcribe_batch", "align", "vad", "lid", "diarize"}:
             validate_readonly_audio_path(str(request.params["audio_path"]), self.allowed_data_roots)
         cancelled = asyncio.Event()
         task = asyncio.create_task(self._dispatch_adapter(request, cancelled))
         self._tasks[request.request_id] = (task, cancelled)
         started = time.perf_counter()
+        cancellation = asyncio.create_task(cancelled.wait())
         try:
             async with asyncio.timeout(request.deadline_ms / 1000):
-                result = dict(await task)
+                await asyncio.wait((task, cancellation), return_when=asyncio.FIRST_COMPLETED)
+                if cancelled.is_set():
+                    raise asyncio.CancelledError
+                result = dict(task.result())
         except TimeoutError:
             cancelled.set()
             task.cancel()
@@ -155,11 +164,26 @@ class RPCServer:
                 request, RPCErrorCode.DEADLINE_EXCEEDED.value, "worker deadline exceeded"
             )
         except asyncio.CancelledError:
+            cancelled.set()
+            task.cancel()
             return self._error_response(request, RPCErrorCode.CANCELLED.value, "request cancelled")
         except AdapterError as exc:
             return self._error_response(request, exc.code.value, exc.detail)
         finally:
-            self._tasks.pop(request.request_id, None)
+            cancellation.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await cancellation
+
+            def retire(done: asyncio.Task[Mapping[str, Any]]) -> None:
+                if self._tasks.get(request.request_id, (None,))[0] is done:
+                    self._tasks.pop(request.request_id, None)
+                if not done.cancelled():
+                    done.exception()
+
+            if task.done():
+                retire(task)
+            else:
+                task.add_done_callback(retire)
         metrics = dict(result.pop("metrics", {}))
         metrics.setdefault("worker_wall_ms", round((time.perf_counter() - started) * 1000, 3))
         segments = tuple(result.pop("segments", ()))
@@ -185,64 +209,69 @@ class RPCServer:
     async def _dispatch_adapter(
         self, request: RPCRequest, cancelled: asyncio.Event
     ) -> Mapping[str, Any]:
-        if request.method != "transcribe_pcm":
-            result = await self.adapter.dispatch(request.method, request.params, cancelled)
-            if request.method == "capabilities":
-                methods = result.get("methods")
-                if isinstance(methods, list) and "transcribe_batch" in methods:
-                    return {
-                        **result,
-                        "methods": sorted({*(str(item) for item in methods), "transcribe_pcm"}),
-                    }
+        async with self._adapter_lock:
+            if cancelled.is_set():
+                raise asyncio.CancelledError
+            if request.method != "transcribe_pcm":
+                result = await self.adapter.dispatch(request.method, request.params, cancelled)
+                if request.method == "capabilities":
+                    methods = result.get("methods")
+                    if isinstance(methods, list) and "transcribe_batch" in methods:
+                        return {
+                            **result,
+                            "methods": sorted({*(str(item) for item in methods), "transcribe_pcm"}),
+                        }
+                return result
+            params = request.params
+            pcm = bytes(params["pcm_s16le"])
+            absolute_start = int(params["absolute_start_sample"])
+            core_start = int(params["core_start_sample"])
+            total_samples = len(pcm) // 2
+            duration_seconds = total_samples / 16_000
+            with tempfile.TemporaryDirectory(prefix="classscribe-final-") as temporary:
+                audio = Path(temporary) / "utterance.wav"
+                with wave.open(str(audio), "wb") as output:
+                    output.setnchannels(1)
+                    output.setsampwidth(2)
+                    output.setframerate(16_000)
+                    output.writeframes(pcm)
+                audio.chmod(0o400)
+                batch_params: dict[str, Any] = {
+                    "request_contract": "body-asr-v1",
+                    "audio_path": str(audio),
+                    "start_sample": 0,
+                    "end_sample": total_samples,
+                    "core_start_sample": core_start - absolute_start,
+                    "core_end_sample": total_samples,
+                    "sample_rate": 16_000,
+                    "language": params["language"],
+                    "manual_language": True,
+                    "candidate_role": "primary",
+                    "experimental_enabled": False,
+                    "hints": [],
+                    "rolling_context": list(params.get("rolling_context", [])),
+                    "decode": {
+                        "temperature": 0.0,
+                        "do_sample": False,
+                        "batch_size": 1,
+                        "mixed_length_batch": False,
+                        "seed": 0,
+                        "max_new_tokens": max(32, min(512, round(duration_seconds * 16))),
+                        "max_output_characters": max(128, min(4096, round(duration_seconds * 128))),
+                    },
+                    "batch_items": 1,
+                }
+                result = dict(
+                    await self.adapter.dispatch("transcribe_batch", batch_params, cancelled)
+                )
+            segments = result.get("segments", ())
+            if isinstance(segments, (list, tuple)):
+                result["segments"] = [
+                    _offset_segment(dict(segment), absolute_start)
+                    for segment in segments
+                    if isinstance(segment, Mapping)
+                ]
             return result
-        params = request.params
-        pcm = bytes(params["pcm_s16le"])
-        absolute_start = int(params["absolute_start_sample"])
-        core_start = int(params["core_start_sample"])
-        total_samples = len(pcm) // 2
-        duration_seconds = total_samples / 16_000
-        with tempfile.TemporaryDirectory(prefix="classscribe-final-") as temporary:
-            audio = Path(temporary) / "utterance.wav"
-            with wave.open(str(audio), "wb") as output:
-                output.setnchannels(1)
-                output.setsampwidth(2)
-                output.setframerate(16_000)
-                output.writeframes(pcm)
-            audio.chmod(0o400)
-            batch_params: dict[str, Any] = {
-                "request_contract": "body-asr-v1",
-                "audio_path": str(audio),
-                "start_sample": 0,
-                "end_sample": total_samples,
-                "core_start_sample": core_start - absolute_start,
-                "core_end_sample": total_samples,
-                "sample_rate": 16_000,
-                "language": params["language"],
-                "manual_language": True,
-                "candidate_role": "primary",
-                "experimental_enabled": False,
-                "hints": [],
-                "rolling_context": list(params.get("rolling_context", [])),
-                "decode": {
-                    "temperature": 0.0,
-                    "do_sample": False,
-                    "batch_size": 1,
-                    "mixed_length_batch": False,
-                    "seed": 0,
-                    "max_new_tokens": max(32, min(512, round(duration_seconds * 16))),
-                    "max_output_characters": max(128, min(4096, round(duration_seconds * 128))),
-                },
-                "batch_items": 1,
-            }
-            result = dict(await self.adapter.dispatch("transcribe_batch", batch_params, cancelled))
-        segments = result.get("segments", ())
-        if isinstance(segments, (list, tuple)):
-            result["segments"] = [
-                _offset_segment(dict(segment), absolute_start)
-                for segment in segments
-                if isinstance(segment, Mapping)
-            ]
-        return result
 
     def _success_response(self, request: RPCRequest, result: Mapping[str, Any]) -> RPCResponse:
         return RPCResponse(

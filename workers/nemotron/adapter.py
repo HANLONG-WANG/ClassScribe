@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
-from classscribe_protocol.adapter import AdapterError, StatefulAdapter
+from classscribe_protocol.adapter import AdapterError, StatefulAdapter, run_blocking
 from classscribe_protocol.messages import RPCErrorCode
 
 SAMPLE_RATE = 16_000
@@ -132,9 +132,7 @@ class NemotronAdapter(StatefulAdapter):
                 device = "cuda:0" if torch.cuda.is_available() else "cpu"
             config = ASRModel.restore_from(str(archives[0]), return_config=True)
             target = config.get("target")
-            if not isinstance(target, str) or not target.startswith(
-                "nemo.collections.asr.models."
-            ):
+            if not isinstance(target, str) or not target.startswith("nemo.collections.asr.models."):
                 raise AdapterError(
                     RPCErrorCode.MODEL_LOAD_FAILED,
                     "Nemotron archive has no supported NeMo ASR target class",
@@ -167,7 +165,7 @@ class NemotronAdapter(StatefulAdapter):
             return model, torch, numpy, CacheAwareStreamingAudioBuffer, device
 
         try:
-            model, torch, numpy, audio_buffer_type, device = await asyncio.to_thread(load)
+            model, torch, numpy, audio_buffer_type, device = await run_blocking(load)
         except AdapterError:
             raise
         except Exception as exc:
@@ -209,7 +207,7 @@ class NemotronAdapter(StatefulAdapter):
 
         try:
             async with self._decode_lock:
-                return await asyncio.to_thread(create)
+                return await run_blocking(create)
         except Exception as exc:
             raise AdapterError(
                 RPCErrorCode.INTERNAL,
@@ -296,9 +294,7 @@ class NemotronAdapter(StatefulAdapter):
             state = self._cache_streams[stream_id]
             current_context = tuple(int(item) for item in self._model.encoder.att_context_size)
             if current_context != state.attention_context:
-                self._model.encoder.set_default_att_context_size(
-                    list(state.attention_context)
-                )
+                self._model.encoder.set_default_att_context_size(list(state.attention_context))
             if hasattr(self._model, "set_inference_prompt"):
                 self._model.set_inference_prompt(_prompt_language(state.language))
             samples = self._numpy.frombuffer(pcm, dtype=self._numpy.int16).astype(
@@ -357,7 +353,7 @@ class NemotronAdapter(StatefulAdapter):
 
         try:
             async with self._decode_lock:
-                text, reported_language = await asyncio.to_thread(infer)
+                text, reported_language = await run_blocking(infer)
         except Exception as exc:
             raise AdapterError(
                 RPCErrorCode.INTERNAL,
@@ -439,7 +435,7 @@ class NemotronAdapter(StatefulAdapter):
 
         try:
             async with self._decode_lock:
-                text, reported_language = await asyncio.to_thread(infer)
+                text, reported_language = await run_blocking(infer)
         except Exception as exc:
             raise AdapterError(
                 RPCErrorCode.INTERNAL,

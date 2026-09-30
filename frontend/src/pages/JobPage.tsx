@@ -37,7 +37,7 @@ export function JobPage() {
   const [lastEvent, setLastEvent] = useState<PipelineEvent | null>(null);
   const query = useQuery({
     queryKey: ["job", jobId],
-    queryFn: () => api<Job>(`/jobs/${String(jobId)}`),
+    queryFn: ({ signal }) => api<Job>(`/jobs/${String(jobId)}`, { signal }),
     enabled: jobId !== null,
     refetchInterval: (query) =>
       ["completed", "cancelled", "failed"].includes(
@@ -54,7 +54,7 @@ export function JobPage() {
         method: "POST",
         body: "{}",
       }),
-    onSuccess: (job) => client.setQueryData(["job", jobId], job),
+    onSuccess: (job) => client.setQueryData(["job", job.job_id], job),
   });
 
   const terminal = ["completed", "cancelled", "failed"].includes(

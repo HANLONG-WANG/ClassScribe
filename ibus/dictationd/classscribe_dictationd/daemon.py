@@ -294,16 +294,17 @@ class DictationService:
                 await task
         self._arming = None
         async with self._lock:
-            self._stop_source()
-            if self._candidate_timer is not None:
-                self._candidate_timer.cancel()
-                self._candidate_timer = None
-            await self._stop_consumer()
-            with contextlib.suppress(Exception):
-                await self.vad.close()
-            status = await self.controller.cancel()
-            await self._release_lease()
-            return status
+            try:
+                self._stop_source()
+                if self._candidate_timer is not None:
+                    self._candidate_timer.cancel()
+                    self._candidate_timer = None
+                await self._cancel_consumer()
+                with contextlib.suppress(Exception):
+                    await self.vad.close()
+                return await self.controller.cancel()
+            finally:
+                await self._release_lease()
 
     def configure(self, config: DictationConfig) -> DictationStatus:
         if config.model_id != "auto_best" and config.model_id not in self.available_models:

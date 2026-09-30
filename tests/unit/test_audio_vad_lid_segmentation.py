@@ -228,8 +228,10 @@ def test_natural_boundary_priority_and_distinct_segment_types() -> None:
             BoundaryCue(20 * SAMPLE_RATE, BoundaryKind.SPEAKER_CHANGE),
         ),
     )
-    assert chunks[0].core_span.end_sample == 20 * SAMPLE_RATE
-    assert chunks[0].boundary_reason == BoundaryKind.SPEAKER_CHANGE.value
+    assert chunks[0].core_span.end_sample == 18 * SAMPLE_RATE
+    assert chunks[0].boundary_reason == BoundaryKind.LANGUAGE_SWITCH.value
+    assert chunks[1].core_span.end_sample == 20 * SAMPLE_RATE
+    assert chunks[1].boundary_reason == BoundaryKind.SPEAKER_CHANGE.value
     assert chunks[0].audio_span == chunks[0].core_span
     assert not hasattr(chunks[0], "span")
     structure = make_structure_windows(50 * SAMPLE_RATE, window_samples=4 * 60 * SAMPLE_RATE)[0]

@@ -58,7 +58,7 @@ export function IBusPage() {
   const client = useQueryClient();
   const workers = useQuery({
     queryKey: ["ibus-workers"],
-    queryFn: () => api<WorkerStatus>("/ibus/workers"),
+    queryFn: ({ signal }) => api<WorkerStatus>("/ibus/workers", { signal }),
     refetchInterval: 1000,
   });
   const prepare = useMutation({
@@ -87,7 +87,7 @@ export function IBusPage() {
   const loadedModels = workers.data?.loaded_models ?? [];
   const status = useQuery({
     queryKey: ["ibus-status"],
-    queryFn: () => api<IBusStatus>("/ibus/status"),
+    queryFn: ({ signal }) => api<IBusStatus>("/ibus/status", { signal }),
     refetchInterval: 1000,
   });
   const value = status.data;

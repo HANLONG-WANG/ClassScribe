@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from classscribe_protocol.adapter import AdapterError, StatefulAdapter
+from classscribe_protocol.adapter import AdapterError, StatefulAdapter, run_blocking
 from classscribe_protocol.batch_audio import (
     SAMPLE_RATE,
     bounded_text,
@@ -104,10 +104,14 @@ class QwenAdapter(StatefulAdapter):
         self._stream_bases.setdefault(stream_id, absolute_start)
         pcm = self._streams[stream_id]
         samples = len(pcm) // 2
-        threshold = self._stream_chunk_samples.get(stream_id, 560 * SAMPLE_RATE // 1000)
+        base_interval = self._stream_chunk_samples.get(stream_id, 560 * SAMPLE_RATE // 1000)
+        previous = self._stream_decoded_samples.get(stream_id, 0)
+        # Batch fallback retains the complete utterance for correctness, but
+        # progressively coalesces interim updates instead of redecoding every
+        # 560 ms forever. Final flush always sees every sample.
+        threshold = max(base_interval, min(4 * SAMPLE_RATE, previous // 2))
         if samples - self._stream_decoded_samples.get(stream_id, 0) < threshold:
             return result
-        self._stream_decoded_samples[stream_id] = samples
         decoded = await self._decode_stream(
             bytes(pcm),
             start_sample=self._stream_bases[stream_id],
@@ -116,6 +120,7 @@ class QwenAdapter(StatefulAdapter):
             cancelled=cancelled,
             final=False,
         )
+        self._stream_decoded_samples[stream_id] = samples
         self._stream_last[stream_id] = decoded
         return decoded
 
@@ -190,7 +195,7 @@ class QwenAdapter(StatefulAdapter):
             return str(results[0].text), str(results[0].language)
 
         async with self._decode_lock:
-            text, reported_language = await asyncio.to_thread(infer)
+            text, reported_language = await run_blocking(infer)
         if cancelled.is_set():
             raise asyncio.CancelledError
         end_sample = start_sample + len(pcm) // 2
@@ -268,7 +273,7 @@ class QwenAdapter(StatefulAdapter):
             return model, torch
 
         try:
-            model, torch = await asyncio.to_thread(load_model)
+            model, torch = await run_blocking(load_model)
         except AdapterError:
             raise
         except Exception as exc:
@@ -322,7 +327,7 @@ class QwenAdapter(StatefulAdapter):
             return model, torch
 
         try:
-            model, torch = await asyncio.to_thread(load_model)
+            model, torch = await run_blocking(load_model)
         except AdapterError:
             raise
         except Exception as exc:
@@ -361,7 +366,7 @@ class QwenAdapter(StatefulAdapter):
 
         try:
             async with self._decode_lock:
-                native = await asyncio.to_thread(infer)
+                native = await run_blocking(infer)
             words = _alignment_words(native, offset=start, end_limit=end)
         except Exception as exc:
             if isinstance(exc, AdapterError):
@@ -425,7 +430,7 @@ class QwenAdapter(StatefulAdapter):
 
         try:
             async with self._decode_lock:
-                text, reported_language = await asyncio.to_thread(infer)
+                text, reported_language = await run_blocking(infer)
         except Exception as exc:
             raise AdapterError(
                 RPCErrorCode.INTERNAL,

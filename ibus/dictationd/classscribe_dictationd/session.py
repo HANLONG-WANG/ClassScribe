@@ -188,13 +188,17 @@ class DictationController:
     async def cancel(self) -> DictationStatus:
         if self.current.state is DictationState.IDLE:
             return self.current
+        message = "cancelled"
         try:
             await self.recognizer.cancel()
+        except Exception as exc:
+            message = f"cancelled; stream close failed: {type(exc).__name__}"
         finally:
             self.session_id = None
             self._interim = ()
             self._pending_candidates = ()
-        return self._publish(DictationState.IDLE, message="cancelled", preedit="")
+            self._publish(DictationState.IDLE, message=message, preedit="")
+        return self.current
 
     def accuracy_hot_switch_required(self) -> bool:
         method = getattr(self.recognizer, "accuracy_hot_switch_required", None)

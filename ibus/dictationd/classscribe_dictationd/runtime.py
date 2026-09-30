@@ -724,18 +724,21 @@ class GStreamerPipeWireSource:
 
         sink.connect("new-sample", sample)
         bus = pipeline.get_bus()
-        bus.add_signal_watch()
 
-        def bus_message(_bus: Any, message: Any) -> None:
+        def bus_message(_bus: Any, message: Any, _data: object) -> Any:
             if message.type == Gst.MessageType.ERROR:
                 error, _debug = message.parse_error()
                 error_callback(RuntimeError(f"PipeWire/GStreamer error: {error}"))
             elif message.type == Gst.MessageType.EOS:
                 error_callback(RuntimeError("PipeWire microphone stream ended"))
+            return Gst.BusSyncReply.DROP
 
-        bus.connect("message", bus_message)
+        # asyncio owns the daemon loop; a sync handler runs on the posting
+        # thread and forwards errors without requiring a GLib main context.
+        bus.set_sync_handler(bus_message, None)
         if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
-            bus.remove_signal_watch()
+            bus.set_sync_handler(None, None)
+            pipeline.set_state(Gst.State.NULL)
             raise RuntimeError("PipeWire capture pipeline failed to start")
         self._pipeline = pipeline
         self._bus = bus
@@ -753,12 +756,12 @@ class GStreamerPipeWireSource:
         if self._pipeline is not None:
             from gi.repository import Gst
 
+            if self._bus is not None:
+                self._bus.set_sync_handler(None, None)
+                self._bus = None
             self._pipeline.set_state(Gst.State.NULL)
             self._pipeline = None
-            if self._bus is not None:
-                self._bus.remove_signal_watch()
-                self._bus = None
-            self._pending.clear()
+        self._pending.clear()
 
 
 def _require_supervised_socket(manifest_path: Path, socket_path: Path) -> None:

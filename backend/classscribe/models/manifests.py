@@ -59,9 +59,7 @@ COMPONENT_SOURCE_FIELDS = frozenset(
 COMPONENT_SOURCE_FILE_FIELDS = frozenset(
     {"installed_path", "source_path", "source_sha256", "source_size_bytes"}
 )
-REVISION_LOCK_FIELDS = frozenset(
-    {"schema_version", "registry_revision", "facts_as_of", "models"}
-)
+REVISION_LOCK_FIELDS = frozenset({"schema_version", "registry_revision", "facts_as_of", "models"})
 REVISION_COMPONENT_SOURCE_FIELDS = frozenset(
     {"model_id", "repository", "revision", "relationship", "files"}
 )
@@ -152,15 +150,35 @@ def load_builtin_manifest_bundle(
     registry: ModelRegistry,
     licenses: Mapping[str, ModelLicense],
 ) -> LoadedManifestBundle:
-    """Load the built-in revision lock and bundle from one immutable resource root."""
-    root = _resource_root_for_bundle(path)
-    revisions, _revision_bytes = _load_json_document(
-        root,
-        PurePosixPath("config/model-revisions.lock.json"),
-        "model revision lock",
-        maximum_bytes=MAX_REVISION_LOCK_BYTES,
-    )
-    return load_manifest_bundle(path, registry, revisions, licenses)
+    """Read one stable bundle generation, retrying concurrent atomic publication."""
+    for attempt in range(3):
+        before = _bundle_directory_identity(path.parent)
+        try:
+            root = _resource_root_for_bundle(path)
+            revisions, _revision_bytes = _load_json_document(
+                root,
+                PurePosixPath("config/model-revisions.lock.json"),
+                "model revision lock",
+                maximum_bytes=MAX_REVISION_LOCK_BYTES,
+            )
+            bundle = load_manifest_bundle(path, registry, revisions, licenses)
+        except (OSError, ValueError):
+            if before == _bundle_directory_identity(path.parent) or attempt == 2:
+                raise
+        else:
+            if before == _bundle_directory_identity(path.parent):
+                return bundle
+            if attempt == 2:
+                raise ValueError("model manifest bundle changed repeatedly during loading")
+    raise ValueError("model manifest bundle changed repeatedly during loading")
+
+
+def _bundle_directory_identity(directory: Path) -> tuple[int, int, int] | None:
+    try:
+        metadata = directory.stat(follow_symlinks=False)
+    except OSError:
+        return None
+    return metadata.st_dev, metadata.st_ino, metadata.st_mtime_ns
 
 
 def load_manifest_bundle(
@@ -201,9 +219,7 @@ def load_manifest_bundle(
     if set(revision_rows) != expected_ids:
         raise ValueError("revision lock model IDs differ from model registry")
     expected_repositories = {model.repository for model in registry.models} | {
-        source.repository
-        for sources in component_sources.values()
-        for source in sources
+        source.repository for sources in component_sources.values() for source in sources
     }
     if set(licenses) != expected_repositories:
         raise ValueError("model license repositories differ from model and component sources")
@@ -275,9 +291,7 @@ def _require_canonical_json(value: Mapping[str, Any], content: bytes, label: str
 
 def _revision_rows(revisions: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     fields = set(revisions)
-    if not fields >= REVISION_LOCK_FIELDS or fields - REVISION_LOCK_FIELDS - {
-        "component_sources"
-    }:
+    if not fields >= REVISION_LOCK_FIELDS or fields - REVISION_LOCK_FIELDS - {"component_sources"}:
         raise ValueError("revision lock fields differ from the v1 contract")
     if revisions.get("schema_version") != 1:
         raise ValueError("revision lock schema version is not 1")

@@ -797,6 +797,7 @@ def test_profile_application_requires_exact_passed_ranking_and_can_rollback(
                 "offline": True,
                 "production_gold": True,
                 "real_model_execution": True,
+                "score_contract_version": "benchmark-quality-v2",
                 "synthetic_gold": False,
                 "manifest_sha256": "a" * 64,
                 "calibrations": [calibration],
@@ -1360,7 +1361,8 @@ def test_recording_transcript_glossary_export_and_security_flow(tmp_path: Path) 
             headers={**auth(token, csrf, write=True), "Content-Type": "application/json"},
             body=b'{"manifest_version":"gold-v1","parameters":{"scenario":"classroom"}}',
         )
-        assert benchmark.status == 202 and benchmark.json()["status"] == "running"
+        assert benchmark.status == 409
+        assert "manifest_path" in benchmark.json()["error"]["detail"]
 
     asyncio.run(scenario())
 

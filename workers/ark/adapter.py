@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from classscribe_protocol.adapter import AdapterError, StatefulAdapter
+from classscribe_protocol.adapter import AdapterError, StatefulAdapter, run_blocking
 from classscribe_protocol.batch_audio import (
     bounded_text,
     canonical_window,
@@ -98,7 +98,7 @@ class ArkAdapter(StatefulAdapter):
             return model, processor, tokenizer, torch, device, dtype
 
         try:
-            loaded = await asyncio.to_thread(load_model)
+            loaded = await run_blocking(load_model)
         except AdapterError:
             raise
         except Exception as exc:
@@ -179,7 +179,7 @@ class ArkAdapter(StatefulAdapter):
                 return str(decoded[0]).strip(), int(new_tokens.shape[-1]), prompt
 
         try:
-            text, generated_tokens, prompt = await asyncio.to_thread(infer)
+            text, generated_tokens, prompt = await run_blocking(infer)
         except Exception as exc:
             raise AdapterError(
                 RPCErrorCode.INTERNAL,

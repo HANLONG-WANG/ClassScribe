@@ -94,12 +94,12 @@ export function ModelsPage() {
   const [installedName, setInstalledName] = useState("");
   const query = useQuery({
     queryKey: ["models"],
-    queryFn: () => api<ModelInfo[]>("/models"),
+    queryFn: ({ signal }) => api<ModelInfo[]>("/models", { signal }),
     refetchInterval: 2000,
   });
   const recordings = useQuery({
     queryKey: ["recordings"],
-    queryFn: () => api<Recording[]>("/recordings"),
+    queryFn: ({ signal }) => api<Recording[]>("/recordings", { signal }),
     enabled: plan !== null,
   });
   const verify = useMutation({
@@ -110,6 +110,14 @@ export function ModelsPage() {
   const repair = useMutation({
     mutationFn: (id: string) =>
       api(`/models/${id}/environment/repair`, { method: "POST", body: "{}" }),
+    onSettled: () => client.invalidateQueries({ queryKey: ["models"] }),
+  });
+  const cleanup = useMutation({
+    mutationFn: (id: string) =>
+      api<{ removed_count: number; skipped_in_use: number }>(
+        `/models/${id}/environment/cache/cleanup`,
+        { method: "POST", body: "{}" },
+      ),
     onSettled: () => client.invalidateQueries({ queryKey: ["models"] }),
   });
   const remove = useMutation({
@@ -663,6 +671,36 @@ export function ModelsPage() {
             )}
             {repair.variables === model.id && repair.isSuccess && (
               <p role="status">运行环境已准备好。请重试转录以验证实际推理。</p>
+            )}
+            {model.environment_cache && (
+              <p className="muted">
+                运行环境缓存：{model.environment_cache.versions} 个版本，
+                {model.environment_cache.damaged} 个损坏备份，
+                {bytes(model.environment_cache.size_bytes)}；
+                {model.environment_cache.in_use} 个使用中。
+              </p>
+            )}
+            <button
+              type="button"
+              disabled={
+                cleanup.isPending ||
+                repair.isPending ||
+                busyStages.has(model.install_stage ?? "")
+              }
+              onClick={() => {
+                cleanup.mutate(model.id);
+              }}
+            >
+              清理旧运行环境
+            </button>
+            {cleanup.variables === model.id && cleanup.isError && (
+              <p role="alert">缓存清理失败：{cleanup.error.message}</p>
+            )}
+            {cleanup.variables === model.id && cleanup.isSuccess && (
+              <p role="status">
+                已清理 {cleanup.data.removed_count} 个旧环境，跳过{" "}
+                {cleanup.data.skipped_in_use} 个使用中的环境。模型文件保留。
+              </p>
             )}
             <div className="toolbar compact">
               <button

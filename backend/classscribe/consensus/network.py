@@ -51,7 +51,7 @@ class ConfusionNetwork:
         language: str,
         inputs: ConsensusInputs,
     ) -> ConsensusResult:
-        if any(candidate.evidence.audio_span != canonical_span for candidate in candidates):
+        if any(candidate.evidence.core_span != canonical_span for candidate in candidates):
             raise ValueError(
                 "all candidates, including rejected evidence, must share one canonical range"
             )
@@ -121,11 +121,14 @@ class ConfusionNetwork:
             totals: dict[str, float] = defaultdict(float)
             for vote, weight in weighted:
                 totals[vote.normalized] += weight
-            winner = max(totals, key=lambda token: (totals[token], token))
+            winner = max(totals, key=lambda token: (totals[token], token == "", token))
             winner_votes = tuple(item for item in weighted if item[0].normalized == winner)
             winning_weight = totals[winner]
             total_weight = sum(weight for _vote, weight in weighted)
             support = winning_weight / max(total_weight, 1e-12)
+            column_support.append(support)
+            if winner == "":
+                continue
             selected_vote = max(winner_votes, key=lambda item: (item[1], item[0].candidate_id))[0]
             text, rule = _apply_terminology_rule(selected_vote.text, language, inputs)
             provenance = {
@@ -157,7 +160,8 @@ class ConfusionNetwork:
                 in inputs.calibrated_token_confidence,
             }
             final.append(FinalToken(text, column.span, round(support, 6), provenance))
-            column_support.append(support)
+        if not final:
+            return _inaudible(language, canonical_span, "no_supported_asr_tokens")
         evidence_quality = max(candidate.quality.quality_gate_score for candidate in usable)
         overall = sum(column_support) / len(column_support) * evidence_quality
         if overall < 0.45:
@@ -170,7 +174,11 @@ class ConfusionNetwork:
             )
         text = _join_tokens(tuple(token.text for token in final), language)
         text, punctuation_sources = restore_native_punctuation(text, tuple(final), usable)
-        low_confidence = overall < 0.67
+        unresolved_context = any(
+            candidate.evidence.provenance.get("context_assignment") == "unresolved_context_boundary"
+            for candidate in usable
+        )
+        low_confidence = overall < 0.67 or unresolved_context
         return ConsensusResult(
             language=language,
             canonical_span=canonical_span,
@@ -180,7 +188,8 @@ class ConfusionNetwork:
             consensus_support_score=round(overall, 6),
             score_is_calibrated_probability=False,
             low_confidence=low_confidence,
-            warnings=("low_consensus_support",) if low_confidence else (),
+            warnings=(("low_consensus_support",) if overall < 0.67 else ())
+            + (("unresolved_context_boundary",) if unresolved_context else ()),
             punctuation_sources=punctuation_sources,
         )
 

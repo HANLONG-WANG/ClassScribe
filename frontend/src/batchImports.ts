@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { readStorage, writeStorage } from "./storage";
 import {
   api,
   authHeaders,
@@ -23,7 +24,7 @@ const storageKey = "classscribe-batch-imports-v1";
 function restored(): ImportItem[] {
   try {
     const saved = JSON.parse(
-      localStorage.getItem(storageKey) ?? "[]",
+      readStorage(storageKey, "local") ?? "[]",
     ) as ImportItem[];
     return saved.map((item) => ({
       ...item,
@@ -43,9 +44,10 @@ export const useBatchImports = create<{ items: ImportItem[] }>()(() => ({
 }));
 useBatchImports.subscribe(({ items }) => {
   try {
-    localStorage.setItem(
+    writeStorage(
       storageKey,
       JSON.stringify(items.map((item) => ({ ...item, file: undefined }))),
+      "local",
     );
   } catch {
     /* Uploads continue when browser storage is full. */
@@ -67,6 +69,10 @@ function upload(item: ImportItem, signal: AbortSignal): Promise<Recording> {
     }
     const xhr = new XMLHttpRequest();
     xhr.open("PUT", `/api/v1/recordings/${item.id}/upload`);
+    xhr.timeout = 30 * 60_000;
+    xhr.ontimeout = () => {
+      reject(new Error("上传或媒体校验超时，可重试此文件"));
+    };
     const headers = new Headers(authHeaders(true));
     Object.entries(filenameHeaders(item.name)).forEach(([key, value]) => {
       headers.set(key, value);
@@ -109,6 +115,7 @@ function upload(item: ImportItem, signal: AbortSignal): Promise<Recording> {
       reject(new Error("已停止上传，可重新选择文件后重试"));
     };
     if (signal.aborted) {
+      signal.removeEventListener("abort", abort);
       reject(new Error("已停止上传"));
       return;
     }
@@ -126,12 +133,16 @@ async function drain() {
     try {
       update(item.id, { status: "uploading", error: undefined });
       // A stable recording ID recovers uploads whose success response was lost.
-      const recording = await api<Recording>(`/recordings/${item.id}`).catch(
-        () => upload(item, signal),
-      );
+      const recording = await api<Recording>(`/recordings/${item.id}`, {
+        signal,
+      }).catch((error: unknown) => {
+        if (signal.aborted) throw error;
+        return upload(item, signal);
+      });
       if (signal.aborted) throw new Error("已停止入队，可重试");
       update(item.id, { status: "submitting", progress: 100 });
       const job = await api<Job>("/jobs", {
+        signal,
         method: "POST",
         body: JSON.stringify({
           ...item.options,
@@ -154,6 +165,10 @@ function start() {
   if (active) return;
   active = drain().finally(() => {
     active = null;
+    if (
+      useBatchImports.getState().items.some((item) => item.status === "waiting")
+    )
+      start();
   });
 }
 export function addImports(files: File[], options: ApiObject) {

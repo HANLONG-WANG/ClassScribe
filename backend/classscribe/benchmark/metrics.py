@@ -162,7 +162,7 @@ def score_timeline(
     predicted_sentence_boundaries: tuple[int, ...] = (),
     start_sample: int = 0,
     duration_samples: int,
-) -> dict[str, float | int]:
+) -> dict[str, float | int | None]:
     structural_errors = _timeline_errors(predicted_words, start_sample, duration_samples)
     pairs = _aligned_words(reference_words, predicted_words)
     errors_ms = [
@@ -173,7 +173,10 @@ def score_timeline(
     ]
     return {
         "structural_errors": structural_errors,
-        "word_boundary_mae_ms": statistics.fmean(errors_ms) if errors_ms else 0.0,
+        "word_boundary_mae_ms": statistics.fmean(errors_ms) if errors_ms else None,
+        "word_timing_reference_count": len(reference_words),
+        "word_timing_matched_count": len(pairs),
+        "word_timing_coverage": len(pairs) / len(reference_words) if reference_words else None,
         "sentence_boundary_f1_250ms": _boundary_f1(
             reference_sentence_boundaries, predicted_sentence_boundaries, 4_000
         ),

@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from classscribe_protocol.adapter import AdapterError, StatefulAdapter
+from classscribe_protocol.adapter import AdapterError, StatefulAdapter, run_blocking
 from classscribe_protocol.batch_audio import (
     bounded_text,
     canonical_window,
@@ -88,7 +88,7 @@ class GraniteAdapter(StatefulAdapter):
             return model, processor, processor.tokenizer, torch, librosa, device
 
         try:
-            loaded = await asyncio.to_thread(load_model)
+            loaded = await run_blocking(load_model)
         except AdapterError:
             raise
         except Exception as exc:
@@ -160,7 +160,7 @@ class GraniteAdapter(StatefulAdapter):
                 return str(decoded[0]).strip(), int(new_tokens.shape[-1])
 
         try:
-            text, generated_tokens = await asyncio.to_thread(infer)
+            text, generated_tokens = await run_blocking(infer)
         except Exception as exc:
             raise AdapterError(
                 RPCErrorCode.INTERNAL,

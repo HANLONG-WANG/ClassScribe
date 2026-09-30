@@ -47,4 +47,3 @@ class HuggingFaceHttpClient:
         except (httpx.HTTPError, ValueError) as error:
             diagnostic = redact_for_diagnostics(error, token=token)
             raise RemoteRequestError(f"Hugging Face request failed: {diagnostic}") from None
-

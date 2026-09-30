@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 import tempfile
+import threading
 import wave
 from collections.abc import AsyncIterable, Callable, Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from itertools import pairwise
 from pathlib import Path
@@ -26,6 +28,7 @@ from classscribe.api.schemas import (
     CandidateAdoption,
     ExportCreate,
     GlossaryCreate,
+    GlossaryTermInput,
     GlossaryTermsUpdate,
     JobCreate,
     ProfileUpdate,
@@ -34,6 +37,13 @@ from classscribe.api.schemas import (
     SegmentSplit,
 )
 from classscribe.audio.media import FFmpegMediaPipeline
+from classscribe.benchmark import (
+    SCORE_CONTRACT_VERSION,
+    BenchmarkRunner,
+    load_gold_manifest,
+    load_predictions,
+)
+from classscribe.benchmark.persistence import BenchmarkRepository
 from classscribe.classroom import ClassroomPipeline, ProductionStageRunner
 from classscribe.classroom import queue as queue_state
 from classscribe.contracts import LanguageMode
@@ -60,7 +70,7 @@ from classscribe.db.models import (
 )
 from classscribe.deletion import DELETE_ALL_CONFIRMATION, DeletionService
 from classscribe.errors import ClassScribeError, ErrorCode
-from classscribe.exports import ExportSegment, ExportToken, render_export
+from classscribe.exports import ExportSegment, load_export_segments, render_export
 from classscribe.jobs.audit import ActorType, AuditService, EditableLayer
 from classscribe.models import (
     DictationWorkerSupervisor,
@@ -98,17 +108,7 @@ _CONTENT_TYPES = {
     "vtt": "text/vtt; charset=utf-8",
     "csv": "text/csv; charset=utf-8",
 }
-_SETTINGS_KEYS = frozenset(
-    {
-        "appearance",
-        "locale",
-        "auto_export",
-        "retention",
-        "diagnostics",
-        "ibus",
-        "subtitle",
-    }
-)
+_SETTINGS_KEYS = frozenset({"retention", "ibus"})
 ModelHealthCheck = Callable[
     [ModelEntry, Path, Path, Mapping[str, str], str, str | None], HealthCheckOutcome
 ]
@@ -146,6 +146,9 @@ class ClassScribeService:
         self.allow_pending_jobs_without_pipeline = allow_pending_jobs_without_pipeline
         self.upload_limits = upload_limits or UploadLimits()
         self.audit = AuditService()
+        self._benchmark_tasks: set[asyncio.Task[None]] = set()
+        self._maintenance_lock = threading.RLock()
+        self._local_cleared = False
 
     async def upload_recording(
         self,
@@ -797,7 +800,11 @@ class ClassScribeService:
                 raise ClassScribeError(
                     ErrorCode.CANDIDATE_TIMELINE_INVALID, "split is out of range"
                 )
-            current = original.user_text or original.smart_corrected_text or original.faithful_text
+            current = (
+                original.user_text
+                if original.user_text is not None
+                else original.smart_corrected_text or original.faithful_text
+            )
             if strip_punctuation_and_spacing(value.left_text + value.right_text) != (
                 strip_punctuation_and_spacing(current)
             ):
@@ -854,7 +861,11 @@ class ClassScribeService:
                     ErrorCode.CANDIDATE_TIMELINE_INVALID, "merge segments must be contiguous"
                 )
             merged_text = " ".join(
-                (item.user_text or item.smart_corrected_text or item.faithful_text).strip()
+                (
+                    item.user_text
+                    if item.user_text is not None
+                    else item.smart_corrected_text or item.faithful_text
+                ).strip()
                 for item in segments
             ).strip()
             merged = self._derived_segment(
@@ -887,6 +898,7 @@ class ClassScribeService:
     def models(self) -> list[dict[str, Any]]:
         immutable_resources = resource_root()
         environments: dict[str, dict[str, str]] = {}
+        environment_caches: dict[str, dict[str, object]] = {}
         with self.sessions() as session:
             installations = {
                 (item.model_id, item.revision): item
@@ -899,6 +911,12 @@ class ClassScribeService:
                         environments[entry.worker] = self.worker_environments.inspect(entry.worker)
                     except (OSError, ValueError, ClassScribeError):
                         environments[entry.worker] = {"status": "unavailable"}
+                    try:
+                        environment_caches[entry.worker] = self.worker_environments.cache_status(
+                            entry.worker
+                        )
+                    except (OSError, ValueError, ClassScribeError):
+                        environment_caches[entry.worker] = {"available": False}
                 manifest_metadata = self._manifest_metadata(entry.id)
                 manifest = manifest_metadata[0] if manifest_metadata is not None else None
                 worker_is_implemented = worker_implemented(entry, immutable_resources)
@@ -928,6 +946,7 @@ class ClassScribeService:
                         "enabled": entry.enabled,
                         "experimental": entry.experimental,
                         "worker_environment": environments.get(entry.worker),
+                        "environment_cache": environment_caches.get(entry.worker),
                         "install_stage": (
                             self.model_manager.installation_stage(entry.id, entry.revision)
                             if self.model_manager is not None
@@ -1206,6 +1225,12 @@ class ClassScribeService:
             self.resident_workers.request_refresh()
         return {"model_id": model_id, "revision": revision, "deleted": True}
 
+    def cleanup_model_environment_cache(self, model_id: str) -> dict[str, object]:
+        entry = self._registry_model(model_id)
+        if self.worker_environments is None:
+            raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "运行环境管理器不可用。")
+        return self.worker_environments.cleanup(entry.worker, keep_versions=2, keep_damaged=1)
+
     def rollback_model(self, model_id: str, revision: str) -> dict[str, Any]:
         self._model_manager().rollback(model_id, revision)
         if self.resident_workers is not None:
@@ -1409,7 +1434,11 @@ class ClassScribeService:
 
     def settings(self) -> dict[str, Any]:
         with self.sessions() as session:
-            return {item.key: item.value_json for item in session.scalars(select(AppSetting))}
+            values = {item.key: item.value_json for item in session.scalars(select(AppSetting))}
+        # Legacy saved values did not enable audio capture persistence.
+        if "ibus" in values:
+            values["ibus"] = {"save_audio": False}
+        return values
 
     def update_settings(self, values: Mapping[str, Any]) -> dict[str, Any]:
         unknown = values.keys() - _SETTINGS_KEYS
@@ -1417,12 +1446,26 @@ class ClassScribeService:
             raise ClassScribeError(
                 ErrorCode.JOB_STATE_CONFLICT, f"unsupported settings: {sorted(unknown)}"
             )
-        with self.sessions.begin() as session:
-            for key, value in values.items():
-                if not isinstance(value, dict):
+        for key, value in values.items():
+            if not isinstance(value, dict):
+                raise ClassScribeError(
+                    ErrorCode.JOB_STATE_CONFLICT, "each setting must be an object"
+                )
+            if key == "retention":
+                days = value.get("derived_days")
+                if set(value) != {"derived_days"} or type(days) is not int or not 1 <= days <= 3650:
                     raise ClassScribeError(
-                        ErrorCode.JOB_STATE_CONFLICT, "each setting group must be an object"
+                        ErrorCode.JOB_STATE_CONFLICT, "derived_days must be an integer in 1..3650"
                     )
+            elif key == "ibus":
+                if set(value) != {"save_audio"} or value["save_audio"] is not False:
+                    raise ClassScribeError(
+                        ErrorCode.JOB_STATE_CONFLICT,
+                        "原始听写音频保存尚不支持, 音频只在内存中处理。",
+                    )
+        with self.sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            for key, value in values.items():
                 setting = session.get(AppSetting, key) or AppSetting(key=key)
                 setting.value_json = dict(value)
                 session.add(setting)
@@ -1477,6 +1520,50 @@ class ClassScribeService:
             TerminologyRepository(self.sessions).record_suggestions(
                 identifier, suggested, default_language=suggested[0].language or "en"
             )
+        return self.glossary(identifier)
+
+    def update_term(
+        self, glossary_id: str, term_id: str, value: GlossaryTermInput
+    ) -> dict[str, Any]:
+        identifier = _id(glossary_id, "glossary_id")
+        term_identifier = _id(term_id, "term_id")
+        term = CourseTerm(
+            canonical=value.canonical,
+            reading=value.reading,
+            aliases=value.aliases,
+            weight=value.weight,
+            source=TermSource(value.source),
+            confirmation=(
+                ConfirmationStatus.CONFIRMED if value.confirmed else ConfirmationStatus.SUGGESTED
+            ),
+            language=value.language,
+        )
+        with self.sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            record = session.get(GlossaryTerm, term_identifier)
+            if record is None or record.glossary_id != identifier:
+                raise _not_found("glossary term")
+            conflict = session.scalar(
+                select(GlossaryTerm.id).where(
+                    GlossaryTerm.glossary_id == identifier,
+                    GlossaryTerm.language == LanguageMode(value.language),
+                    GlossaryTerm.canonical == term.canonical,
+                    GlossaryTerm.id != term_identifier,
+                )
+            )
+            if conflict is not None:
+                raise ClassScribeError(
+                    ErrorCode.JOB_STATE_CONFLICT, "目标语言中已存在同名词条, 未覆盖任何词条。"
+                )
+            record.canonical = term.canonical
+            record.reading = term.reading
+            record.aliases = list(term.aliases)
+            record.language = LanguageMode(value.language)
+            record.weight = term.weight
+            record.source = term.source.value
+            record.user_confirmed = term.user_confirmed
+            glossary = session.get_one(Glossary, identifier)
+            glossary.version += 1
         return self.glossary(identifier)
 
     def delete_glossary(self, glossary_id: str) -> dict[str, Any]:
@@ -1536,9 +1623,23 @@ class ClassScribeService:
                     "请先等待任务结束或取消后再删除",
                 )
             report = DeletionService(self.paths).delete_job(session, identifier)
+        if self.pipeline is not None:
+            self.pipeline.broker.forget(identifier)
         return {"level": report.level.value, "job_id": identifier, "deleted": True}
 
     def clear_local_data(self, confirmation: str) -> dict[str, Any]:
+        if confirmation != DELETE_ALL_CONFIRMATION:
+            raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "全量清除确认短语不匹配")
+        with self._maintenance_lock:
+            if any(not task.done() for task in tuple(self._benchmark_tasks)):
+                raise ClassScribeError(
+                    ErrorCode.JOB_STATE_CONFLICT, "仍有活动基准, 请先等待评分结束。"
+                )
+            result = self._clear_local_data_locked(confirmation)
+            self._local_cleared = True
+            return result
+
+    def _clear_local_data_locked(self, confirmation: str) -> dict[str, Any]:
         if confirmation != DELETE_ALL_CONFIRMATION:
             raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "全量清除确认短语不匹配")
         with self.sessions() as session:
@@ -1561,6 +1662,11 @@ class ClassScribeService:
                 ErrorCode.JOB_STATE_CONFLICT,
                 "仍有活动任务, 请先完成或取消这些任务",
             )
+        if self.resident_workers is not None:
+            try:
+                self.resident_workers.suspend_for_classroom_sync()
+            except RuntimeError as exc:
+                raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, str(exc)) from exc
         bind = self.sessions.kw.get("bind")
         if isinstance(bind, Engine):
             bind.dispose()
@@ -1683,6 +1789,34 @@ class ClassScribeService:
         return path, metadata
 
     def create_benchmark(self, value: BenchmarkCreate) -> dict[str, Any]:
+        with self._maintenance_lock:
+            if self._local_cleared:
+                raise ClassScribeError(
+                    ErrorCode.JOB_STATE_CONFLICT, "请重启 ClassScribe 后再创建基准。"
+                )
+            return self._create_benchmark_locked(value)
+
+    def _create_benchmark_locked(self, value: BenchmarkCreate) -> dict[str, Any]:
+        inputs: list[Path] = []
+        for key in ("manifest_path", "predictions_path"):
+            raw = value.parameters.get(key)
+            if (
+                not isinstance(raw, str)
+                or not raw
+                or Path(raw).is_absolute()
+                or ".." in Path(raw).parts
+            ):
+                raise ClassScribeError(
+                    ErrorCode.JOB_STATE_CONFLICT,
+                    "基准需要 data/benchmarks 下的 manifest_path 和 predictions_path 相对路径。",
+                )
+            path = self.paths.data_path("benchmarks", *Path(raw).parts)
+            if not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
+                raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "基准输入缺失或超过 64 MiB。")
+            inputs.append(path)
+        if type(value.parameters.get("production_gold", True)) is not bool:
+            raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "production_gold must be boolean")
+        loop = asyncio.get_running_loop()
         with self.sessions.begin() as session:
             run = BenchmarkRun(
                 manifest_version=value.manifest_version,
@@ -1695,7 +1829,94 @@ class ClassScribeService:
             session.add(run)
             session.flush()
             identifier = run.id
+
+        def score() -> None:
+            try:
+                records = load_gold_manifest(inputs[0])
+                report = BenchmarkRunner(
+                    records,
+                    manifest_version=value.manifest_version,
+                    manifest_sha256=hashlib.sha256(inputs[0].read_bytes()).hexdigest(),
+                    parameters={
+                        "offline": True,
+                        "real_model_execution": False,
+                        "synthetic_gold": any("synthetic" in item.tags for item in records),
+                    },
+                    production_gold=value.parameters.get("production_gold", True),
+                ).run(load_predictions(inputs[1]))
+                BenchmarkRepository(self.sessions).complete(identifier, report)
+            except Exception as exc:
+                BenchmarkRepository(self.sessions).fail(
+                    identifier,
+                    error_code=exc.code.value
+                    if isinstance(exc, ClassScribeError)
+                    else "BENCHMARK_INPUT_FAILED",
+                )
+
+        async def execute() -> None:
+            await asyncio.to_thread(score)
+
+        task = loop.create_task(execute(), name=f"classscribe-benchmark-{identifier}")
+        self._benchmark_tasks.add(task)
+
+        def finished(result: asyncio.Task[None]) -> None:
+            self._benchmark_tasks.discard(result)
+            if not result.cancelled() and result.exception() is not None:
+                logging.getLogger(__name__).error(
+                    "benchmark persistence failed: %s", type(result.exception()).__name__
+                )
+
+        task.add_done_callback(finished)
         return self.benchmark(identifier)
+
+    async def close_background_jobs(self) -> None:
+        if self._benchmark_tasks:
+            await asyncio.gather(*tuple(self._benchmark_tasks))
+
+    def recover_background_jobs(self) -> int:
+        """A crashed scoring process cannot leave a phantom running benchmark."""
+        with self.sessions.begin() as session:
+            running = list(
+                session.scalars(
+                    select(BenchmarkRun).where(BenchmarkRun.status == BenchmarkStatus.RUNNING)
+                )
+            )
+            for run in running:
+                run.status = BenchmarkStatus.FAILED
+                run.metrics_json = {"error_code": "BENCHMARK_INTERRUPTED"}
+                run.completed_at = datetime.now(UTC)
+            return len(running)
+
+    def cleanup_retained_derived(self) -> dict[str, int]:
+        with self._maintenance_lock:
+            if self._local_cleared:
+                return {"jobs_cleaned": 0, "errors": 0}
+            return self._cleanup_retained_derived_locked()
+
+    def _cleanup_retained_derived_locked(self) -> dict[str, int]:
+        """Apply an explicit retention preference only to disposable terminal artifacts."""
+        cleaned, failed = 0, 0
+        with self.sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+            setting = session.get(AppSetting, "retention")
+            days = setting.value_json.get("derived_days") if setting is not None else None
+            if type(days) is not int or not 1 <= days <= 3650:
+                return {"jobs_cleaned": 0, "errors": 0}
+            jobs = tuple(
+                session.scalars(
+                    select(Job).where(
+                        Job.status.in_((JobStatus.COMPLETED, JobStatus.CANCELLED)),
+                        Job.completed_at <= datetime.now(UTC) - timedelta(days=days),
+                    )
+                )
+            )
+            for job in jobs:
+                try:
+                    report = DeletionService(self.paths).delete_derived(job.id)
+                    cleaned += bool(report.removed)
+                except (OSError, ValueError):
+                    failed += 1
+        return {"jobs_cleaned": cleaned, "errors": failed}
 
     def benchmark(self, benchmark_id: str) -> dict[str, Any]:
         identifier = _id(benchmark_id, "benchmark_id")
@@ -1991,63 +2212,7 @@ class ClassScribeService:
         with self.sessions() as session:
             if session.get(Job, job_id) is None:
                 raise _not_found("job")
-            segments = tuple(
-                session.scalars(
-                    select(TranscriptSegment)
-                    .where(
-                        TranscriptSegment.job_id == job_id,
-                        TranscriptSegment.is_active.is_(True),
-                    )
-                    .order_by(TranscriptSegment.start_sample, TranscriptSegment.id)
-                ).all()
-            )
-            names = {
-                item.speaker_global_id: item.display_name
-                for item in session.scalars(
-                    select(SpeakerDisplayName).where(SpeakerDisplayName.job_id == job_id)
-                )
-            }
-            result: list[ExportSegment] = []
-            for segment in segments:
-                tokens = tuple(
-                    ExportToken(
-                        token.token,
-                        AudioSpan(token.start_sample, token.end_sample),
-                        protected_group=(
-                            str(token.provenance_json["protected_group"])
-                            if token.provenance_json.get("protected_group")
-                            else None
-                        ),
-                        provenance=dict(token.provenance_json),
-                    )
-                    for token in session.scalars(
-                        select(TokenSpan)
-                        .where(
-                            TokenSpan.segment_id == segment.id,
-                            TokenSpan.candidate_id.is_(None),
-                        )
-                        .order_by(TokenSpan.start_sample, TokenSpan.id)
-                    )
-                )
-                result.append(
-                    ExportSegment(
-                        segment.id,
-                        AudioSpan(segment.start_sample, segment.end_sample),
-                        segment.language.value,
-                        segment.raw_text,
-                        segment.faithful_text,
-                        segment.smart_corrected_text,
-                        segment.user_text,
-                        tokens,
-                        smart_tokens=tokens,
-                        user_tokens=tokens if segment.user_text else (),
-                        speaker=names.get(segment.speaker_id, segment.speaker_id)
-                        if segment.speaker_id
-                        else None,
-                        timing_quality=segment.timing_quality.value,
-                    )
-                )
-            return tuple(result)
+            return load_export_segments(session, job_id)
 
     def _glossary_payload(self, session: Session, glossary: Glossary) -> dict[str, Any]:
         terms = tuple(
@@ -2096,6 +2261,7 @@ class ClassScribeService:
 
     def _upsert_glossary_terms(self, glossary_id: str, terms: tuple[CourseTerm, ...]) -> None:
         with self.sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             for term in terms:
                 language = LanguageMode(term.language or "en")
                 record = session.scalar(
@@ -2117,6 +2283,7 @@ class ClassScribeService:
                 record.weight = term.weight
                 record.source = term.source.value
                 record.user_confirmed = term.user_confirmed
+                session.flush()
 
     def _job_options(self, job_id: str) -> dict[str, Any]:
         with self.sessions() as session:
@@ -2308,6 +2475,7 @@ def _benchmark_is_release_eligible(item: BenchmarkRun) -> bool:
     manifest_sha256 = parameters.get("manifest_sha256")
     return (
         item.status is BenchmarkStatus.COMPLETED
+        and parameters.get("score_contract_version") == SCORE_CONTRACT_VERSION
         and parameters.get("production_gold") is True
         and parameters.get("real_model_execution") is True
         and parameters.get("synthetic_gold") is False

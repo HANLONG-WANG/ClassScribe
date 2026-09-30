@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from classscribe_protocol.adapter import AdapterError, StatefulAdapter
+from classscribe_protocol.adapter import AdapterError, StatefulAdapter, run_blocking
 from classscribe_protocol.batch_audio import (
     SAMPLE_RATE,
     bounded_text,
@@ -177,7 +177,7 @@ class FireRedAdapter(StatefulAdapter):
                 ) from exc
 
         try:
-            model = await asyncio.to_thread(load_model)
+            model = await run_blocking(load_model)
         except AdapterError:
             raise
         except Exception as exc:
@@ -221,7 +221,7 @@ class FireRedAdapter(StatefulAdapter):
             )
 
         try:
-            model = await asyncio.to_thread(load_model)
+            model = await run_blocking(load_model)
         except AdapterError:
             raise
         except Exception as exc:
@@ -247,7 +247,7 @@ class FireRedAdapter(StatefulAdapter):
                 raise TypeError("FireRedVAD result is not an object")
             return result, probabilities
 
-        result, probabilities = await asyncio.to_thread(infer)
+        result, probabilities = await run_blocking(infer)
         if cancelled.is_set():
             raise asyncio.CancelledError
         offset = int(params["start_sample"])
@@ -294,7 +294,7 @@ class FireRedAdapter(StatefulAdapter):
                 raise TypeError("FireRedLID result is not an object")
             return result
 
-        result = await asyncio.to_thread(infer)
+        result = await run_blocking(infer)
         if cancelled.is_set():
             raise asyncio.CancelledError
         label = result.get("lang")
@@ -390,10 +390,12 @@ class FireRedAdapter(StatefulAdapter):
         await super().dispatch("stream_push", params, cancelled)
         stream_id = str(params["stream_id"])
         pcm = self._streams[stream_id]
-        offset = self._vad_offsets[stream_id]
+        offset = 0
+        completed_frames = 0
         results = []
 
         def infer(frame: bytes) -> Any:
+            nonlocal completed_frames
             try:
                 import numpy as np  # type: ignore[import-not-found]
             except ImportError as exc:
@@ -401,14 +403,20 @@ class FireRedAdapter(StatefulAdapter):
                     RPCErrorCode.INTERNAL, "FireRed streaming VAD requires NumPy"
                 ) from exc
             assert self._model is not None
-            return self._model.detect_frame(np.frombuffer(frame, dtype="<i2"))
+            result = self._model.detect_frame(np.frombuffer(frame, dtype="<i2"))
+            completed_frames += 1
+            return result
 
-        while offset * 2 + 800 <= len(pcm):
-            results.append(
-                await asyncio.to_thread(infer, bytes(pcm[offset * 2 : offset * 2 + 800]))
-            )
-            offset += 160
-        self._vad_offsets[stream_id] = offset
+        try:
+            while offset * 2 + 800 <= len(pcm):
+                results.append(await run_blocking(infer, bytes(pcm[offset * 2 : offset * 2 + 800])))
+                offset += 160
+        finally:
+            # Cancellation still waits for the real frame call to finish. Commit
+            # consumed frames even when the asyncio result is discarded.
+            consumed = completed_frames * 160
+            del pcm[: consumed * 2]
+            self._vad_offsets[stream_id] += consumed
         if cancelled.is_set():
             raise asyncio.CancelledError
         latest = results[-1] if results else None
@@ -455,7 +463,7 @@ class FireRedAdapter(StatefulAdapter):
             return FireRedAsr2.from_pretrained("aed", str(model_path), config)
 
         try:
-            model = await asyncio.to_thread(load_model)
+            model = await run_blocking(load_model)
         except AdapterError:
             raise
         except Exception as exc:
@@ -509,7 +517,7 @@ class FireRedAdapter(StatefulAdapter):
             return FireRedPunc.from_pretrained(str(model_path), config)
 
         try:
-            model = await asyncio.to_thread(load_model)
+            model = await run_blocking(load_model)
         except AdapterError:
             raise
         except Exception as exc:
@@ -548,7 +556,7 @@ class FireRedAdapter(StatefulAdapter):
             return result
 
         try:
-            native = await asyncio.to_thread(infer)
+            native = await run_blocking(infer)
         except Exception as exc:
             raise AdapterError(
                 RPCErrorCode.INTERNAL,
@@ -591,7 +599,7 @@ class FireRedAdapter(StatefulAdapter):
                 return result
 
         try:
-            native = await asyncio.to_thread(infer)
+            native = await run_blocking(infer)
         except Exception as exc:
             raise AdapterError(
                 RPCErrorCode.INTERNAL,

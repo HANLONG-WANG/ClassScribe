@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from classscribe_protocol.adapter import AdapterError, StatefulAdapter
+from classscribe_protocol.adapter import AdapterError, StatefulAdapter, run_blocking
 from classscribe_protocol.messages import RPCErrorCode
 
 SAMPLE_RATE = 16_000
@@ -114,7 +114,7 @@ class MossTDAdapter(StatefulAdapter):
             )
 
         try:
-            loaded = await asyncio.to_thread(load_model)
+            loaded = await run_blocking(load_model)
         except AdapterError:
             raise
         except Exception as exc:
@@ -197,7 +197,7 @@ class MossTDAdapter(StatefulAdapter):
                 )
 
         try:
-            raw_text, native_segments, generated_tokens, prompt = await asyncio.to_thread(infer)
+            raw_text, native_segments, generated_tokens, prompt = await run_blocking(infer)
         except _GenerationCancelled as exc:
             raise asyncio.CancelledError from exc
         except Exception as exc:

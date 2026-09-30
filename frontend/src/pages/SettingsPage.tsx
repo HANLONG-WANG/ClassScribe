@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { api, authHeaders, type ApiObject, setApiToken } from "../api";
+import { api, downloadFile, type ApiObject, setApiToken } from "../api";
+import { removeStorage } from "../storage";
 import { useAuthStatus } from "../authStatus";
 import { useBatchImports } from "../batchImports";
 import { useTranscriptSaves } from "../transcriptSaves";
@@ -15,10 +16,19 @@ export function SettingsPage() {
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [localCleared, setLocalCleared] = useState(false);
   const [retentionEdit, setRetentionDays] = useState<number | undefined>();
-  const [audioEdit, setSaveDictationAudio] = useState<boolean | undefined>();
+  const downloadController = useRef<AbortController | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState("");
+  useEffect(
+    () => () => {
+      downloadController.current?.abort();
+    },
+    [],
+  );
   const settings = useQuery({
     queryKey: ["settings"],
-    queryFn: () => api<Record<string, ApiObject>>("/settings"),
+    queryFn: ({ signal }) =>
+      api<Record<string, ApiObject>>("/settings", { signal }),
   });
   const settingsData = authInvalid || localCleared ? undefined : settings.data;
   const clearAll = useMutation({
@@ -33,7 +43,7 @@ export function SettingsPage() {
       setApiToken("");
       useBatchImports.setState({ items: [] });
       useTranscriptSaves.setState({ drafts: {} });
-      localStorage.removeItem("classscribe-batch-imports-v1");
+      removeStorage("classscribe-batch-imports-v1", "local");
       for (const key of [
         "classscribe-transcript-drafts-v1",
         "classscribe-current-job",
@@ -41,7 +51,7 @@ export function SettingsPage() {
         "classscribe-upload-draft-v1",
         "classscribe-token",
       ])
-        sessionStorage.removeItem(key);
+        removeStorage(key);
     },
   });
   const retentionDays =
@@ -49,11 +59,9 @@ export function SettingsPage() {
     (typeof settingsData?.retention?.derived_days === "number"
       ? settingsData.retention.derived_days
       : 30);
-  const saveDictationAudio =
-    audioEdit ?? settingsData?.ibus?.save_audio === true;
   const diagnostics = useQuery({
     queryKey: ["diagnostics"],
-    queryFn: () => api<ApiObject>("/diagnostics"),
+    queryFn: ({ signal }) => api<ApiObject>("/diagnostics", { signal }),
   });
   const save = useMutation({
     mutationFn: () =>
@@ -61,19 +69,11 @@ export function SettingsPage() {
         method: "PUT",
         body: JSON.stringify({
           values: {
-            ...(retentionEdit !== undefined
+            ...(retentionEdit !== undefined ||
+            settingsData?.retention?.derived_days === undefined
               ? {
                   retention: {
-                    ...settingsData?.retention,
                     derived_days: retentionDays,
-                  },
-                }
-              : {}),
-            ...(audioEdit !== undefined
-              ? {
-                  ibus: {
-                    ...settingsData?.ibus,
-                    save_audio: saveDictationAudio,
                   },
                 }
               : {}),
@@ -83,20 +83,28 @@ export function SettingsPage() {
     onSuccess: (value) => {
       client.setQueryData(["settings"], value);
       setRetentionDays(undefined);
-      setSaveDictationAudio(undefined);
     },
   });
 
   async function downloadDiagnostics() {
-    const response = await fetch("/api/v1/diagnostics/bundle", {
-      headers: authHeaders(),
-    });
-    if (!response.ok) throw new Error("诊断包下载失败");
-    const anchor = document.createElement("a");
-    anchor.href = URL.createObjectURL(await response.blob());
-    anchor.download = "classscribe-diagnostics.zip";
-    anchor.click();
-    URL.revokeObjectURL(anchor.href);
+    const controller = new AbortController();
+    downloadController.current = controller;
+    setDownloading(true);
+    setDownloadError("");
+    try {
+      await downloadFile(
+        "/api/v1/diagnostics/bundle",
+        "classscribe-diagnostics.zip",
+        controller.signal,
+      );
+    } catch (error) {
+      setDownloadError(
+        error instanceof Error ? error.message : "诊断包下载失败",
+      );
+    } finally {
+      downloadController.current = null;
+      setDownloading(false);
+    }
   }
 
   return (
@@ -145,6 +153,7 @@ export function SettingsPage() {
             <input
               disabled={!settingsData || save.isPending}
               min="1"
+              max="3650"
               onChange={(event) => {
                 setRetentionDays(event.target.valueAsNumber);
               }}
@@ -153,15 +162,8 @@ export function SettingsPage() {
             />
           </label>
           <label className="toggle-line">
-            <input
-              disabled={!settingsData || save.isPending}
-              checked={saveDictationAudio}
-              onChange={(event) => {
-                setSaveDictationAudio(event.target.checked);
-              }}
-              type="checkbox"
-            />
-            保存 IBus 原始音频（默认关闭）
+            <input disabled checked={false} readOnly type="checkbox" />
+            保存 IBus 原始音频（尚不支持，当前不保存）
           </label>
           <button
             className="primary-button"
@@ -169,7 +171,8 @@ export function SettingsPage() {
               !settingsData ||
               save.isPending ||
               !Number.isInteger(retentionDays) ||
-              retentionDays < 1
+              retentionDays < 1 ||
+              retentionDays > 3650
             }
             onClick={() => {
               save.mutate();
@@ -228,15 +231,26 @@ export function SettingsPage() {
               刷新
             </button>
             <button
-              disabled={authInvalid || localCleared}
+              disabled={authInvalid || localCleared || downloading}
               onClick={() => {
                 void downloadDiagnostics();
               }}
               type="button"
             >
-              下载脱敏诊断包
+              {downloading ? "正在下载…" : "下载脱敏诊断包"}
             </button>
+            {downloading && (
+              <button
+                type="button"
+                onClick={() => {
+                  downloadController.current?.abort();
+                }}
+              >
+                取消下载
+              </button>
+            )}
           </div>
+          {downloadError && <p role="alert">{downloadError}</p>}
           {diagnostics.isLoading ? (
             <p className="loading">正在检查系统…</p>
           ) : (

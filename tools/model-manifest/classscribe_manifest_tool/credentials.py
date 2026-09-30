@@ -13,9 +13,7 @@ from types import MappingProxyType
 TOKEN_ENVIRONMENT_VARIABLE = "HF_TOKEN"
 MAX_TOKEN_FILE_BYTES = 4096
 REDACTED = "<redacted>"
-_AUTHORIZATION_RE = re.compile(
-    r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;\]}]+"
-)
+_AUTHORIZATION_RE = re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;\]}]+")
 
 
 def load_hf_token(
@@ -122,8 +120,7 @@ def _validate_token(token: str) -> str:
     if not token or len(token.encode("utf-8")) > MAX_TOKEN_FILE_BYTES:
         raise ValueError("HF token must be non-empty and bounded")
     if any(
-        character.isspace() or ord(character) < 32 or ord(character) == 127
-        for character in token
+        character.isspace() or ord(character) < 32 or ord(character) == 127 for character in token
     ):
         raise ValueError("HF token must not contain whitespace or control characters")
     return token

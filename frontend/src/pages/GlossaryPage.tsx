@@ -15,7 +15,9 @@ export function GlossaryPage() {
   const [materialSource, setMaterialSource] = useState<
     "auto" | "handout" | "textbook"
   >("auto");
-  const [editing, setEditing] = useState<GlossaryTerm | null>(null);
+  const [editing, setEditing] = useState<
+    (GlossaryTerm & { glossaryId: string }) | null
+  >(null);
   const [editReading, setEditReading] = useState("");
   const [editAliases, setEditAliases] = useState("");
   const [editLanguage, setEditLanguage] = useState<"zh" | "ja" | "en">("ja");
@@ -24,7 +26,7 @@ export function GlossaryPage() {
   const [termError, setTermError] = useState("");
   const query = useQuery({
     queryKey: ["glossaries"],
-    queryFn: () => api<Glossary[]>("/glossaries"),
+    queryFn: ({ signal }) => api<Glossary[]>("/glossaries", { signal }),
   });
   const create = useMutation({
     mutationFn: () =>
@@ -35,6 +37,7 @@ export function GlossaryPage() {
     onSuccess: async (value) => {
       setNewName("");
       setSelected(value.id);
+      setEditing(null);
       await client.invalidateQueries({ queryKey: ["glossaries"] });
     },
   });
@@ -46,6 +49,27 @@ export function GlossaryPage() {
       }),
     onSuccess: () => client.invalidateQueries({ queryKey: ["glossaries"] }),
   });
+  const edit = useMutation({
+    mutationFn: ({
+      glossaryId,
+      termId,
+      value,
+    }: {
+      glossaryId: string;
+      termId: string;
+      value: Omit<GlossaryTerm, "id">;
+    }) =>
+      api<Glossary>(`/glossaries/${glossaryId}/terms/${termId}`, {
+        method: "PATCH",
+        body: JSON.stringify(value),
+      }),
+    onSuccess: (value) => {
+      client.setQueryData<Glossary[]>(["glossaries"], (items = []) =>
+        items.map((item) => (item.id === value.id ? value : item)),
+      );
+      return client.invalidateQueries({ queryKey: ["glossaries"] });
+    },
+  });
   const deleteGlossary = useMutation({
     mutationFn: (id: string) => api(`/glossaries/${id}`, { method: "DELETE" }),
     onSuccess: (_value, id) => {
@@ -53,6 +77,7 @@ export function GlossaryPage() {
         items.filter((item) => item.id !== id),
       );
       setSelected((current) => (current === id ? null : current));
+      setEditing((current) => (current?.glossaryId === id ? null : current));
       setCanonical("");
       setReading("");
       return client.invalidateQueries({ queryKey: ["glossaries"] });
@@ -157,7 +182,8 @@ export function GlossaryPage() {
   }
 
   function beginEdit(term: GlossaryTerm) {
-    setEditing(term);
+    if (!glossary) return;
+    setEditing({ ...term, glossaryId: glossary.id });
     setEditReading(term.reading);
     setEditAliases(term.aliases.join(", "));
     setEditLanguage(term.language as "zh" | "ja" | "en");
@@ -186,27 +212,25 @@ export function GlossaryPage() {
     }
     setTermError("");
     try {
-      await update.mutateAsync({
-        id: glossary.id,
-        terms: [
-          {
-            canonical: editing.canonical,
-            reading: editReading,
-            aliases: parsedAliases,
-            language: editLanguage,
-            weight: Number(editWeight),
-            source: editing.source,
-            confirmed: editConfirmed,
-          },
-        ],
+      const target = editing;
+      await edit.mutateAsync({
+        glossaryId: target.glossaryId,
+        termId: target.id,
+        value: {
+          canonical: editing.canonical,
+          reading: editReading,
+          aliases: parsedAliases,
+          language: editLanguage,
+          weight: Number(editWeight),
+          source: editing.source,
+          confirmed: editConfirmed,
+        },
       });
-      if (editLanguage !== editing.language) {
-        await remove.mutateAsync({
-          glossaryId: glossary.id,
-          termId: editing.id,
-        });
-      }
-      setEditing(null);
+      setEditing((current) =>
+        current?.id === target.id && current.glossaryId === target.glossaryId
+          ? null
+          : current,
+      );
     } catch {
       /* Mutation errors are shown above the glossary. */
     }
@@ -237,6 +261,11 @@ export function GlossaryPage() {
       {update.isError && (
         <p className="error-callout" role="alert">
           保存词条失败：{update.error.message}
+        </p>
+      )}
+      {edit.isError && (
+        <p className="error-callout" role="alert">
+          保存词条失败：{edit.error.message}
         </p>
       )}
       {material.isError && (
@@ -280,6 +309,7 @@ export function GlossaryPage() {
               key={item.id}
               onClick={() => {
                 setSelected(item.id);
+                setEditing(null);
               }}
               type="button"
             >
@@ -333,6 +363,7 @@ export function GlossaryPage() {
                   className="danger-button"
                   disabled={
                     deleteGlossary.isPending ||
+                    edit.isPending ||
                     update.isPending ||
                     material.isPending ||
                     remove.isPending
@@ -545,7 +576,7 @@ export function GlossaryPage() {
                     <button
                       className="primary-button"
                       type="submit"
-                      disabled={update.isPending || remove.isPending}
+                      disabled={edit.isPending || remove.isPending}
                     >
                       保存词条
                     </button>

@@ -63,16 +63,12 @@ def test_manifest_schema_requires_remote_code_kind_to_match_trust_flag() -> None
     trust_contract = schema["allOf"][0]
 
     assert trust_contract["if"]["properties"]["trust_remote_code"] == {"const": True}
-    assert (
-        trust_contract["then"]["properties"]["files"]["contains"]["properties"]["kind"]
-        == {"const": "remote_code"}
-    )
-    assert (
-        trust_contract["else"]["properties"]["files"]["not"]["contains"]["properties"][
-            "kind"
-        ]
-        == {"const": "remote_code"}
-    )
+    assert trust_contract["then"]["properties"]["files"]["contains"]["properties"]["kind"] == {
+        "const": "remote_code"
+    }
+    assert trust_contract["else"]["properties"]["files"]["not"]["contains"]["properties"][
+        "kind"
+    ] == {"const": "remote_code"}
 
 
 def test_manifest_schema_encodes_optional_strict_component_source_provenance() -> None:
@@ -103,12 +99,8 @@ def test_manifest_schema_encodes_optional_strict_component_source_provenance() -
         "source_sha256",
         "source_size_bytes",
     }
-    assert source_file["properties"]["installed_path"] == {
-        "$ref": "#/$defs/safe_relative_path"
-    }
-    assert source_file["properties"]["source_path"] == {
-        "$ref": "#/$defs/safe_relative_path"
-    }
+    assert source_file["properties"]["installed_path"] == {"$ref": "#/$defs/safe_relative_path"}
+    assert source_file["properties"]["source_path"] == {"$ref": "#/$defs/safe_relative_path"}
     assert source_file["properties"]["source_sha256"] == {"$ref": "#/$defs/sha256"}
 
 
@@ -136,9 +128,7 @@ def test_manifest_component_source_schema_patterns_reject_unsafe_identity() -> N
 
 def test_bundle_schema_encodes_strict_fields_sha_and_single_level_paths() -> None:
     schema = json.loads(
-        (ROOT / "protocol/schema/v1/model-manifest-bundle.schema.json").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / "protocol/schema/v1/model-manifest-bundle.schema.json").read_text(encoding="utf-8")
     )
     entry = schema["$defs"]["manifest_entry"]
     path_rule = entry["properties"]["path"]

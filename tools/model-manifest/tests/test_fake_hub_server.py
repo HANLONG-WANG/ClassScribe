@@ -155,9 +155,7 @@ def fake_hub_server() -> Iterator[FakeHubServer]:
                 return
             self._respond(200, content, {"Content-Type": "application/octet-stream"})
 
-        def _respond(
-            self, status: int, content: bytes, headers: Mapping[str, str]
-        ) -> None:
+        def _respond(self, status: int, content: bytes, headers: Mapping[str, str]) -> None:
             self.send_response(status)
             for name, value in headers.items():
                 self.send_header(name, value)
@@ -223,9 +221,7 @@ def test_fake_hub_revision_drift_is_rejected(fake_hub_server: FakeHubServer) -> 
     fake_hub_server.state.resolved_revision = "b" * 40
 
     with pytest.raises(RevisionResolutionError, match="did not resolve"):
-        discover_repository_tree(
-            "owner/model", REVISION, token=TOKEN, api=_api(fake_hub_server)
-        )
+        discover_repository_tree("owner/model", REVISION, token=TOKEN, api=_api(fake_hub_server))
 
 
 def test_fake_hub_gated_403_is_rejected_without_token_leak(
@@ -234,9 +230,7 @@ def test_fake_hub_gated_403_is_rejected_without_token_leak(
     fake_hub_server.state.gated = True
 
     with pytest.raises(GatedRepositoryAccessError) as failure:
-        discover_repository_tree(
-            "owner/model", REVISION, token=TOKEN, api=_api(fake_hub_server)
-        )
+        discover_repository_tree("owner/model", REVISION, token=TOKEN, api=_api(fake_hub_server))
 
     assert TOKEN not in str(failure.value)
 
@@ -273,9 +267,7 @@ def test_fake_hub_short_write_fails_discovery_size_contract(
     selection = _selection("short.bin")
     scanned = scan_payload(payload, expected_sizes={"short.bin": 5})
     hashed = hash_payload_files(payload, scanned)
-    discovered = (
-        DiscoveredFile("short.bin", 5, "lfs", "pointer", "f" * 64, None),
-    )
+    discovered = (DiscoveredFile("short.bin", 5, "lfs", "pointer", "f" * 64, None),)
 
     with pytest.raises(ValueError, match="sizes differ from discovery"):
         validate_payload_matches_selection(selection, discovered, hashed)

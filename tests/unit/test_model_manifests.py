@@ -134,9 +134,7 @@ def _add_component_source_fixture(
             "files": [source_file],
         }
     ]
-    content = (
-        json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-    ).encode()
+    content = (json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode()
     manifest_path.write_bytes(content)
     bundle = json.loads(bundle_path.read_bytes())
     bundle["manifests"][0]["sha256"] = hashlib.sha256(content).hexdigest()
@@ -169,9 +167,7 @@ def test_load_builtin_manifest_bundle_uses_the_production_revision_lock() -> Non
     )
 
     assert len(bundle.index.manifests) == 20
-    assert {item.model_id for item in bundle.manifests} == {
-        item.id for item in registry.models
-    }
+    assert {item.model_id for item in bundle.manifests} == {item.id for item in registry.models}
     assert bundle.manifest("pyannote_community_1").component_sources
 
 
@@ -208,9 +204,7 @@ def test_load_manifest_bundle_rejects_component_source_drift(
     manifest_path = bundle_path.parent / f"{MODEL_ID}.json"
     manifest = json.loads(manifest_path.read_bytes())
     manifest["component_sources"][0][field] = value
-    content = (
-        json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
-    ).encode()
+    content = (json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode()
     manifest_path.write_bytes(content)
     bundle = json.loads(bundle_path.read_bytes())
     bundle["manifests"][0]["sha256"] = hashlib.sha256(content).hexdigest()
@@ -228,9 +222,7 @@ def test_load_manifest_bundle_never_weakens_production_registry_coverage(
 ) -> None:
     bundle_path = _write_controlled_bundle(tmp_path)
     registry = load_registry(ROOT / "config/model-registry.v1.yaml")
-    revisions = json.loads(
-        (ROOT / "config/model-revisions.lock.json").read_text(encoding="utf-8")
-    )
+    revisions = json.loads((ROOT / "config/model-revisions.lock.json").read_text(encoding="utf-8"))
     licenses = load_model_licenses(ROOT / "config/model-licenses.v1.json")
 
     with pytest.raises(ValueError, match="bundle model IDs differ"):
@@ -247,9 +239,10 @@ def test_source_and_packaged_resource_roots_load_and_fail_identically(tmp_path: 
     packaged_bundle = resource_path(
         relative_bundle, {"CLASSSCRIBE_RESOURCE_ROOT": str(packaged_root)}
     )
-    assert resource_path(
-        relative_bundle, {"CLASSSCRIBE_RESOURCE_ROOT": str(source_root)}
-    ) == source_bundle
+    assert (
+        resource_path(relative_bundle, {"CLASSSCRIBE_RESOURCE_ROOT": str(source_root)})
+        == source_bundle
+    )
     registry, revisions, licenses = _controlled_inputs()
 
     source_loaded = load_manifest_bundle(source_bundle, registry, revisions, licenses)
@@ -316,9 +309,7 @@ def test_loaded_manifest_query_is_deeply_read_only(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("target", ["bundle", "manifest", "worker_lock"])
-def test_loader_rejects_symlinks_for_every_bundled_resource(
-    tmp_path: Path, target: str
-) -> None:
+def test_loader_rejects_symlinks_for_every_bundled_resource(tmp_path: Path, target: str) -> None:
     bundle_path = _write_controlled_bundle(tmp_path)
     registry, revisions, licenses = _controlled_inputs()
     targets = {

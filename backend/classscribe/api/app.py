@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import json
+import logging
 import os
 import stat
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -69,9 +71,52 @@ def create_app(
         lease_server: GPULeaseIPCServer | None = None
         resident_workers: Any | None = None
         pipeline = None
+        maintenance: asyncio.Task[None] | None = None
+        concrete: ClassScribeService | None = None
+        primary_error: BaseException | None = None
         try:
             concrete = api_service.get() if isinstance(api_service, LazyService) else api_service
             pipeline = concrete.pipeline
+            recover_background = getattr(concrete, "recover_background_jobs", None)
+            if recover_background is not None:
+                recover_background()
+            cleanup_derived = getattr(concrete, "cleanup_retained_derived", None)
+
+            async def retain_derived() -> None:
+                assert cleanup_derived is not None
+                while True:
+                    operation = asyncio.create_task(
+                        asyncio.to_thread(cleanup_derived), name="classscribe-retention-pass"
+                    )
+                    try:
+                        await asyncio.shield(operation)
+                    except asyncio.CancelledError:
+                        # Cancellation cannot stop filesystem/SQLite work in
+                        # the thread. Finish this pass before closing resources.
+                        while not operation.done():
+                            try:
+                                await asyncio.shield(operation)
+                            except asyncio.CancelledError:
+                                continue
+                            except Exception:
+                                break
+                        try:
+                            operation.result()
+                        except Exception as exc:
+                            logging.getLogger(__name__).warning(
+                                "retention cleanup failed during shutdown (%s)",
+                                type(exc).__name__,
+                            )
+                        raise
+                    except Exception as exc:
+                        logging.getLogger(__name__).warning(
+                            "retention cleanup failed (%s); retrying next cycle",
+                            type(exc).__name__,
+                        )
+                    await asyncio.sleep(3600)
+
+            if cleanup_derived is not None:
+                maintenance = asyncio.create_task(retain_derived(), name="classscribe-retention")
             if enable_scheduler_ipc:
                 paths = runtime_paths or AppPaths.from_environment()
                 paths.ensure()
@@ -124,13 +169,46 @@ def create_app(
             if resident_workers is not None:
                 await resident_workers.start()
             yield
+        except BaseException as exc:
+            primary_error = exc
+            raise
         finally:
+            cleanup_errors: list[BaseException] = []
+            if maintenance is not None:
+                maintenance.cancel()
+                try:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await maintenance
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
+            if concrete is not None:
+                close_background = getattr(concrete, "close_background_jobs", None)
+                if close_background is not None:
+                    try:
+                        await close_background()
+                    except BaseException as exc:
+                        cleanup_errors.append(exc)
             if pipeline is not None:
-                await pipeline.close()
+                try:
+                    await pipeline.close()
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
             if lease_server is not None:
-                await lease_server.close()
+                try:
+                    await lease_server.close()
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
             if resident_workers is not None:
-                await resident_workers.close()
+                try:
+                    await resident_workers.close()
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
+            if cleanup_errors:
+                if primary_error is not None:
+                    cleanup_errors.insert(0, primary_error)
+                if len(cleanup_errors) == 1:
+                    raise cleanup_errors[0]
+                raise BaseExceptionGroup("application lifecycle cleanup failed", cleanup_errors)
 
     application = FastAPI(
         title="ClassScribe Core",
@@ -160,14 +238,18 @@ def create_app(
 
     @application.get("/api/v1/diagnostics")
     async def diagnostics() -> dict[str, Any]:
-        result = snapshot_payload(provide_diagnostics())
+        result = snapshot_payload(await asyncio.to_thread(provide_diagnostics))
         result["ibus"] = redact(await _ibus_status(runtime_paths), home=Path.home())
         return result
 
     @application.get("/api/v1/diagnostics/bundle")
     async def diagnostic_bundle() -> Response:
         return Response(
-            diagnostic_bundle_bytes(provide_diagnostics(), ibus=await _ibus_status(runtime_paths)),
+            await asyncio.to_thread(
+                diagnostic_bundle_bytes,
+                await asyncio.to_thread(provide_diagnostics),
+                ibus=await _ibus_status(runtime_paths),
+            ),
             media_type="application/zip",
             headers={"Content-Disposition": 'attachment; filename="classscribe-diagnostics.zip"'},
         )

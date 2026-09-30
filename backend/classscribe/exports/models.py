@@ -106,6 +106,7 @@ class SubtitleCue:
     end_sample: int
     lines: tuple[str, ...]
     segment_ids: tuple[str, ...]
+    coarse_timing: bool = False
 
     def __post_init__(self) -> None:
         if self.start_sample < 0 or self.end_sample <= self.start_sample:

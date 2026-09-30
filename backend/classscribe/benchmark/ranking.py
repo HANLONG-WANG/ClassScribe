@@ -64,7 +64,7 @@ def rank_candidates(
             )
             + active_policy.timeline_weight
             * (
-                _number(metrics.get("word_boundary_mae_ms", 0.0)) / 1000
+                _number(metrics.get("word_boundary_mae_ms") or 0.0) / 1000
                 + _number(metrics.get("der", 0.0))
                 + _number(metrics.get("jer", 0.0))
             )
@@ -97,6 +97,11 @@ def rank_candidates(
 
 def _violations(metrics: dict[str, Any], scenario: str, policy: RankingPolicy) -> list[str]:
     result: list[str] = []
+    if (
+        _number(metrics.get("word_timing_reference_count", 0)) > 0
+        and metrics.get("word_timing_coverage") != 1.0
+    ):
+        result.append("incomplete_word_timing")
     if _number(metrics.get("structural_errors", 0)):
         result.append("timeline_structural_errors")
     if _number(metrics.get("loop_triggers_per_hour", 0)):

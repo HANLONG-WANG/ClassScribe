@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from classscribe_protocol.adapter import AdapterError, StatefulAdapter
+from classscribe_protocol.adapter import AdapterError, StatefulAdapter, run_blocking
 from classscribe_protocol.batch_audio import (
     bounded_text,
     canonical_window,
@@ -47,7 +47,7 @@ class MossEnglishAdapter(StatefulAdapter):
                 from faster_whisper import WhisperModel  # type: ignore[import-not-found]
 
                 model_path = str(params["model_path"])
-                model = await asyncio.to_thread(
+                model = await run_blocking(
                     WhisperModel,
                     model_path,
                     device="cpu",
@@ -141,7 +141,7 @@ class MossEnglishAdapter(StatefulAdapter):
             return model, processor, torch, librosa, device
 
         try:
-            loaded = await asyncio.to_thread(load_model)
+            loaded = await run_blocking(load_model)
         except AdapterError:
             raise
         except Exception as exc:
@@ -192,7 +192,7 @@ class MossEnglishAdapter(StatefulAdapter):
                 return str(decoded[0]).strip(), int(new_ids.shape[-1])
 
         try:
-            text, generated_tokens = await asyncio.to_thread(infer)
+            text, generated_tokens = await run_blocking(infer)
         except Exception as exc:
             raise AdapterError(
                 RPCErrorCode.INTERNAL,
@@ -242,7 +242,7 @@ class MossEnglishAdapter(StatefulAdapter):
             )
             return list(segments), info
 
-        native_segments, info = await asyncio.to_thread(infer)
+        native_segments, info = await run_blocking(infer)
         if cancelled.is_set():
             raise asyncio.CancelledError
         output: list[dict[str, Any]] = []

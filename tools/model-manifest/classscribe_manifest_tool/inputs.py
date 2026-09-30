@@ -133,9 +133,7 @@ def load_release_inputs(
         registry_rows=registry_rows,
         selections=selections,
     )
-    expected_repositories = {
-        cast(str, row["repository"]) for row in registry_rows.values()
-    } | {
+    expected_repositories = {cast(str, row["repository"]) for row in registry_rows.values()} | {
         source.repository
         for model_sources in component_sources.values()
         for source in model_sources
@@ -179,9 +177,7 @@ def load_release_inputs(
                 dependency_lock_sha256=lock_sha,
                 license_id=cast(str, license_row["license_id"]),
                 license_url=cast(str, license_row["license_url"]),
-                requires_terms_acceptance=cast(
-                    bool, license_row["requires_terms_acceptance"]
-                ),
+                requires_terms_acceptance=cast(bool, license_row["requires_terms_acceptance"]),
                 enabled=cast(bool, registry_row["enabled"]),
                 experimental=cast(bool, registry_row.get("experimental", False)),
                 component_sources=tuple(
@@ -336,9 +332,7 @@ def _validate_license_rows(rows: dict[str, dict[str, Any]]) -> None:
             set(),
             "license inventory row",
         )
-        if not isinstance(row["license_id"], str) or not LICENSE_ID_RE.fullmatch(
-            row["license_id"]
-        ):
+        if not isinstance(row["license_id"], str) or not LICENSE_ID_RE.fullmatch(row["license_id"]):
             raise ValueError("license inventory contains an invalid license ID")
         license_url = row["license_url"]
         if not isinstance(license_url, str):

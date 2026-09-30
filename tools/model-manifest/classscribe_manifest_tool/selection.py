@@ -93,15 +93,13 @@ def load_file_selection(path: Path) -> FileSelectionIndex:
         raise ValueError("model file selection models must be a mapping")
     model_ids = list(raw_models)
     if not all(
-        isinstance(model_id, str) and MODEL_ID_RE.fullmatch(model_id)
-        for model_id in model_ids
+        isinstance(model_id, str) and MODEL_ID_RE.fullmatch(model_id) for model_id in model_ids
     ):
         raise ValueError("model file selection contains an unsafe model ID")
     if model_ids != sorted(model_ids):
         raise ValueError("model file selections must be sorted by model ID")
     models = {
-        model_id: _parse_model_selection(model_id, raw_models[model_id])
-        for model_id in model_ids
+        model_id: _parse_model_selection(model_id, raw_models[model_id]) for model_id in model_ids
     }
     return FileSelectionIndex(1, MappingProxyType(models))
 
@@ -134,9 +132,7 @@ def _parse_model_selection(model_id: str, raw: object) -> ModelFileSelection:
         raise ValueError(f"selection for {model_id} contains an invalid file kind")
     if set(include) & set(exclude):
         raise ValueError(f"include and exclude overlap for {model_id}")
-    kinds = MappingProxyType(
-        {path: cast(SelectionKind, raw_kinds[path]) for path in include}
-    )
+    kinds = MappingProxyType({path: cast(SelectionKind, raw_kinds[path]) for path in include})
     return ModelFileSelection(include=include, kinds=kinds, exclude=exclude)
 
 

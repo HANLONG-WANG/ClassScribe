@@ -2,8 +2,10 @@ import { type QueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
 
 import { api, type Segment } from "./api";
+import { readStorage, writeStorage } from "./storage";
 
 interface Draft {
+  jobId?: string | undefined;
   text: string;
   version: number;
   status: "waiting" | "saving" | "saved" | "error";
@@ -16,9 +18,10 @@ interface Draft {
 const storageKey = "classscribe-transcript-drafts-v1";
 function restoreDrafts(): Record<string, Draft> {
   try {
-    const saved = JSON.parse(
-      sessionStorage.getItem(storageKey) ?? "{}",
-    ) as Record<string, Draft>;
+    const saved = JSON.parse(readStorage(storageKey) ?? "{}") as Record<
+      string,
+      Draft
+    >;
     return Object.fromEntries(
       Object.entries(saved)
         .filter(
@@ -46,7 +49,7 @@ export const useTranscriptSaves = create<{ drafts: Record<string, Draft> }>(
 );
 useTranscriptSaves.subscribe(({ drafts }) => {
   try {
-    sessionStorage.setItem(
+    writeStorage(
       storageKey,
       JSON.stringify(
         Object.fromEntries(
@@ -63,6 +66,22 @@ useTranscriptSaves.subscribe(({ drafts }) => {
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 const running = new Set<string>();
+const generations = new Map<string, symbol>();
+
+function draftGeneration(id: string) {
+  let generation = generations.get(id);
+  if (!generation) {
+    generation = Symbol(id);
+    generations.set(id, generation);
+  }
+  return generation;
+}
+
+function currentDraft(id: string, generation: symbol) {
+  return generations.get(id) === generation
+    ? useTranscriptSaves.getState().drafts[id]
+    : undefined;
+}
 
 function update(id: string, draft: Draft) {
   useTranscriptSaves.setState((state) => ({
@@ -76,11 +95,13 @@ export function scheduleTranscriptSave(
   client: QueryClient,
 ) {
   const previous = useTranscriptSaves.getState().drafts[segment.id];
+  if (!previous) generations.set(segment.id, Symbol(segment.id));
   if (previous?.conflict) {
     update(segment.id, { ...previous, text });
     return;
   }
   update(segment.id, {
+    jobId: segment.job_id,
     text,
     version:
       previous && previous.status !== "saved"
@@ -105,6 +126,7 @@ export async function flushTranscriptSave(id: string, client: QueryClient) {
   clearTimeout(timers.get(id));
   timers.delete(id);
   running.add(id);
+  const generation = draftGeneration(id);
   update(id, { ...draft, status: "saving", error: undefined });
   try {
     const saved = await api<Segment>(`/segments/${id}`, {
@@ -115,9 +137,11 @@ export async function flushTranscriptSave(id: string, client: QueryClient) {
         layer: "user",
       }),
     });
-    const latest = useTranscriptSaves.getState().drafts[id] ?? draft;
+    const latest = currentDraft(id, generation);
+    if (!latest) return;
     const changed = latest.text !== draft.text;
     update(id, {
+      jobId: latest.jobId,
       text: latest.text,
       version: saved.version,
       status: changed ? "waiting" : "saved",
@@ -125,7 +149,8 @@ export async function flushTranscriptSave(id: string, client: QueryClient) {
     client.setQueryData(["segment", id], saved);
     void client.invalidateQueries({ queryKey: ["transcript"] });
   } catch (error) {
-    const latest = useTranscriptSaves.getState().drafts[id] ?? draft;
+    const latest = currentDraft(id, generation);
+    if (!latest) return;
     update(id, {
       ...latest,
       status: "error",
@@ -135,22 +160,26 @@ export async function flushTranscriptSave(id: string, client: QueryClient) {
     });
   } finally {
     running.delete(id);
-  }
-  if (
-    useTranscriptSaves.getState().drafts[id]?.status === "waiting" &&
-    !timers.has(id)
-  ) {
-    void flushTranscriptSave(id, client);
+    if (
+      useTranscriptSaves.getState().drafts[id]?.status === "waiting" &&
+      !timers.has(id)
+    ) {
+      void flushTranscriptSave(id, client);
+    }
   }
 }
 
 export async function loadLatestTranscriptDraft(id: string) {
   const draft = useTranscriptSaves.getState().drafts[id];
   if (!draft) return;
+  const generation = draftGeneration(id);
   try {
     const latest = await api<Segment>(`/segments/${id}`);
+    const current = currentDraft(id, generation);
+    if (!current) return;
     update(id, {
-      ...draft,
+      ...current,
+      jobId: latest.job_id,
       conflict: true,
       status: "error",
       serverVersion: latest.version,
@@ -158,8 +187,10 @@ export async function loadLatestTranscriptDraft(id: string) {
       error: "版本冲突：请比较服务器最新版与当前草稿，再选择保存或放弃。",
     });
   } catch (error) {
+    const current = currentDraft(id, generation);
+    if (!current) return;
     update(id, {
-      ...draft,
+      ...current,
       status: "error",
       error: error instanceof Error ? error.message : "读取最新版失败",
     });
@@ -172,19 +203,24 @@ export async function saveRebasedTranscriptDraft(
 ) {
   const draft = useTranscriptSaves.getState().drafts[id];
   if (!draft || draft.serverVersion === undefined) return;
+  const generation = draftGeneration(id);
   let latest: Segment;
   try {
     latest = await api<Segment>(`/segments/${id}`);
   } catch (error) {
+    const current = currentDraft(id, generation);
+    if (!current) return;
     update(id, {
-      ...draft,
+      ...current,
       error: error instanceof Error ? error.message : "读取最新版失败",
     });
     return;
   }
+  const current = currentDraft(id, generation);
+  if (!current || current.serverVersion !== draft.serverVersion) return;
   if (latest.version !== draft.serverVersion) {
     update(id, {
-      ...draft,
+      ...current,
       serverVersion: latest.version,
       serverText: latest.user_text ?? latest.smart_corrected_text,
       error: "服务器内容再次变化，请重新比较后再保存。",
@@ -192,7 +228,8 @@ export async function saveRebasedTranscriptDraft(
     return;
   }
   update(id, {
-    ...draft,
+    ...current,
+    jobId: latest.job_id,
     version: latest.version,
     conflict: false,
     serverVersion: undefined,
@@ -204,6 +241,7 @@ export async function saveRebasedTranscriptDraft(
 }
 
 export function discardTranscriptDraft(id: string, client: QueryClient) {
+  generations.delete(id);
   clearTimeout(timers.get(id));
   timers.delete(id);
   useTranscriptSaves.setState(({ drafts }) => {

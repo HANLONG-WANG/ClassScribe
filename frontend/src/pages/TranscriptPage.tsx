@@ -1,5 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import WaveSurfer from "wavesurfer.js";
 
 import {
@@ -180,37 +186,46 @@ export function TranscriptPage() {
 
   const job = useQuery({
     queryKey: ["job", jobId],
-    queryFn: () => api<Job>(`/jobs/${String(jobId)}`),
+    queryFn: ({ signal }) => api<Job>(`/jobs/${String(jobId)}`, { signal }),
     enabled: jobId !== null,
   });
   const transcript = useQuery({
     queryKey: ["transcript", jobId, "summary"],
-    queryFn: () =>
-      api<Transcript>(`/jobs/${String(jobId)}/transcript?include_tokens=false`),
+    queryFn: ({ signal }) =>
+      api<Transcript>(
+        `/jobs/${String(jobId)}/transcript?include_tokens=false`,
+        { signal },
+      ),
     enabled: jobId !== null,
   });
   const recording = useQuery({
     queryKey: ["recording", job.data?.recording_id],
-    queryFn: () =>
-      api<Recording>(`/recordings/${String(job.data?.recording_id)}`),
+    queryFn: ({ signal }) =>
+      api<Recording>(`/recordings/${String(job.data?.recording_id)}`, {
+        signal,
+      }),
     enabled: Boolean(job.data?.recording_id),
   });
   const detail = useQuery({
     queryKey: ["segment", selectedId],
-    queryFn: () => api<Segment>(`/segments/${String(selectedId)}`),
+    queryFn: ({ signal }) =>
+      api<Segment>(`/segments/${String(selectedId)}`, { signal }),
     enabled: selectedId !== null,
   });
   const candidates = useQuery({
     queryKey: ["candidates", selectedId],
-    queryFn: () =>
-      api<Candidate[]>(`/segments/${String(selectedId)}/candidates`),
+    queryFn: ({ signal }) =>
+      api<Candidate[]>(`/segments/${String(selectedId)}/candidates`, {
+        signal,
+      }),
     enabled: selectedId !== null,
   });
 
-  const invalidateSegment = async () => {
+  const invalidateSegment = async (segment: Segment) => {
+    client.setQueryData(["segment", segment.id], segment);
     await Promise.all([
-      client.invalidateQueries({ queryKey: ["segment", selectedId] }),
-      client.invalidateQueries({ queryKey: ["transcript", jobId] }),
+      client.invalidateQueries({ queryKey: ["segment", segment.id] }),
+      client.invalidateQueries({ queryKey: ["transcript", segment.job_id] }),
     ]);
   };
   const patch = useMutation({
@@ -233,30 +248,40 @@ export function TranscriptPage() {
     mutationFn: ({
       action,
       version,
+      id,
     }: {
       action: "undo" | "redo";
       version: number;
+      id: string;
     }) =>
-      api<Segment>(`/segments/${String(selectedId)}/${action}`, {
+      api<Segment>(`/segments/${id}/${action}`, {
         method: "POST",
         body: JSON.stringify({ version }),
       }),
     onSuccess: invalidateSegment,
   });
   const rerun = useMutation({
-    mutationFn: () =>
-      api(`/segments/${String(selectedId)}/rerun`, {
+    mutationFn: (id: string) =>
+      api(`/segments/${id}/rerun`, {
         method: "POST",
         body: "{}",
       }),
   });
   const adopt = useMutation({
-    mutationFn: (candidateId: string) =>
-      api(`/segments/${String(selectedId)}/adopt-candidate`, {
+    mutationFn: ({
+      id,
+      candidateId,
+      version,
+    }: {
+      id: string;
+      candidateId: string;
+      version: number;
+    }) =>
+      api<Segment>(`/segments/${id}/adopt-candidate`, {
         method: "POST",
         body: JSON.stringify({
           candidate_id: candidateId,
-          version: detail.data?.version,
+          version,
         }),
       }),
     onSuccess: invalidateSegment,
@@ -366,51 +391,61 @@ export function TranscriptPage() {
           {segments.length === 0 && (
             <p className="empty-state">该筛选下没有句段。</p>
           )}
-          {segments.map((segment) => (
-            <button
-              className={`segment-row ${selectedId === segment.id ? "selected" : ""}`}
-              key={segment.id}
-              onClick={() => {
-                seek(segment);
-              }}
-              type="button"
-            >
-              <span className="segment-time">
-                {formatSamples(segment.start_sample)}
-                <br />
-                {formatSamples(segment.end_sample)}
-              </span>
-              <span className="speaker-chip">
-                {segment.speaker_name ?? segment.speaker_id ?? "Speaker ?"}
-              </span>
-              <span className="segment-copy">
-                {segmentText(segment, layer) || <em>空句段</em>}
-                {segment.repetition_warning && (
-                  <span className="anomaly-tag">
-                    {segment.repetition_warning.all_candidates
-                      ? "所有候选均疑似重复"
-                      : "候选疑似重复"}{" "}
-                    · 待复核
-                  </span>
-                )}
-              </span>
-              <span
-                className={`confidence ${segment.low_confidence ? "low" : ""}`}
+          <SegmentList
+            segments={segments}
+            selectedId={selectedId}
+            renderRow={(segment) => (
+              <button
+                className={`segment-row ${selectedId === segment.id ? "selected" : ""}`}
+                key={segment.id}
+                onClick={() => {
+                  seek(segment);
+                }}
+                type="button"
               >
-                {segment.quality_score === null
-                  ? "—"
-                  : `${String(Math.round(segment.quality_score * 100))}%`}
-              </span>
-            </button>
-          ))}
+                <span className="segment-time">
+                  {formatSamples(segment.start_sample)}
+                  <br />
+                  {formatSamples(segment.end_sample)}
+                </span>
+                <span className="speaker-chip">
+                  {segment.speaker_name ?? segment.speaker_id ?? "Speaker ?"}
+                </span>
+                <span className="segment-copy">
+                  {segmentText(segment, layer) || <em>空句段</em>}
+                  {segment.repetition_warning && (
+                    <span className="anomaly-tag">
+                      {segment.repetition_warning.all_candidates
+                        ? "所有候选均疑似重复"
+                        : "候选疑似重复"}{" "}
+                      · 待复核
+                    </span>
+                  )}
+                </span>
+                <span
+                  className={`confidence ${segment.low_confidence ? "low" : ""}`}
+                >
+                  {segment.quality_score === null
+                    ? "—"
+                    : `${String(Math.round(segment.quality_score * 100))}%`}
+                </span>
+              </button>
+            )}
+          />
         </div>
         <SegmentInspector
           adopt={(id) => {
-            adopt.mutate(id);
+            if (detail.data)
+              adopt.mutate({
+                id: detail.data.id,
+                candidateId: id,
+                version: detail.data.version,
+              });
           }}
           candidates={candidates.data ?? []}
           history={(action, version) => {
-            history.mutate({ action, version });
+            if (detail.data)
+              history.mutate({ id: detail.data.id, action, version });
           }}
           onPatch={(value) => {
             if (detail.data) patch.mutate({ ...value, id: detail.data.id });
@@ -422,13 +457,88 @@ export function TranscriptPage() {
               : undefined
           }
           onRerun={() => {
-            rerun.mutate();
+            if (detail.data) rerun.mutate(detail.data.id);
           }}
           savePending={patch.isPending}
-          segment={detail.data}
+          segment={detail.data?.job_id === jobId ? detail.data : undefined}
         />
       </div>
     </section>
+  );
+}
+
+const rowHeight = 116;
+function SegmentList({
+  segments,
+  selectedId,
+  renderRow,
+}: {
+  segments: Segment[];
+  selectedId: string | null;
+  renderRow: (segment: Segment) => ReactNode;
+}) {
+  const viewport = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [height, setHeight] = useState(600);
+  const virtual = segments.length > 200;
+  useEffect(() => {
+    const target = viewport.current;
+    if (!virtual || !target) return;
+    const resize = () => {
+      setHeight(target.clientHeight || 600);
+    };
+    resize();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(resize);
+    observer.observe(target);
+    return () => {
+      observer.disconnect();
+    };
+  }, [virtual]);
+  useEffect(() => {
+    const target = viewport.current;
+    if (!virtual || !target) return;
+    const index = segments.findIndex((segment) => segment.id === selectedId);
+    if (index < 0) return;
+    const top = index * rowHeight;
+    if (top < target.scrollTop || top + rowHeight > target.scrollTop + height) {
+      target.scrollTop = top;
+      setScrollTop(top);
+    }
+  }, [virtual, selectedId, segments, height]);
+  if (!virtual) return <>{segments.map(renderRow)}</>;
+  const start = Math.max(
+    0,
+    Math.min(segments.length - 1, Math.floor(scrollTop / rowHeight) - 4),
+  );
+  const end = Math.min(
+    segments.length,
+    Math.ceil((scrollTop + height) / rowHeight) + 4,
+  );
+  return (
+    <div
+      ref={viewport}
+      className="virtual-segment-list"
+      tabIndex={0}
+      aria-label="滚动句段列表"
+      onScroll={(event) => {
+        setScrollTop(event.currentTarget.scrollTop);
+      }}
+    >
+      <div
+        style={{ height: segments.length * rowHeight, position: "relative" }}
+      >
+        {segments.slice(start, end).map((segment, index) => (
+          <div
+            key={segment.id}
+            className="virtual-segment-row"
+            style={{ top: (start + index) * rowHeight, height: rowHeight }}
+          >
+            {renderRow(segment)}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -443,19 +553,52 @@ function TimelineTrack({
   duration: number;
   value: (segment: Segment) => string;
 }) {
+  const ranges =
+    segments.length <= 256
+      ? segments.map((segment) => ({
+          start: segment.start_sample,
+          end: segment.end_sample,
+          text: value(segment),
+        }))
+      : (() => {
+          const bins = new Map<number, Set<string>>();
+          for (const segment of segments) {
+            const first = Math.max(
+              0,
+              Math.floor((segment.start_sample / duration) * 256),
+            );
+            const last = Math.min(
+              255,
+              Math.ceil((segment.end_sample / duration) * 256) - 1,
+            );
+            for (let index = first; index <= last; index++) {
+              const values = bins.get(index) ?? new Set<string>();
+              values.add(value(segment));
+              bins.set(index, values);
+            }
+          }
+          return [...bins.entries()]
+            .sort(([a], [b]) => a - b)
+            .map(([index, values]) => ({
+              start: (index * duration) / 256,
+              end: ((index + 1) * duration) / 256,
+              text: [...values].join(" / "),
+            }));
+        })();
   return (
     <div className="timeline-track">
       <strong>{label}</strong>
       <div>
-        {segments.map((segment) => (
+        {ranges.map((range, index) => (
           <span
-            key={segment.id}
+            key={index}
+            title={range.text}
             style={{
-              left: `${String((segment.start_sample / duration) * 100)}%`,
-              width: `${String(Math.max(0.5, ((segment.end_sample - segment.start_sample) / duration) * 100))}%`,
+              left: `${String((range.start / duration) * 100)}%`,
+              width: `${String(((range.end - range.start) / duration) * 100)}%`,
             }}
           >
-            {value(segment)}
+            {range.text}
           </span>
         ))}
       </div>

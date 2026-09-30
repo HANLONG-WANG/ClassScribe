@@ -471,9 +471,10 @@ def test_generator_input_loader_accepts_complete_cross_checked_fixture(
     assert inputs.registry_revision == 1
     assert inputs.facts_as_of == "2026-09-03"
     assert [model.model_id for model in inputs.models] == ["alpha"]
-    assert inputs.models[0].dependency_lock_sha256 == hashlib.sha256(
-        (tmp_path / "workers/worker/uv.lock").read_bytes()
-    ).hexdigest()
+    assert (
+        inputs.models[0].dependency_lock_sha256
+        == hashlib.sha256((tmp_path / "workers/worker/uv.lock").read_bytes()).hexdigest()
+    )
     assert inputs.selections.selection("alpha").include == ("config.json",)
 
 
@@ -620,9 +621,7 @@ def test_local_fixture_repository_generates_writes_and_verifies_offline(
 
     assert download_count == 2
     assert result.model_count == 1
-    assert result.manifest_sha256 == {
-        "alpha": hashlib.sha256(manifests["alpha"]).hexdigest()
-    }
+    assert result.manifest_sha256 == {"alpha": hashlib.sha256(manifests["alpha"]).hexdigest()}
     assert result.bundle_sha256 == hashlib.sha256(bundle).hexdigest()
 
 
@@ -707,9 +706,7 @@ def test_bundle_verifier_rejects_duplicate_model_id(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("unsafe_path", ["../alpha.json", "nested/alpha.json"])
-def test_bundle_verifier_rejects_member_path_escape(
-    tmp_path: Path, unsafe_path: str
-) -> None:
+def test_bundle_verifier_rejects_member_path_escape(tmp_path: Path, unsafe_path: str) -> None:
     bundle_path = _build_verified_fixture(tmp_path)
     bundle = json.loads(bundle_path.read_bytes())
     bundle["manifests"][0]["path"] = unsafe_path

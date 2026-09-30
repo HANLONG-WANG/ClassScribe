@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from classscribe.benchmark.evidence import validate_test_evidence
-from classscribe.benchmark.models import GoldCoverage, GoldRecord
+from classscribe.benchmark.models import GoldCoverage, GoldRecord, covered_samples
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,12 +44,12 @@ def validate_phase12_acceptance(
             speakers[item.audio].add(item.speaker)
         tags.update(item.tags)
     classroom_durations = tuple(
-        max(end for _start, end in spans) - min(start for start, _end in spans)
+        covered_samples(spans)
         for (scenario, _audio), spans in audio_ranges.items()
         if scenario == "classroom"
     )
     ibus_durations = tuple(
-        max(end for _start, end in spans) - min(start for start, _end in spans)
+        covered_samples(spans)
         for (scenario, _audio), spans in audio_ranges.items()
         if scenario == "ibus"
     )

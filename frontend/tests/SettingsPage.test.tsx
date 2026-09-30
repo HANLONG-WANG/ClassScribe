@@ -36,7 +36,9 @@ it("loads saved controls and sends only changed groups", async () => {
     </QueryClientProvider>,
   );
   await waitFor(() => expect(screen.getByRole("spinbutton")).toHaveValue(7));
-  fireEvent.click(screen.getByRole("checkbox"));
+  expect(screen.getByRole("checkbox")).toBeDisabled();
+  expect(screen.getByRole("checkbox")).not.toBeChecked();
+  fireEvent.change(screen.getByRole("spinbutton"), { target: { value: "14" } });
   fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
   await screen.findByText("设置已保存");
   expect(fetch).toHaveBeenCalledWith(
@@ -44,7 +46,7 @@ it("loads saved controls and sends only changed groups", async () => {
     expect.objectContaining({
       method: "PUT",
       body: JSON.stringify({
-        values: { ibus: { save_audio: true, other: "keep" } },
+        values: { retention: { derived_days: 14 } },
       }),
     }),
   );

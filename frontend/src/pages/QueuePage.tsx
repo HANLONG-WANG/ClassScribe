@@ -27,7 +27,7 @@ export function QueuePage() {
   const setPage = useWorkbench((state) => state.setPage);
   const query = useQuery({
     queryKey: ["queue"],
-    queryFn: () => api<QueueSnapshot>("/queue"),
+    queryFn: ({ signal }) => api<QueueSnapshot>("/queue", { signal }),
     refetchInterval: 1500,
   });
   const change = useMutation({
@@ -106,7 +106,7 @@ export function QueuePage() {
                 <p>
                   {statuses[item.status] ?? item.status}
                   {index >= 0 ? ` · 等待第 ${String(index + 1)} 位` : ""} ·{" "}
-                  {Math.round(item.progress)}%
+                  {Math.round(Math.max(0, Math.min(1, item.progress)) * 100)}%
                 </p>
                 {item.error_detail && <p role="alert">{item.error_detail}</p>}
                 <div className="toolbar">

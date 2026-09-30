@@ -374,7 +374,8 @@ def _dominant_exclusive_speaker(
     durations: dict[str, int] = {}
     for item in exclusive:
         duration = _intersection_samples(span, item.span)
-        durations[item.speaker_local] = durations.get(item.speaker_local, 0) + duration
+        if duration > 0:
+            durations[item.speaker_local] = durations.get(item.speaker_local, 0) + duration
     return max(durations, key=lambda speaker: (durations[speaker], speaker)) if durations else None
 
 

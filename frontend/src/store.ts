@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { readStorage, writeStorage } from "./storage";
 
 export type Page =
   | "upload"
@@ -26,9 +27,9 @@ interface WorkbenchState {
   setLowConfidenceOnly: (value: boolean) => void;
 }
 
-const restoredJobId = sessionStorage.getItem("classscribe-current-job");
+const restoredJobId = readStorage("classscribe-current-job");
 const pageKey = "classscribe-current-page";
-const savedPage = sessionStorage.getItem(pageKey);
+const savedPage = readStorage(pageKey);
 const restoredPage: Page = (
   [
     "upload",
@@ -56,12 +57,12 @@ export const useWorkbench = create<WorkbenchState>((set) => ({
   textLayer: "smart",
   lowConfidenceOnly: false,
   setPage: (page) => {
-    sessionStorage.setItem(pageKey, page);
+    writeStorage(pageKey, page);
     set({ page });
   },
   setCurrentJob: (currentJobId) => {
-    sessionStorage.setItem("classscribe-current-job", currentJobId);
-    sessionStorage.setItem(pageKey, "job");
+    writeStorage("classscribe-current-job", currentJobId);
+    writeStorage(pageKey, "job");
     set({
       currentJobId,
       page: "job",

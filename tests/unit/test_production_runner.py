@@ -117,6 +117,7 @@ def test_auto_best_consumes_only_a_fresh_local_gold_profile(
             hardware_json={"gpu": "local"},
             parameters_json={
                 "production_gold": True,
+                "score_contract_version": "benchmark-quality-v2",
                 "real_model_execution": True,
                 "synthetic_gold": False,
                 "manifest_sha256": manifest_sha256,

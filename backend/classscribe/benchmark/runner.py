@@ -24,6 +24,8 @@ from classscribe.benchmark.metrics import (
 from classscribe.benchmark.models import BenchmarkPrediction, GoldCoverage, GoldRecord
 from classscribe.benchmark.ranking import RankingPolicy, rank_candidates
 
+SCORE_CONTRACT_VERSION = "benchmark-quality-v2"
+
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkReport:
@@ -78,7 +80,11 @@ class BenchmarkRunner:
         self.manifest_version = manifest_version
         self.manifest_sha256 = manifest_sha256 or _records_hash(records)
         self.hardware = hardware or {}
-        self.parameters = {**(parameters or {}), "production_gold": production_gold}
+        self.parameters = {
+            **(parameters or {}),
+            "production_gold": production_gold,
+            "score_contract_version": SCORE_CONTRACT_VERSION,
+        }
         self.ranking_policy = ranking_policy or RankingPolicy()
 
     async def execute(
@@ -348,6 +354,21 @@ def _aggregate_metrics(values: tuple[dict[str, object], ...]) -> dict[str, objec
             )
         elif all(item == present[0] for item in present):
             result[key] = present[0]
+    reference_count = (
+        sum(_metric_number(item, "word_timing_reference_count") for item in values)
+        if "word_timing_reference_count" in keys
+        else 0.0
+    )
+    if reference_count > 0:
+        matched_count = sum(_metric_number(item, "word_timing_matched_count") for item in values)
+        result["word_timing_coverage"] = matched_count / reference_count
+        weighted_errors = sum(
+            _metric_number(item, "word_boundary_mae_ms")
+            * _metric_number(item, "word_timing_matched_count")
+            for item in values
+            if isinstance(item.get("word_boundary_mae_ms"), (int, float))
+        )
+        result["word_boundary_mae_ms"] = weighted_errors / matched_count if matched_count else None
     return result
 
 

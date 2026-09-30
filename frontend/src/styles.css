@@ -574,6 +574,27 @@ details summary {
   display: grid;
   gap: 0.35rem;
 }
+.virtual-segment-list {
+  position: relative;
+  height: min(70vh, 760px);
+  min-height: 300px;
+  overflow: auto;
+  overflow-anchor: none;
+}
+.virtual-segment-row {
+  position: absolute;
+  width: 100%;
+}
+.virtual-segment-row .segment-row {
+  height: 100%;
+  overflow: hidden;
+}
+.virtual-segment-row .segment-copy {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 .segment-row {
   display: grid;
   grid-template-columns: 100px 90px minmax(0, 1fr) 50px;

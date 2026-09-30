@@ -9,3 +9,9 @@ name. The plan's `1.7B-JA` experiment is an explicitly enabled forced-Japanese r
 official 1.7B checkpoint; no fictitious separate model identity is introduced.
 
 The core project must never import this directory or its future deep-learning dependencies.
+
+Streaming currently uses a batch fallback, with complete utterance redecodes rather than native
+model cache reuse. The first interim still follows the requested chunk interval; subsequent
+interim updates are progressively coalesced, up to a four-second interval on long utterances.
+Final confirmation always includes the complete audio. This bounds repeated interim work without
+truncating audio or stitching independently decoded text.

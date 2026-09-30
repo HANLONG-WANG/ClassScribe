@@ -60,11 +60,35 @@ class JobStateMachine:
         self, session: Session, job: Job, specs: Iterable[CheckpointSpec]
     ) -> list[JobCheckpoint]:
         checkpoints: list[JobCheckpoint] = []
+        known = list(session.scalars(select(JobCheckpoint).where(JobCheckpoint.job_id == job.id)))
+        known.extend(
+            item
+            for item in session.new
+            if isinstance(item, JobCheckpoint) and item.job_id == job.id
+        )
         for spec in specs:
             if spec.max_attempts < 1:
                 raise ClassScribeError(
                     ErrorCode.JOB_STATE_CONFLICT, "checkpoint max_attempts must be positive"
                 )
+            existing = next(
+                (
+                    item
+                    for item in (*known, *checkpoints)
+                    if item.stage is spec.stage
+                    and item.checkpoint_key == spec.checkpoint_key
+                    and item.segment_id == spec.segment_id
+                ),
+                None,
+            )
+            if existing is not None:
+                if existing.parameter_hash != parameter_hash(spec.parameters):
+                    raise ClassScribeError(
+                        ErrorCode.JOB_STATE_CONFLICT,
+                        "checkpoint scope already exists with different parameters",
+                    )
+                checkpoints.append(existing)
+                continue
             checkpoint = JobCheckpoint(
                 job_id=job.id,
                 stage=spec.stage,
@@ -213,7 +237,9 @@ class JobStateMachine:
 
     def recovery_scan(self, session: Session) -> list[RecoveryPlan]:
         statement: Select[tuple[Job]] = select(Job).where(
-            Job.status.in_((JobStatus.RUNNING, JobStatus.CANCELLING, JobStatus.PENDING))
+            Job.status.in_(
+                (JobStatus.RUNNING, JobStatus.CANCELLING, JobStatus.PENDING, JobStatus.PAUSED)
+            )
         )
         plans: list[RecoveryPlan] = []
         for job in session.scalars(statement).unique():
@@ -227,6 +253,9 @@ class JobStateMachine:
                     None,
                 )
                 self.acknowledge_cancel(job, active_checkpoint)
+                continue
+            if job.status is JobStatus.PAUSED and not job.checkpoints:
+                # A queued job may have been paused before its first initialization.
                 continue
             for checkpoint in job.checkpoints:
                 if checkpoint.status is CheckpointStatus.RUNNING:
@@ -242,6 +271,10 @@ class JobStateMachine:
             if next_checkpoint.status is CheckpointStatus.FAILED:
                 job.status = JobStatus.FAILED
                 job.error_code = ErrorCode.CHECKPOINT_RETRY_EXHAUSTED.value
+                continue
+            if job.status is JobStatus.PAUSED:
+                # Repair interrupted work without revoking the user's pause.
+                job.stage = next_checkpoint.stage
                 continue
             job.status = JobStatus.PENDING
             job.stage = next_checkpoint.stage

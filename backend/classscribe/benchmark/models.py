@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import re
 import wave
+from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -237,14 +239,24 @@ class GoldCoverage:
         ibus = {language: 0 for language in classroom}
         long_items = {language: 0 for language in classroom}
         splits = {split: 0 for split in ("train", "validation", "test")}
+        classroom_ranges: dict[tuple[str, str], list[tuple[int, int]]] = defaultdict(list)
+        seen_ibus: set[tuple[str, str, int, int]] = set()
         for item in records:
             splits[item.split] += 1
             if item.scenario == "classroom":
-                classroom[item.language] += item.duration_seconds
+                classroom_ranges[(item.language, item.audio)].append(
+                    (item.start_sample, item.end_sample)
+                )
             else:
+                identity = (item.language, item.audio, item.start_sample, item.end_sample)
+                if identity in seen_ibus:
+                    continue
+                seen_ibus.add(identity)
                 ibus[item.language] += 1
                 if item.duration_seconds > 60:
                     long_items[item.language] += 1
+        for (language, _audio), spans in classroom_ranges.items():
+            classroom[language] += covered_samples(spans) / 16_000
         return cls(classroom, ibus, long_items, splits)
 
     def require(self, *, production: bool) -> None:
@@ -262,6 +274,18 @@ class GoldCoverage:
             errors.append("train/validation/test splits must all be non-empty")
         if errors:
             raise ValueError("gold coverage gate failed: " + "; ".join(errors))
+
+
+def covered_samples(spans: Sequence[tuple[int, int]]) -> int:
+    total = 0
+    current_start = current_end = 0
+    for start, end in sorted(spans):
+        if start > current_end:
+            total += current_end - current_start
+            current_start, current_end = start, end
+        else:
+            current_end = max(current_end, end)
+    return total + current_end - current_start
 
 
 def load_gold_manifest(path: Path, *, verify_audio: bool = True) -> tuple[GoldRecord, ...]:

@@ -32,6 +32,7 @@ from classscribe.alignment import (
 )
 from classscribe.alignment.provenance import sources_for_span
 from classscribe.alignment.validation import validate_timing
+from classscribe.asr.context import core_evidence
 from classscribe.asr.models import (
     ASRCandidateEvidence,
     ASRTokenEvidence,
@@ -44,9 +45,14 @@ from classscribe.asr.models import (
 from classscribe.audio.lid import ROUTABLE_LANGUAGES, LanguageRouter, LIDObservation
 from classscribe.audio.media import AudioMaster, FFmpegMediaPipeline, ImportedMedia, file_sha256
 from classscribe.audio.qc import PCMQualityAnalyzer
-from classscribe.audio.segmentation import TranscriptChunk, make_structure_windows
+from classscribe.audio.segmentation import (
+    BoundaryCue,
+    BoundaryKind,
+    TranscriptChunk,
+    make_structure_windows,
+)
 from classscribe.audio.vad import SpeechRegionResult
-from classscribe.benchmark import CalibrationArtifact
+from classscribe.benchmark import SCORE_CONTRACT_VERSION, CalibrationArtifact
 from classscribe.classroom.journal import ResponseJournal
 from classscribe.config import AppConfig
 from classscribe.consensus import (
@@ -83,8 +89,8 @@ from classscribe.exports import (
     ExportFormat,
     ExportLayer,
     ExportSegment,
-    ExportToken,
     ExportView,
+    load_export_segments,
     render_export,
 )
 from classscribe.jobs.state_machine import CheckpointSpec, JobStateMachine
@@ -546,6 +552,16 @@ class ProductionStageRunner:
                     else job.language_mode.value
                 ),
                 hotwords=hotwords,
+                boundary_cues=tuple(
+                    BoundaryCue(
+                        item.start_sample, BoundaryKind.LANGUAGE_SWITCH, item.confidence_raw
+                    )
+                    for item in session.scalars(
+                        select(LanguageSpan)
+                        .where(LanguageSpan.job_id == job.id, LanguageSpan.start_sample > 0)
+                        .order_by(LanguageSpan.start_sample)
+                    )
+                ),
             )
         )
         session.execute(
@@ -611,17 +627,33 @@ class ProductionStageRunner:
                 )
             )
             if existing is None:
+                existing = TranscriptSegment(
+                    job_id=job.id,
+                    start_sample=chunk.core_span.start_sample,
+                    end_sample=chunk.core_span.end_sample,
+                    speaker_id=speaker,
+                    language=language,
+                    raw_text="",
+                    faithful_text="",
+                    smart_corrected_text="",
+                    timing_quality=TimingQuality.STRUCTURE,
+                )
+                session.add(existing)
+                session.flush()
                 session.add(
-                    TranscriptSegment(
-                        job_id=job.id,
-                        start_sample=chunk.core_span.start_sample,
-                        end_sample=chunk.core_span.end_sample,
-                        speaker_id=speaker,
-                        language=language,
-                        raw_text="",
-                        faithful_text="",
-                        smart_corrected_text="",
-                        timing_quality=TimingQuality.STRUCTURE,
+                    DecisionEvent(
+                        segment_id=existing.id,
+                        event_type="natural_segment_context",
+                        actor_type="automatic",
+                        input_json={},
+                        output_json={
+                            "core_start_sample": chunk.core_span.start_sample,
+                            "core_end_sample": chunk.core_span.end_sample,
+                            "audio_start_sample": chunk.audio_span.start_sample,
+                            "audio_end_sample": chunk.audio_span.end_sample,
+                            "hard_split": chunk.hard_split,
+                        },
+                        rule_version="natural-context-v1",
                     )
                 )
 
@@ -1193,7 +1225,19 @@ class ProductionStageRunner:
     def _forced_alignment(self, session: Session, job: Job, checkpoint: JobCheckpoint) -> None:
         segment = self._segment(session, checkpoint)
         canonical = self._span(segment)
-        final_text = segment.user_text or segment.smart_corrected_text or segment.faithful_text
+        final_text = (
+            segment.user_text
+            if segment.user_text is not None
+            else (segment.smart_corrected_text or segment.faithful_text)
+        )
+        if not final_text.strip():
+            session.execute(
+                delete(TokenSpan).where(
+                    TokenSpan.segment_id == segment.id, TokenSpan.candidate_id.is_(None)
+                )
+            )
+            segment.timing_quality = TimingQuality.STRUCTURE
+            return
         voiced = self._voiced_spans(session, job.id, canonical)
         issues = self._quality_issues(session, segment.id)
         aligner = self.registry.model("qwen3_forced_aligner_0_6b")
@@ -1339,7 +1383,12 @@ class ProductionStageRunner:
                 .order_by(TokenSpan.start_sample, TokenSpan.id)
             )
         )
-        if not tokens:
+        final_text = (
+            segment.user_text
+            if segment.user_text is not None
+            else (segment.smart_corrected_text or segment.faithful_text)
+        )
+        if not tokens and final_text.strip():
             raise ClassScribeError(ErrorCode.CANDIDATE_TIMELINE_INVALID, "final text has no timing")
         previous = segment.start_sample
         for token in tokens:
@@ -1438,14 +1487,30 @@ class ProductionStageRunner:
             self.boundary(job.id)
         report_activity("transcribe_segment", model_id=entry.id, role=role.value)
         requested = span or self._span(segment)
+        audio_span = requested
+        if span is None:
+            event = session.scalars(
+                select(DecisionEvent)
+                .where(
+                    DecisionEvent.segment_id == segment.id,
+                    DecisionEvent.event_type == "natural_segment_context",
+                )
+                .order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
+            ).first()
+            metadata = event.output_json if event is not None else {}
+            if (
+                metadata.get("core_start_sample") == requested.start_sample
+                and metadata.get("core_end_sample") == requested.end_sample
+            ):
+                audio_span = AudioSpan(metadata["audio_start_sample"], metadata["audio_end_sample"])
         chunk = TranscriptChunk(
             0,
             requested,
-            requested,
+            audio_span,
             "quality_retry_piece" if span is not None else "persisted_natural_segment",
-            False,
-            0,
-            0,
+            audio_span != requested,
+            requested.start_sample - audio_span.start_sample,
+            audio_span.end_sample - requested.end_sample,
         )
         hints, rolling_context = self._asr_context(session, job, segment)
         request = build_asr_request(
@@ -1464,7 +1529,7 @@ class ProductionStageRunner:
             if span is not None
             else self.invoke(entry, request)
         )
-        return parse_asr_response(response, request, entry, chunk, role)
+        return core_evidence(parse_asr_response(response, request, entry, chunk, role))
 
     def _store_candidate(
         self, session: Session, segment: TranscriptSegment, evidence: ASRCandidateEvidence
@@ -1534,7 +1599,7 @@ class ProductionStageRunner:
                 item.token,
                 AudioSpan(item.start_sample, item.end_sample),
                 item.confidence,
-                index,
+                int(item.provenance_json.get("source_token_index", index)),
             )
             for index, item in enumerate(
                 session.scalars(
@@ -1867,6 +1932,7 @@ class ProductionStageRunner:
         manifest_sha256 = parameters.get("manifest_sha256")
         if not (
             parameters.get("production_gold") is True
+            and parameters.get("score_contract_version") == SCORE_CONTRACT_VERSION
             and parameters.get("real_model_execution") is True
             and parameters.get("synthetic_gold") is False
             and isinstance(manifest_sha256, str)
@@ -2041,50 +2107,13 @@ class ProductionStageRunner:
     def _master_path(self, recording_id: str) -> Path:
         return self.paths.data_path("recordings", recording_id, "derived", "audio_master.wav")
 
+    def needs_audio_normalization(self, job: Job) -> bool:
+        path = self._master_path(job.recording_id)
+        return not path.is_file() or path.is_symlink()
+
     @staticmethod
     def _export_segments(session: Session, job_id: str) -> tuple[ExportSegment, ...]:
-        result: list[ExportSegment] = []
-        segments = tuple(
-            session.scalars(
-                select(TranscriptSegment)
-                .where(TranscriptSegment.job_id == job_id, TranscriptSegment.is_active.is_(True))
-                .order_by(TranscriptSegment.start_sample, TranscriptSegment.id)
-            )
-        )
-        for segment in segments:
-            tokens = tuple(
-                ExportToken(
-                    item.token,
-                    AudioSpan(item.start_sample, item.end_sample),
-                    protected_group=(
-                        str(item.provenance_json["protected_group"])
-                        if item.provenance_json.get("protected_group")
-                        else None
-                    ),
-                    provenance=dict(item.provenance_json),
-                )
-                for item in session.scalars(
-                    select(TokenSpan)
-                    .where(TokenSpan.segment_id == segment.id, TokenSpan.candidate_id.is_(None))
-                    .order_by(TokenSpan.start_sample, TokenSpan.id)
-                )
-            )
-            result.append(
-                ExportSegment(
-                    segment.id,
-                    AudioSpan(segment.start_sample, segment.end_sample),
-                    segment.language.value,
-                    segment.raw_text,
-                    segment.faithful_text,
-                    segment.smart_corrected_text,
-                    segment.user_text,
-                    tokens,
-                    smart_tokens=tokens,
-                    user_tokens=tokens if segment.user_text else (),
-                    speaker=segment.speaker_id,
-                )
-            )
-        return tuple(result)
+        return load_export_segments(session, job_id)
 
 
 def _speech_region(value: Mapping[str, Any]) -> SpeechRegionResult:

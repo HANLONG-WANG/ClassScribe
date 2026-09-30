@@ -6,7 +6,7 @@ import re
 import unicodedata
 from collections.abc import Sequence
 
-_ENGLISH_WORD = re.compile("[^\\W_]+(?:['\\u2019][^\\W_]+)?|\\d+(?:[.,]\\d+)*", re.UNICODE)
+_ENGLISH_WORD = re.compile(r"\d+(?:[.,]\d+)*|[^\W_]+(?:['\u2019][^\W_]+)?", re.UNICODE)
 
 
 def normalize_cjk(text: str) -> str:

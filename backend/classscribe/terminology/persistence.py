@@ -18,6 +18,7 @@ class TerminologyRepository:
 
     def store_course(self, config: CourseConfig) -> str:
         with self._sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             glossary = session.scalar(
                 select(Glossary).where(Glossary.course_id == config.course_id)
             )
@@ -47,6 +48,7 @@ class TerminologyRepository:
         if any(term.user_confirmed or term.weight > 0.3 for term in terms):
             raise ValueError("suggestion import accepts only low-weight unconfirmed terms")
         with self._sessions.begin() as session:
+            session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             glossary = session.get(Glossary, glossary_id)
             if glossary is None:
                 raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "glossary does not exist")
@@ -126,4 +128,5 @@ class TerminologyRepository:
             record.weight = term.weight
             record.source = term.source.value
             record.user_confirmed = term.user_confirmed
+            session.flush()
         return count

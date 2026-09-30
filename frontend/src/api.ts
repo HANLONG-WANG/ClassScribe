@@ -1,4 +1,5 @@
 import { useAuthStatus } from "./authStatus";
+import { readStorage, writeStorage } from "./storage";
 
 export type ApiObject = Record<string, unknown>;
 
@@ -8,13 +9,13 @@ const tokenMeta = document.querySelector<HTMLMetaElement>(
 const injectedToken = tokenMeta?.content.trim();
 let apiToken =
   (injectedToken === "__CLASSSCRIBE_API_TOKEN__" ? "" : injectedToken) ||
-  sessionStorage.getItem("classscribe-token")?.trim() ||
+  readStorage("classscribe-token")?.trim() ||
   "";
 tokenMeta?.remove();
 
 export function setApiToken(token: string) {
   apiToken = token;
-  sessionStorage.setItem("classscribe-token", token);
+  writeStorage("classscribe-token", token);
 }
 
 export function authHeaders(write = false): HeadersInit {
@@ -35,7 +36,81 @@ function publicErrorDetail(detail: string) {
     .replace(/\b[A-Z]:\\(?:[^\\\s]+\\)+[^\\\s]*/giu, "[LOCAL_PATH]");
 }
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+export type ApiRequestInit = RequestInit & { timeoutMs?: number };
+
+export async function fetchResource<T>(
+  url: string,
+  init: RequestInit,
+  consume: (response: Response) => Promise<T>,
+  timeoutMs = 30_000,
+): Promise<T> {
+  const controller = new AbortController();
+  const cancel = () => {
+    const error = new Error("操作已取消");
+    error.name = "AbortError";
+    controller.abort(error);
+  };
+  if (init.signal?.aborted) {
+    cancel();
+    throw controller.signal.reason as Error;
+  }
+  init.signal?.addEventListener("abort", cancel, { once: true });
+  let rejectAbort: ((reason: Error) => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAbort = reject;
+  });
+  const onAbort = () => rejectAbort?.(controller.signal.reason as Error);
+  controller.signal.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(() => {
+    const error = new Error("请求超时，请检查任务状态后重试");
+    error.name = "TimeoutError";
+    controller.abort(error);
+  }, timeoutMs);
+  try {
+    return await Promise.race([
+      fetch(url, { ...init, signal: controller.signal }).then(consume),
+      aborted,
+    ]);
+  } finally {
+    clearTimeout(timer);
+    init.signal?.removeEventListener("abort", cancel);
+    controller.signal.removeEventListener("abort", onAbort);
+  }
+}
+
+export async function downloadFile(
+  url: string,
+  filename: string,
+  signal: AbortSignal,
+) {
+  const blob = await fetchResource(
+    url,
+    { headers: authHeaders(), signal },
+    async (response) => {
+      if (!response.ok)
+        throw new Error(`下载失败（${String(response.status)}）`);
+      return response.blob();
+    },
+    120_000,
+  );
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = objectUrl;
+    anchor.download = filename;
+    anchor.click();
+  } finally {
+    setTimeout(() => {
+      URL.revokeObjectURL(objectUrl);
+    }, 0);
+  }
+}
+
+export async function api<T>(
+  path: string,
+  init: ApiRequestInit = {},
+): Promise<T> {
+  const { timeoutMs, ...options } = init;
   const requestToken = apiToken;
   const method = init.method?.toUpperCase() ?? "GET";
   const write = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
@@ -46,27 +121,33 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   new Headers(init.headers).forEach((value, key) => {
     headers.set(key, value);
   });
-  const response = await fetch(`/api/v1${path}`, { ...init, headers });
-  if (!response.ok) {
-    if (
-      (response.status === 401 || response.status === 403) &&
-      requestToken === apiToken
-    ) {
-      useAuthStatus.setState({ invalid: true });
-    }
-    const payload = (await response.json().catch(() => ({}))) as {
-      error?: { detail?: string };
-      detail?: string;
-    };
-    throw new ApiError(
-      payload.error?.detail || payload.detail
-        ? publicErrorDetail(payload.error?.detail ?? payload.detail ?? "")
-        : `${String(response.status)} ${response.statusText}`,
-      response.status,
-    );
-  }
-  if (requestToken === apiToken) useAuthStatus.setState({ invalid: false });
-  return (await response.json()) as T;
+  return fetchResource(
+    `/api/v1${path}`,
+    { ...options, headers },
+    async (response) => {
+      if (!response.ok) {
+        if (
+          (response.status === 401 || response.status === 403) &&
+          requestToken === apiToken
+        ) {
+          useAuthStatus.setState({ invalid: true });
+        }
+        const payload = (await response.json().catch(() => ({}))) as {
+          error?: { detail?: string };
+          detail?: string;
+        };
+        throw new ApiError(
+          payload.error?.detail || payload.detail
+            ? publicErrorDetail(payload.error?.detail ?? payload.detail ?? "")
+            : `${String(response.status)} ${response.statusText}`,
+          response.status,
+        );
+      }
+      if (requestToken === apiToken) useAuthStatus.setState({ invalid: false });
+      return (await response.json()) as T;
+    },
+    timeoutMs ?? (write ? 30 * 60_000 : 30_000),
+  );
 }
 
 export class ApiError extends Error {
@@ -245,6 +326,12 @@ export interface ModelComponentSource {
 }
 
 export interface ModelInfo {
+  environment_cache?: {
+    versions: number;
+    damaged: number;
+    size_bytes: number;
+    in_use: number;
+  };
   modes?: string[];
   capabilities?: Record<string, boolean>;
   safe_window_seconds?: number;

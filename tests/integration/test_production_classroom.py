@@ -197,6 +197,7 @@ def test_production_runner_completes_real_media_to_automatic_export(
             hardware_json={"gpu": "fixture"},
             parameters_json={
                 "production_gold": True,
+                "score_contract_version": "benchmark-quality-v2",
                 "real_model_execution": True,
                 "synthetic_gold": False,
                 "manifest_sha256": manifest_sha256,

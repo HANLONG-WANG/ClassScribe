@@ -87,7 +87,9 @@ class AudioPreprocessor:
                 mix_policy=mix_policy,
                 best_channel=best_channel if mix_policy is ChannelMixPolicy.BEST else None,
             )
-            report = self.quality.build_report(imported, master, qc_path)
+            report = self.quality.build_report(
+                imported, master, qc_path, channel_metrics=channel_metrics
+            )
             return PreparedAudio(imported, master, report)
         finally:
             qc_path.unlink(missing_ok=True)

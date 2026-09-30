@@ -132,7 +132,7 @@
               "language": {"enum": ["zh", "ja", "en"]},
               "rolling_context": {
                 "type": "array",
-                "maxItems": 3,
+                "maxItems": 5,
                 "items": {"type": "string", "minLength": 1}
               }
             }

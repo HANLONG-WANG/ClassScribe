@@ -124,3 +124,15 @@ commit、cancel、错误透传后，才可提供 evidence JSON 并用 `--require
 11 个 worker 和十种 case，逐项保存固定 model revision、退出前后 VRAM，退出后相对 baseline
 残留超过 128 MiB 即失败。`scripts/validate_phase12_acceptance.py` 只在 gold、benchmark、桌面矩阵
 和这些结构化证据同时完整时返回 0。
+
+## HTTP 评分任务
+
+`POST /api/v1/benchmarks` 现在需要 `parameters.manifest_path` 与
+`parameters.predictions_path`，均为应用 `data/benchmarks/` 内的相对路径。
+文件各不得超过 64 MiB；语料 JSONL 引用的音频仍须满足既有本地 gold 合同。
+缺失或非法输入返回错误，不创建空运行记录。有输入后后台评分，将结果和失败状态
+持久化，可通过原查询接口读取；重启时未完成评分被标为中断失败。
+
+文件评分不宣称系统自动执行了真实模型。新的评分合同为
+`benchmark-quality-v2`，缺失词时间不能被算为零误差；旧合同排名需重新评估后
+才能进入自动选模。应用退出会等待正在运行的评分任务结束。

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fcntl
 import os
 import stat
 from collections.abc import Mapping, Sequence
@@ -11,6 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from classscribe_protocol import Priority, ProtocolError, RPCClient, RPCRequest, RPCResponse
+
+from classscribe.models.environment import acquire_environment_lease
+
+STDERR_TAIL_BYTES = 64 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +26,7 @@ class WorkerProcessSpec:
     data_roots: tuple[Path, ...]
     socket_argument_path: Path | None = None
     data_root_arguments: tuple[Path, ...] | None = None
+    environment_project: Path | None = None
 
     def __post_init__(self) -> None:
         if not self.worker_id or not self.command:
@@ -29,6 +35,8 @@ class WorkerProcessSpec:
             not path.is_absolute() for path in self.data_roots
         ):
             raise ValueError("worker socket and data roots must be absolute")
+        if self.environment_project is not None and not self.environment_project.is_absolute():
+            raise ValueError("worker environment project must be absolute")
         if self.socket_argument_path is not None and not self.socket_argument_path.is_absolute():
             raise ValueError("worker socket argument must be absolute")
         if self.data_root_arguments is not None and any(
@@ -46,6 +54,9 @@ class WorkerProcess:
         self._stderr_task: asyncio.Task[bytes] | None = None
         self._socket_directory_fd: int | None = None
         self._transport_path: Path | None = None
+        self._environment_lease_fd: int | None = None
+        self._stderr_tail = bytearray()
+        self._stderr_dropped_bytes = 0
 
     @property
     def running(self) -> bool:
@@ -82,23 +93,39 @@ class WorkerProcess:
                 "NO_PROXY": "*",
             }
         )
+        self._stderr_tail.clear()
+        self._stderr_dropped_bytes = 0
         try:
-            self.process = await asyncio.create_subprocess_exec(
-                *command,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-                env=environment,
-                start_new_session=True,
-                pass_fds=()
-                if self.spec.socket_argument_path is not None
-                else (socket_directory_fd,),
-            )
+            if self.spec.environment_project is not None:
+                self._environment_lease_fd = acquire_environment_lease(
+                    self.spec.environment_project
+                )
+
+            async def spawn() -> None:
+                self.process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=environment,
+                    start_new_session=True,
+                    pass_fds=()
+                    if self.spec.socket_argument_path is not None
+                    else (socket_directory_fd,),
+                )
+                if self.process is not None and self.process.stderr is not None:
+                    self._stderr_task = asyncio.create_task(self._drain_stderr(self.process.stderr))
+
+            await _wait_owned(asyncio.create_task(spawn()))
         except BaseException:
-            self._close_socket_directory()
+            if self.process is not None:
+                await self.stop()
+            else:
+                self._close_environment_lease()
+                self._close_socket_directory()
             raise
-        if self.process.stderr is not None:
-            self._stderr_task = asyncio.create_task(self.process.stderr.read())
+
+        assert self.process is not None
         try:
             async with asyncio.timeout(timeout_seconds):
                 while not self._transport_path.exists():
@@ -141,6 +168,11 @@ class WorkerProcess:
         )
 
     async def stop(self, *, grace_seconds: float = 3.0) -> None:
+        # Caller cancellation must not cancel subprocess teardown or drop its
+        # shared environment lease before the actual process has exited.
+        await _wait_owned(asyncio.create_task(self._stop_impl(grace_seconds=grace_seconds)))
+
+    async def _stop_impl(self, *, grace_seconds: float = 3.0) -> None:
         process = self.process
         try:
             if process is not None:
@@ -164,6 +196,10 @@ class WorkerProcess:
             ):
                 self._transport_path.unlink()
         finally:
+            # A failed termination must keep the environment protected while
+            # the subprocess is still alive; a subsequent stop can retry it.
+            if self.process is None or self.process.returncode is not None:
+                self._close_environment_lease()
             self._close_socket_directory()
 
     def _close_socket_directory(self) -> None:
@@ -172,12 +208,42 @@ class WorkerProcess:
             self._socket_directory_fd = None
         self._transport_path = None
 
+    def _close_environment_lease(self) -> None:
+        if self._environment_lease_fd is not None:
+            fcntl.flock(self._environment_lease_fd, fcntl.LOCK_UN)
+            os.close(self._environment_lease_fd)
+            self._environment_lease_fd = None
+
+    async def _drain_stderr(self, reader: asyncio.StreamReader) -> bytes:
+        while chunk := await reader.read(4096):
+            self._stderr_tail.extend(chunk)
+            excess = max(0, len(self._stderr_tail) - STDERR_TAIL_BYTES)
+            if excess:
+                del self._stderr_tail[:excess]
+                self._stderr_dropped_bytes += excess
+        return bytes(self._stderr_tail)
+
     async def stderr(self) -> str:
-        if self._stderr_task is None:
-            return ""
-        if not self._stderr_task.done():
-            return ""
-        return (await self._stderr_task).decode("utf-8", errors="replace").strip()
+        detail = self._stderr_tail.decode("utf-8", errors="replace").strip()
+        if self._stderr_dropped_bytes:
+            return f"[{self._stderr_dropped_bytes} earlier stderr bytes omitted]\n{detail}"
+        return detail
+
+
+async def _wait_owned(task: asyncio.Task[None]) -> None:
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled():
+            task.exception()
+        raise
 
 
 def worker_command(repository_root: Path, worker_id: str) -> tuple[str, ...]:

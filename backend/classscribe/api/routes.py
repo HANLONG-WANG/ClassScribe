@@ -17,6 +17,7 @@ from classscribe.api.schemas import (
     CandidateAdoption,
     ExportCreate,
     GlossaryCreate,
+    GlossaryTermInput,
     GlossaryTermsUpdate,
     HistoryAction,
     JobCreate,
@@ -33,6 +34,7 @@ from classscribe.api.schemas import (
 )
 from classscribe.api.service import ClassScribeService
 from classscribe.db.models import JobStatus
+from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.terminology import TermSource
 
 
@@ -50,6 +52,17 @@ async def uploaded_filename(
         raise HTTPException(status_code=422, detail="Invalid UTF-8 filename") from exc
 
 
+async def bounded_body(request: Request, *, max_bytes: int = 64 * 1024 * 1024) -> bytes:
+    content = bytearray()
+    async for chunk in request.stream():
+        if len(content) + len(chunk) > max_bytes:
+            raise ClassScribeError(
+                ErrorCode.UPLOAD_TOO_LARGE, "request body exceeds its byte limit"
+            )
+        content.extend(chunk)
+    return bytes(content)
+
+
 def create_api_router(service: ClassScribeService) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
 
@@ -61,20 +74,21 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         channels: int = Header(alias="X-ClassScribe-Channels"),
         sample_rate: int = Header(alias="X-ClassScribe-Sample-Rate"),
     ) -> dict[str, object]:
-        return service.create_recording(
+        return await asyncio.to_thread(
+            service.create_recording,
             source_name=source_name,
-            content=await request.body(),
+            content=await bounded_body(request),
             duration_samples=duration_samples,
             channels=channels,
             sample_rate=sample_rate,
         )
 
     @router.get("/recordings")
-    async def list_recordings() -> list[dict[str, object]]:
+    def list_recordings() -> list[dict[str, object]]:
         return service.recordings()
 
     @router.get("/recordings/{recording_id}")
-    async def get_recording(recording_id: str) -> dict[str, object]:
+    def get_recording(recording_id: str) -> dict[str, object]:
         return service.recording(recording_id)
 
     @router.put("/recordings/{recording_id}/upload")
@@ -86,7 +100,7 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         return await service.upload_recording(recording_id, source_name, request.stream())
 
     @router.get("/recordings/{recording_id}/media")
-    async def get_recording_media(recording_id: str) -> Response:
+    def get_recording_media(recording_id: str) -> Response:
         path, source_name = service.recording_file(recording_id)
         return FileResponse(path, filename=source_name)
 
@@ -95,14 +109,14 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         return service.create_job(value)
 
     @router.get("/jobs")
-    async def list_jobs(
+    def list_jobs(
         limit: int = Query(default=30, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
     ) -> dict[str, object]:
         return service.list_jobs(limit=limit, offset=offset)
 
     @router.get("/queue")
-    async def queue() -> dict[str, object]:
+    def queue() -> dict[str, object]:
         return service.queue()
 
     @router.post("/queue/pause")
@@ -114,11 +128,11 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         return service.control_queue(False)
 
     @router.post("/queue/reorder")
-    async def reorder_queue(value: QueueOrder) -> dict[str, object]:
+    def reorder_queue(value: QueueOrder) -> dict[str, object]:
         return service.reorder_queue(value.job_ids)
 
     @router.get("/jobs/{job_id}")
-    async def get_job(job_id: str) -> dict[str, object]:
+    def get_job(job_id: str) -> dict[str, object]:
         return service.job(job_id)
 
     @router.get("/jobs/{job_id}/events")
@@ -173,7 +187,7 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         return StreamingResponse(stream(), media_type="text/event-stream")
 
     @router.post("/jobs/{job_id}/pause")
-    async def pause_job(job_id: str) -> dict[str, object]:
+    def pause_job(job_id: str) -> dict[str, object]:
         return service.pause_job(job_id)
 
     @router.post("/jobs/{job_id}/resume")
@@ -181,7 +195,7 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         return service.resume_job(job_id)
 
     @router.post("/jobs/{job_id}/cancel")
-    async def cancel_job(job_id: str) -> dict[str, object]:
+    def cancel_job(job_id: str) -> dict[str, object]:
         return service.cancel_job(job_id)
 
     @router.post("/jobs/{job_id}/retry")
@@ -205,27 +219,27 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         )
 
     @router.get("/segments/{segment_id}")
-    async def segment(segment_id: str) -> dict[str, object]:
+    def segment(segment_id: str) -> dict[str, object]:
         return service.segment(segment_id)
 
     @router.patch("/segments/{segment_id}")
-    async def patch_segment(segment_id: str, value: SegmentPatch) -> dict[str, object]:
+    def patch_segment(segment_id: str, value: SegmentPatch) -> dict[str, object]:
         return service.patch_segment(segment_id, value)
 
     @router.post("/segments/{segment_id}/undo")
-    async def undo_segment(segment_id: str, value: HistoryAction) -> dict[str, object]:
+    def undo_segment(segment_id: str, value: HistoryAction) -> dict[str, object]:
         return service.undo_segment(segment_id, value.version)
 
     @router.post("/segments/{segment_id}/redo")
-    async def redo_segment(segment_id: str, value: HistoryAction) -> dict[str, object]:
+    def redo_segment(segment_id: str, value: HistoryAction) -> dict[str, object]:
         return service.redo_segment(segment_id, value.version)
 
     @router.get("/segments/{segment_id}/candidates")
-    async def candidates(segment_id: str) -> list[dict[str, object]]:
+    def candidates(segment_id: str) -> list[dict[str, object]]:
         return service.candidates(segment_id)
 
     @router.post("/segments/{segment_id}/adopt-candidate")
-    async def adopt_candidate(segment_id: str, value: CandidateAdoption) -> dict[str, object]:
+    def adopt_candidate(segment_id: str, value: CandidateAdoption) -> dict[str, object]:
         return service.adopt_candidate(segment_id, value)
 
     @router.post("/segments/{segment_id}/rerun")
@@ -234,23 +248,23 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         return service.retry_segment(str(segment["job_id"]), segment_id)
 
     @router.post("/segments/{segment_id}/split")
-    async def split_segment(segment_id: str, value: SegmentSplit) -> dict[str, object]:
+    def split_segment(segment_id: str, value: SegmentSplit) -> dict[str, object]:
         return service.split_segment(segment_id, value)
 
     @router.post("/segments/{segment_id}/merge")
-    async def merge_segments(segment_id: str, value: SegmentMerge) -> dict[str, object]:
+    def merge_segments(segment_id: str, value: SegmentMerge) -> dict[str, object]:
         return service.merge_segments(segment_id, value)
 
     @router.get("/models")
-    async def models() -> list[dict[str, object]]:
+    def models() -> list[dict[str, object]]:
         return service.models()
 
     @router.get("/models/{model_id}/manifest")
-    async def model_manifest(model_id: str) -> dict[str, object]:
+    def model_manifest(model_id: str) -> dict[str, object]:
         return service.model_manifest(model_id)
 
     @router.post("/models/{model_id}/install", status_code=status.HTTP_202_ACCEPTED)
-    async def install_model(model_id: str, _value: ModelInstallRequest) -> dict[str, object]:
+    def install_model(model_id: str, _value: ModelInstallRequest) -> dict[str, object]:
         return service.request_bundled_model_install(model_id)
 
     @router.post("/models/{model_id}/install/confirm")
@@ -276,57 +290,59 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         return await asyncio.to_thread(service.repair_model_environment, model_id)
 
     @router.delete("/models/{model_id}")
-    async def delete_model(model_id: str, revision: str = Query()) -> dict[str, object]:
+    def delete_model(model_id: str, revision: str = Query()) -> dict[str, object]:
         return service.delete_model(model_id, revision)
 
+    @router.post("/models/{model_id}/environment/cache/cleanup")
+    def cleanup_model_environment_cache(model_id: str) -> dict[str, object]:
+        return service.cleanup_model_environment_cache(model_id)
+
     @router.post("/models/{model_id}/rollback")
-    async def rollback_model(model_id: str, value: ModelRevisionRequest) -> dict[str, object]:
+    def rollback_model(model_id: str, value: ModelRevisionRequest) -> dict[str, object]:
         return service.rollback_model(model_id, value.revision)
 
     @router.get("/profiles")
-    async def profiles() -> list[dict[str, object]]:
+    def profiles() -> list[dict[str, object]]:
         return service.profiles()
 
     @router.put("/profiles/{language}/{scenario}")
-    async def update_profile(
-        language: str, scenario: str, value: ProfileUpdate
-    ) -> dict[str, object]:
+    def update_profile(language: str, scenario: str, value: ProfileUpdate) -> dict[str, object]:
         return service.update_profile(language, scenario, value)
 
     @router.post("/profiles/{language}/{scenario}/rollback")
-    async def rollback_profile(language: str, scenario: str) -> dict[str, object]:
+    def rollback_profile(language: str, scenario: str) -> dict[str, object]:
         return service.rollback_profile(language, scenario)
 
     @router.get("/settings")
-    async def settings() -> dict[str, object]:
+    def settings() -> dict[str, object]:
         return service.settings()
 
     @router.put("/settings")
-    async def update_settings(value: SettingsUpdate) -> dict[str, object]:
+    def update_settings(value: SettingsUpdate) -> dict[str, object]:
         return service.update_settings(value.values)
 
     @router.get("/glossaries")
-    async def glossaries() -> list[dict[str, object]]:
+    def glossaries() -> list[dict[str, object]]:
         return service.glossaries()
 
     @router.post("/glossaries", status_code=status.HTTP_201_CREATED)
-    async def create_glossary(value: GlossaryCreate) -> dict[str, object]:
+    def create_glossary(value: GlossaryCreate) -> dict[str, object]:
         return service.create_glossary(value)
 
     @router.delete("/glossaries/{glossary_id}")
-    async def delete_glossary(glossary_id: str) -> dict[str, object]:
+    def delete_glossary(glossary_id: str) -> dict[str, object]:
         return service.delete_glossary(glossary_id)
 
     @router.delete("/jobs/{job_id}/derived-data")
-    async def delete_derived_data(job_id: str) -> dict[str, object]:
+    def delete_derived_data(job_id: str) -> dict[str, object]:
         return service.delete_derived_data(job_id)
 
     @router.delete("/jobs/{job_id}/local-data")
-    async def delete_job_data(job_id: str) -> dict[str, object]:
+    def delete_job_data(job_id: str) -> dict[str, object]:
         return service.delete_job_data(job_id)
 
     @router.post("/local-data/clear")
-    async def clear_local_data(value: LocalDataClearRequest) -> dict[str, object]:
+    def clear_local_data(value: LocalDataClearRequest) -> dict[str, object]:
         return service.clear_local_data(value.confirmation)
 
     @router.post("/glossaries/{glossary_id}/documents", status_code=status.HTTP_201_CREATED)
@@ -338,12 +354,13 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         language: Annotated[str, Header(alias="X-ClassScribe-Language")],
     ) -> dict[str, object]:
         try:
-            return service.add_glossary_document(
+            return await asyncio.to_thread(
+                service.add_glossary_document,
                 glossary_id,
                 source_name=source_name,
                 source_kind=source_kind,
                 language=language,
-                content=await request.body(),
+                content=await bounded_body(request),
             )
         except UnicodeError as exc:
             raise HTTPException(status_code=422, detail="材料编码无效, 请使用 UTF-8.") from exc
@@ -351,19 +368,23 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
             raise HTTPException(status_code=422, detail=f"材料内容无效: {exc}") from exc
 
     @router.put("/glossaries/{glossary_id}/terms")
-    async def update_terms(glossary_id: str, value: GlossaryTermsUpdate) -> dict[str, object]:
+    def update_terms(glossary_id: str, value: GlossaryTermsUpdate) -> dict[str, object]:
         return service.update_terms(glossary_id, value)
 
     @router.delete("/glossaries/{glossary_id}/terms/{term_id}")
-    async def delete_term(glossary_id: str, term_id: str) -> dict[str, object]:
+    def delete_term(glossary_id: str, term_id: str) -> dict[str, object]:
         return service.delete_term(glossary_id, term_id)
 
+    @router.patch("/glossaries/{glossary_id}/terms/{term_id}")
+    def update_term(glossary_id: str, term_id: str, value: GlossaryTermInput) -> dict[str, object]:
+        return service.update_term(glossary_id, term_id, value)
+
     @router.post("/jobs/{job_id}/exports", status_code=status.HTTP_201_CREATED)
-    async def create_export(job_id: str, value: ExportCreate) -> dict[str, object]:
+    def create_export(job_id: str, value: ExportCreate) -> dict[str, object]:
         return service.create_export(job_id, value)
 
     @router.get("/exports/{export_id}")
-    async def get_export(export_id: str) -> Response:
+    def get_export(export_id: str) -> Response:
         path, metadata = service.export_file(export_id)
         return FileResponse(
             path,
@@ -376,15 +397,15 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         return service.create_benchmark(value)
 
     @router.get("/benchmarks/{benchmark_id}")
-    async def benchmark(benchmark_id: str) -> dict[str, object]:
+    def benchmark(benchmark_id: str) -> dict[str, object]:
         return service.benchmark(benchmark_id)
 
     @router.get("/benchmarks/{benchmark_id}/results")
-    async def benchmark_results(benchmark_id: str) -> dict[str, object]:
+    def benchmark_results(benchmark_id: str) -> dict[str, object]:
         return service.benchmark_results(benchmark_id)
 
     @router.post("/benchmarks/{benchmark_id}/apply-ranking")
-    async def apply_ranking(benchmark_id: str, value: ApplyRanking) -> dict[str, object]:
+    def apply_ranking(benchmark_id: str, value: ApplyRanking) -> dict[str, object]:
         return service.apply_ranking(benchmark_id, value)
 
     return router

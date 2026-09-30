@@ -6,10 +6,13 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shutil
+import stat
 import subprocess
 import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 from classscribe.errors import ClassScribeError, ErrorCode
@@ -21,6 +24,8 @@ _UV_BUILD_CONFIG = """\
 classscribe-protocol = ["hatchling>=1.27,<2"]
 """
 _IGNORED_SOURCE_NAMES = frozenset({".venv", "__pycache__", ".pytest_cache"})
+_CACHE_DIGEST = re.compile(r"[0-9a-f]{64}")
+_ENVIRONMENT_LEASE = ".in-use.lock"
 
 
 def _run_checked(command: Sequence[str], cwd: Path, environment: dict[str, str]) -> None:
@@ -32,6 +37,61 @@ def _run_checked(command: Sequence[str], cwd: Path, environment: dict[str, str])
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
     )
+
+
+def acquire_environment_lease(project: Path) -> int:
+    """Pin a published worker environment for the full subprocess lifetime."""
+    if project.absolute() != project.resolve(strict=True) or not project.is_dir():
+        raise ValueError("worker environment lease requires a canonical project")
+    root = project.parent.parent
+    if not (root / "complete.json").is_file():
+        raise ValueError("worker environment is not published")
+    path = root / _ENVIRONMENT_LEASE
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        opened = os.fstat(descriptor)
+        present = path.stat(follow_symlinks=False)
+        if (opened.st_dev, opened.st_ino) != (present.st_dev, present.st_ino):
+            raise ValueError("worker environment changed while acquiring its lease")
+        if not project.is_dir():
+            raise ValueError("worker environment was removed before startup")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+@contextmanager
+def _exclusive_environment(root: Path, *, create: bool = True) -> Iterator[bool]:
+    path = root / _ENVIRONMENT_LEASE
+    if not create and not path.exists():
+        yield True
+        return
+    descriptor = os.open(
+        path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC | (os.O_CREAT if create else 0), 0o600
+    )
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        opened = os.fstat(descriptor)
+        present = path.stat(follow_symlinks=False)
+        yield (opened.st_dev, opened.st_ino) == (present.st_dev, present.st_ino)
+    finally:
+        os.close(descriptor)
+
+
+def _logical_payload_bytes(root: Path) -> int:
+    total = 0
+    for directory, _names, files in os.walk(root, followlinks=False):
+        for name in files:
+            metadata = (Path(directory) / name).lstat()
+            if stat.S_ISREG(metadata.st_mode):
+                total += metadata.st_size
+    return total
 
 
 class WorkerEnvironmentProvisioner:
@@ -66,9 +126,18 @@ class WorkerEnvironmentProvisioner:
                     raise ValueError("worker environment path may not be a symlink")
                 if state["status"] == "incomplete" and target.exists():
                     # Keep the damaged copy for diagnosis; never change a live environment.
-                    backup = Path(tempfile.mkdtemp(prefix=".damaged-", dir=target.parent))
-                    os.replace(target, backup / "environment")
-            return self._ensure(worker_id)
+                    with _exclusive_environment(target) as available:
+                        if not available:
+                            raise ClassScribeError(
+                                ErrorCode.MODEL_HEALTH_CHECK_FAILED,
+                                "release workers using this environment before repairing it",
+                            )
+                        backup = Path(tempfile.mkdtemp(prefix=".damaged-", dir=target.parent))
+                        os.replace(target, backup / "environment")
+            project = self._ensure(worker_id)
+            # Complete rollback versions require an explicit cleanup request.
+            self._cleanup_locked(worker_id, keep_versions=None, keep_damaged=1)
+            return project
 
     def _ensure(self, worker_id: str) -> Path:
         if not worker_id.replace("_", "").isalnum():
@@ -170,6 +239,7 @@ class WorkerEnvironmentProvisioner:
                         "lock_sha256": lock_digest,
                         "source_sha256": source_digest,
                         "offline_runtime": True,
+                        "payload_logical_bytes": _logical_payload_bytes(staging),
                     },
                     indent=2,
                     sort_keys=True,
@@ -179,10 +249,9 @@ class WorkerEnvironmentProvisioner:
             )
             os.replace(staging, target)
             return target / "workers" / worker_id
-        except Exception:
+        finally:
             if staging.exists() and not staging.is_symlink():
                 shutil.rmtree(staging)
-            raise
 
     def resolve(self, worker_id: str) -> Path:
         """Resolve an already provisioned lock-addressed environment without installing."""
@@ -247,6 +316,161 @@ class WorkerEnvironmentProvisioner:
             "source_sha256": source_digest,
             "target": str(target),
         }
+
+    def _cache_inventory(self, worker_id: str) -> list[tuple[Path, str]]:
+        if not worker_id.replace("_", "").isalnum():
+            raise ValueError("unsafe worker ID")
+        root = self.cache_root / worker_id
+        if not root.exists():
+            return []
+        if root.is_symlink() or root.absolute() != root.resolve(strict=True):
+            raise ValueError("worker cache must be canonical")
+        result: list[tuple[Path, str]] = []
+        for lock_root in root.iterdir():
+            if not _CACHE_DIGEST.fullmatch(lock_root.name) or not lock_root.is_dir():
+                continue
+            if lock_root.is_symlink():
+                raise ValueError("worker cache lock root may not be a symlink")
+            if (lock_root / "complete.json").is_file():
+                result.append((lock_root, "version"))
+            for target in lock_root.iterdir():
+                if target.is_symlink():
+                    raise ValueError("worker cache entries may not be symlinks")
+                if not target.is_dir():
+                    continue
+                if _CACHE_DIGEST.fullmatch(target.name):
+                    kind = "version" if (target / "complete.json").is_file() else "damaged"
+                    result.append((target, kind))
+                elif target.name.startswith(".damaged-"):
+                    result.append((target, "damaged"))
+                elif re.fullmatch(r"\.[0-9a-f]{12}-[A-Za-z0-9_]+", target.name):
+                    result.append((target, "staging"))
+        return result
+
+    @staticmethod
+    def _lease_root(target: Path) -> Path:
+        backup = target / "environment"
+        if target.name.startswith(".damaged-") and backup.is_symlink():
+            raise ValueError("worker cache backup may not be symlinked")
+        return backup if target.name.startswith(".damaged-") and backup.is_dir() else target
+
+    def cache_status(self, worker_id: str) -> dict[str, object]:
+        """Inspect bounded metadata, without recursively walking large venvs."""
+        inventory = self._cache_inventory(worker_id)
+        in_use = 0
+        known_bytes = 0
+        unmeasured = 0
+        for target, _kind in inventory:
+            size: int | None = None
+            lease_root = self._lease_root(target)
+            marker = lease_root / "complete.json"
+            try:
+                if marker.stat().st_size <= 64 * 1024 and not marker.is_symlink():
+                    value = json.loads(marker.read_text())
+                    raw = value.get("payload_logical_bytes") if isinstance(value, dict) else None
+                    if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
+                        size = raw
+            except (OSError, ValueError):
+                pass
+            try:
+                with _exclusive_environment(lease_root, create=False) as available:
+                    active = not available
+            except OSError:
+                active = True  # uncertain control paths cannot authorize deletion
+            if size is None:
+                unmeasured += 1
+            else:
+                known_bytes += size
+            in_use += active
+        return {
+            "versions": sum(kind == "version" for _, kind in inventory),
+            "damaged": sum(kind == "damaged" for _, kind in inventory),
+            "staging": sum(kind == "staging" for _, kind in inventory),
+            "size_bytes": known_bytes,
+            "size_complete": unmeasured == 0,
+            "in_use": in_use,
+            "unmeasured_environments": unmeasured,
+            "size_note": "logical payload bytes; shared package storage may be deduplicated",
+        }
+
+    def cleanup(
+        self, worker_id: str, *, keep_versions: int = 2, keep_damaged: int = 1
+    ) -> dict[str, object]:
+        """Explicitly retire obsolete environments while preserving live and current ones."""
+        if (
+            isinstance(keep_versions, bool)
+            or not isinstance(keep_versions, int)
+            or keep_versions < 1
+            or isinstance(keep_damaged, bool)
+            or not isinstance(keep_damaged, int)
+            or keep_damaged < 0
+        ):
+            raise ValueError("cache retention must preserve at least one complete version")
+        if not worker_id.replace("_", "").isalnum():
+            raise ValueError("unsafe worker ID")
+        fd = os.open(
+            self.cache_root / f".{worker_id}.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600
+        )
+        with os.fdopen(fd, "w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            removed, protected = self._cleanup_locked(
+                worker_id, keep_versions=keep_versions, keep_damaged=keep_damaged
+            )
+        return {
+            **self.cache_status(worker_id),
+            "removed_count": len(removed),
+            "skipped_in_use": len(protected),
+        }
+
+    def _cleanup_locked(
+        self, worker_id: str, *, keep_versions: int | None, keep_damaged: int
+    ) -> tuple[list[str], list[str]]:
+        inventory = self._cache_inventory(worker_id)
+        current = Path(self.inspect(worker_id)["target"])
+        versions = sorted(
+            (p for p, kind in inventory if kind == "version"),
+            key=lambda p: p.stat().st_mtime_ns,
+            reverse=True,
+        )
+        # A legacy lock-only environment can still be the selected current version.
+        if not current.exists() and (current.parent / "complete.json").is_file():
+            current = current.parent
+        keep = set(versions) if keep_versions is None else {current}
+        if keep_versions is not None:
+            # Keep current plus the newest rollback versions, not every old revision.
+            keep = {current, *[p for p in versions if p != current][: keep_versions - 1]}
+        damaged = sorted(
+            (p for p, kind in inventory if kind == "damaged"),
+            key=lambda p: p.stat().st_mtime_ns,
+            reverse=True,
+        )
+        keep.update(damaged[:keep_damaged])
+        removed: list[str] = []
+        protected: list[str] = []
+        for target, _kind in inventory:
+            if target in keep:
+                continue
+            try:
+                with _exclusive_environment(self._lease_root(target)) as available:
+                    if not available:
+                        protected.append(str(target))
+                        continue
+                    if target.parent == self.cache_root / worker_id:
+                        # A legacy lock-only payload can share its parent with
+                        # newer source-addressed environments. Retire only its
+                        # own payload, never their containing lock directory.
+                        for name in ("workers", "protocol", "complete.json"):
+                            path = target / name
+                            if path.is_dir() and not path.is_symlink():
+                                shutil.rmtree(path)
+                            else:
+                                path.unlink(missing_ok=True)
+                    else:
+                        shutil.rmtree(target)
+                    removed.append(str(target))
+            except OSError:
+                protected.append(str(target))
+        return removed, protected
 
     def _ensure_root(self) -> None:
         if self.cache_root.is_symlink():

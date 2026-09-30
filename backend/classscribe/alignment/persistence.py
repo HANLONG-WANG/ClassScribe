@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from classscribe.alignment.models import CanonicalTiming
+from classscribe.alignment.provenance import sources_for_span
 from classscribe.db.models import DecisionEvent, TimingQuality, TokenSpan, TranscriptSegment
 from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.punctuation.guard import strip_punctuation_and_spacing
@@ -30,7 +33,9 @@ class AlignmentRepository:
                     "canonical timing differs from the transcript segment range",
                 )
             selected_text = (
-                segment.user_text or segment.smart_corrected_text or segment.faithful_text
+                segment.user_text
+                if segment.user_text is not None
+                else (segment.smart_corrected_text or segment.faithful_text)
             )
             if selected_text != timing.final_text:
                 raise ClassScribeError(
@@ -60,6 +65,11 @@ class AlignmentRepository:
                     confidence=None,
                     provenance_json={
                         **provenance,
+                        "candidate_sources": sources_for_span(
+                            provenance["candidate_sources"],
+                            token.span.start_sample,
+                            token.span.end_sample,
+                        ),
                         "timing_source": timing.source.value,
                         "coarse_timing": timing.coarse_timing,
                     },
@@ -93,16 +103,22 @@ class AlignmentRepository:
                 )
 
 
-def _combined_provenance(tokens: tuple[TokenSpan, ...]) -> dict[str, object]:
+def _combined_provenance(tokens: tuple[TokenSpan, ...]) -> dict[str, Any]:
     if not tokens:
         return {"source_type": "final_text_alignment", "candidate_sources": []}
-    sources: dict[str, dict[str, object]] = {}
+    sources: dict[tuple[object, ...], dict[str, object]] = {}
     for token in tokens:
         raw_sources = token.provenance_json.get("candidate_sources", [])
         if isinstance(raw_sources, list):
             for source in raw_sources:
                 if isinstance(source, dict) and isinstance(source.get("candidate_id"), str):
-                    sources[str(source["candidate_id"])] = dict(source)
+                    identity = (
+                        source["candidate_id"],
+                        source.get("source_token_index", source.get("source_index")),
+                        source.get("source_start_sample"),
+                        source.get("source_end_sample"),
+                    )
+                    sources[identity] = dict(source)
     combined_text = "".join(token.token for token in tokens)
     return {
         "source_type": "final_text_alignment",

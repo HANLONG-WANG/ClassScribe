@@ -1,4 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { api, type Segment } from "./api";
 import {
   discardTranscriptDraft,
   flushTranscriptSave,
@@ -40,6 +42,26 @@ export function App() {
   const authInvalid = useAuthStatus((state) => state.invalid);
   const setPage = useWorkbench((state) => state.setPage);
   const selectSegment = useWorkbench((state) => state.selectSegment);
+  const setCurrentJob = useWorkbench((state) => state.setCurrentJob);
+  const [draftOpenError, setDraftOpenError] = useState("");
+  async function openDraft(id: string) {
+    setDraftOpenError("");
+    const draft = useTranscriptSaves.getState().drafts[id];
+    if (!draft) return;
+    try {
+      const jobId =
+        draft.jobId ?? (await api<Segment>(`/segments/${id}`)).job_id;
+      if (!jobId) throw new Error("无法确定草稿所属课堂，请重新加载。");
+      if (!useTranscriptSaves.getState().drafts[id]) return;
+      setCurrentJob(jobId);
+      selectSegment(id);
+      navigate("transcript");
+    } catch (error) {
+      setDraftOpenError(
+        error instanceof Error ? error.message : "打开草稿失败",
+      );
+    }
+  }
   function navigate(next: Page) {
     setPage(next);
     window.scrollTo(0, 0);
@@ -92,6 +114,7 @@ export function App() {
         </div>
       </aside>
       <main className="workspace">
+        {draftOpenError && <p role="alert">{draftOpenError}</p>}
         {authInvalid && (
           <div className="error-callout" role="alert">
             本机 API 鉴权失败，当前数据不可读取。请在设置中重新应用正确的 API
@@ -119,8 +142,7 @@ export function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      selectSegment(id);
-                      navigate("transcript");
+                      void openDraft(id);
                     }}
                   >
                     打开草稿

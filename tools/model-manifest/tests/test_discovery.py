@@ -103,9 +103,7 @@ def test_discovery_recursively_lists_files_at_explicit_commit() -> None:
         ]
     )
 
-    result = discover_repository_tree(
-        "owner/model", revision, token="hf_discovery_secret", api=api
-    )
+    result = discover_repository_tree("owner/model", revision, token="hf_discovery_secret", api=api)
 
     assert api.info_calls == [
         {

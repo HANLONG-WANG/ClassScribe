@@ -63,13 +63,23 @@ def run_ibus(socket_path: Path) -> None:
     class ClassScribeEngine(IBus.Engine):  # type: ignore[misc]
         def __init__(self, connection: Any, object_path: str) -> None:
             super().__init__(connection=connection, object_path=object_path)
+            self._poll_source = 0
             self._properties: dict[tuple[str, str], Any] = {}
             self._model_ids: tuple[str, ...] = ("auto_best",)
             self.controller = EngineController(DictationIPCClient(socket_path), Bridge(self))
             self._property_values: dict[str, str | bool] = {}
             self._register_properties(IBus)
             self.controller.focus_out()
-            GLib.timeout_add(75, self.controller.poll)
+            self._poll_source = GLib.timeout_add(75, self.controller.poll)
+
+        def do_destroy(self) -> None:
+            if self._poll_source:
+                GLib.source_remove(self._poll_source)
+                self._poll_source = 0
+            controller = getattr(self, "controller", None)
+            if controller is not None:
+                controller.focus_out()
+            super().do_destroy()
 
         def do_focus_in(self) -> None:
             self.controller.focus_in()

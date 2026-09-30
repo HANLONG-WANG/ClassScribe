@@ -203,8 +203,11 @@ class PCMQualityAnalyzer:
         channel_pcm: Path,
         *,
         speech_regions: tuple[AudioSpan, ...] = (),
+        channel_metrics: tuple[ChannelQuality, ...] | None = None,
     ) -> AudioQualityReport:
-        channels = self.analyze_channels(channel_pcm)
+        channels = (
+            channel_metrics if channel_metrics is not None else self.analyze_channels(channel_pcm)
+        )
         selected = self.choose_best_channel(channels)
         if speech_regions:
             speech_samples = sum(region.duration_samples for region in speech_regions)

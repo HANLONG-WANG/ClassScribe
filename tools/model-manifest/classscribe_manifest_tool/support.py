@@ -39,16 +39,10 @@ def load_worker_support(root: Path) -> Mapping[str, str]:
         resolved = path.resolve(strict=True)
     except OSError as error:
         raise ValueError("worker support contract is missing or unsafe") from error
-    if (
-        path.is_symlink()
-        or not stat.S_ISREG(metadata.st_mode)
-        or not resolved.is_relative_to(root)
-    ):
+    if path.is_symlink() or not stat.S_ISREG(metadata.st_mode) or not resolved.is_relative_to(root):
         raise ValueError("worker support contract is missing or unsafe")
     try:
-        value = json.loads(
-            path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object
-        )
+        value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
     except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
         raise ValueError("worker support contract is not strict UTF-8 JSON") from error
     if not isinstance(value, dict) or set(value) != {"schema_version", "models"}:
@@ -123,9 +117,7 @@ def model_status(
     """Return four independent status values and a stable install blocker."""
 
     has_manifest = manifest_sha256 is not None
-    has_worker = worker_implemented(
-        root, model_id=model_id, worker=worker, support=support
-    )
+    has_worker = worker_implemented(root, model_id=model_id, worker=worker, support=support)
     reason: str | None = None
     if not enabled or experimental:
         reason = "registry_policy_disabled"

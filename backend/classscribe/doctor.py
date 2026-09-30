@@ -9,6 +9,7 @@ from pathlib import Path
 
 from classscribe.config import load_config
 from classscribe.diagnostics import DiagnosticCollector, export_diagnostic_bundle, snapshot_payload
+from classscribe.paths import AppPaths
 from classscribe.system_check import FedoraDependencyChecker
 
 
@@ -25,7 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    config = load_config(args.config)
+    config = load_config(args.config or AppPaths.from_environment().config / "config.yaml")
     dependencies = FedoraDependencyChecker().check()
     snapshot = DiagnosticCollector().collect()
     payload = snapshot_payload(snapshot)

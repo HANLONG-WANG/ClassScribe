@@ -619,6 +619,7 @@ class DictationWorkerSupervisor:
                 (bootstrap_audio.parent,),
                 socket_argument_path=Path("/run/classscribe") / socket.name,
                 data_root_arguments=(Path("/input"),),
+                environment_project=project,
             )
         )
         try:

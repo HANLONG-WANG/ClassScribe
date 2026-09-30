@@ -23,7 +23,7 @@ export function ClassroomModelGuide({
 }) {
   const profiles = useQuery({
     queryKey: ["profiles"],
-    queryFn: () => api<Profile[]>("/profiles"),
+    queryFn: ({ signal }) => api<Profile[]>("/profiles", { signal }),
   });
   const languages = language === "auto_mixed" ? ["zh", "ja", "en"] : [language];
   const selected = models.find((model) => model.id === primaryModel);

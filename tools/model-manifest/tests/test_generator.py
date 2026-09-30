@@ -64,10 +64,14 @@ ROOT = Path(__file__).resolve().parents[3]
 
 class _GenerationApi:
     def __init__(self, items: Iterable[RepoFile | RepoFolder] | None = None) -> None:
-        self.items = tuple(items) if items is not None else (
-            RepoFile(  # type: ignore[no-untyped-call]
-                path="config.json", size=6, oid="config-oid"
-            ),
+        self.items = (
+            tuple(items)
+            if items is not None
+            else (
+                RepoFile(  # type: ignore[no-untyped-call]
+                    path="config.json", size=6, oid="config-oid"
+                ),
+            )
         )
 
     def model_info(
@@ -276,14 +280,10 @@ def test_git_lfs_and_xet_payloads_all_hash_downloaded_bytes(tmp_path: Path) -> N
             ),
         )
     )
-    discovery = discover_repository_tree(
-        "owner/model", revision, token=None, api=api
-    )
+    discovery = discover_repository_tree("owner/model", revision, token=None, api=api)
     selection = ModelFileSelection(
         include=("git.bin", "lfs.bin", "xet.bin"),
-        kinds=MappingProxyType(
-            {"git.bin": "model", "lfs.bin": "model", "xet.bin": "model"}
-        ),
+        kinds=MappingProxyType({"git.bin": "model", "lfs.bin": "model", "xet.bin": "model"}),
         exclude=(),
     )
     selected = validate_selection_against_discovery(selection, discovery)
@@ -371,9 +371,7 @@ def test_nested_weight_index_resolves_shards_relative_to_its_directory(
     index_content = json.dumps(
         {
             "metadata": {},
-            "weight_map": {
-                "encoder.weight": "model-00001-of-00001.safetensors"
-            },
+            "weight_map": {"encoder.weight": "model-00001-of-00001.safetensors"},
         },
         sort_keys=True,
     ).encode()
@@ -446,9 +444,7 @@ def test_weight_index_rejects_a_referenced_shard_excluded_from_selection(
     payload.mkdir()
     shard = "model-00001-of-00001.safetensors"
     index = "model.safetensors.index.json"
-    index_content = json.dumps(
-        {"weight_map": {"encoder.weight": shard}}, sort_keys=True
-    ).encode()
+    index_content = json.dumps({"weight_map": {"encoder.weight": shard}}, sort_keys=True).encode()
     (payload / index).write_bytes(index_content)
     selection = ModelFileSelection(
         include=(index,),
@@ -564,9 +560,10 @@ def test_hashed_payload_must_exactly_match_selection_and_discovery() -> None:
     config = HashedPayloadFile("config.json", 6, "a" * 64)
     weights = HashedPayloadFile("weights.bin", 7, "b" * 64)
 
-    assert validate_payload_matches_selection(
-        selection, discovered, (config, weights)
-    ) == (config, weights)
+    assert validate_payload_matches_selection(selection, discovered, (config, weights)) == (
+        config,
+        weights,
+    )
 
 
 @pytest.mark.parametrize(
@@ -705,9 +702,7 @@ def test_manifest_serializes_strict_component_source_provenance() -> None:
             "weights.bin", len(payload), hashlib.sha256(payload).hexdigest(), "model"
         ),
     )
-    metadata = replace(
-        _manifest_metadata(trust_remote_code=False), component_sources=(source,)
-    )
+    metadata = replace(_manifest_metadata(trust_remote_code=False), component_sources=(source,))
 
     encoded = canonical_manifest_bytes(build_model_manifest(metadata, files), token=None)
     value = json.loads(encoded)
@@ -768,9 +763,7 @@ def test_component_source_discovery_requires_fixed_lfs_identity() -> None:
 
     validate_component_source_discovery(source, valid)
     with pytest.raises(ValueError, match="frozen identity"):
-        validate_component_source_discovery(
-            source, replace(valid, revision="a" * 40)
-        )
+        validate_component_source_discovery(source, replace(valid, revision="a" * 40))
     with pytest.raises(ValueError, match="size differs"):
         validate_component_source_discovery(
             source, replace(valid, files=(replace(valid_file, size=18),))
@@ -782,9 +775,7 @@ def test_component_source_discovery_requires_fixed_lfs_identity() -> None:
 
 
 def test_whisper_tiny_manifest_is_canonical_and_matches_frozen_inputs() -> None:
-    manifest_path = (
-        ROOT / "config/model-manifests/v1/whisper_tiny_reference.json"
-    )
+    manifest_path = ROOT / "config/model-manifests/v1/whisper_tiny_reference.json"
     encoded = manifest_path.read_bytes()
     value = json.loads(encoded)
     canonical = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode()
@@ -804,9 +795,7 @@ def test_whisper_tiny_manifest_is_canonical_and_matches_frozen_inputs() -> None:
         selection_path=ROOT / "config/model-file-selection.v1.yaml",
         require_complete_selection=False,
     )
-    model = next(
-        item for item in inputs.models if item.model_id == "whisper_tiny_reference"
-    )
+    model = next(item for item in inputs.models if item.model_id == "whisper_tiny_reference")
     selection = inputs.selections.selection(model.model_id)
     assert {
         "model_id": value["model_id"],
@@ -837,8 +826,10 @@ def test_whisper_tiny_manifest_is_canonical_and_matches_frozen_inputs() -> None:
     files = value["files"]
     assert [item["path"] for item in files] == list(selection.include)
     assert {item["path"]: item["kind"] for item in files} == dict(selection.kinds)
-    assert value["installed_size_bytes"] == value["estimated_download_bytes"] == sum(
-        item["size_bytes"] for item in files
+    assert (
+        value["installed_size_bytes"]
+        == value["estimated_download_bytes"]
+        == sum(item["size_bytes"] for item in files)
     )
 
 
@@ -943,16 +934,10 @@ def test_source_date_epoch_controls_deterministic_bundle_bytes() -> None:
     assert first != changed_epoch
     value = json.loads(first)
     assert [item["model_id"] for item in value["manifests"]] == ["alpha", "beta"]
-    assert value["manifests"][0]["sha256"] == hashlib.sha256(
-        b"alpha manifest\n"
-    ).hexdigest()
-    assert value["generator"]["lock_sha256"] == hashlib.sha256(
-        b"frozen tool lock\n"
-    ).hexdigest()
+    assert value["manifests"][0]["sha256"] == hashlib.sha256(b"alpha manifest\n").hexdigest()
+    assert value["generator"]["lock_sha256"] == hashlib.sha256(b"frozen tool lock\n").hexdigest()
     schema = json.loads(
-        (ROOT / "protocol/schema/v1/model-manifest-bundle.schema.json").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / "protocol/schema/v1/model-manifest-bundle.schema.json").read_text(encoding="utf-8")
     )
     Draft202012Validator(schema).validate(value)
 
@@ -1015,8 +1000,7 @@ def test_generation_mismatch_stops_with_path_and_hash_only_report() -> None:
     }
     assert set(report) == {"differences"}
     assert all(
-        set(item) == {"path", "first_sha256", "second_sha256"}
-        for item in report["differences"]
+        set(item) == {"path", "first_sha256", "second_sha256"} for item in report["differences"]
     )
 
 

@@ -178,6 +178,7 @@ describe("classroom workbench", () => {
     useTranscriptSaves.setState({
       drafts: {
         segment: {
+          jobId: "draft-job",
           text: "unsaved",
           version: 1,
           status: "error",
@@ -188,6 +189,7 @@ describe("classroom workbench", () => {
     renderApp();
     fireEvent.click(screen.getByRole("button", { name: "打开草稿" }));
     expect(useWorkbench.getState().selectedSegmentId).toBe("segment");
+    expect(useWorkbench.getState().currentJobId).toBe("draft-job");
     expect(useWorkbench.getState().page).toBe("transcript");
   });
 

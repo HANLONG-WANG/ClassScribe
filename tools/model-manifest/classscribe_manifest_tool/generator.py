@@ -341,11 +341,12 @@ def hash_payload_files(
                 digest.update(block)
                 actual_size += len(block)
             after = os.fstat(descriptor)
-            if (
-                actual_size != item.size
-                or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-                != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-            ):
+            if actual_size != item.size or (
+                after.st_dev,
+                after.st_ino,
+                after.st_size,
+                after.st_mtime_ns,
+            ) != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns):
                 raise ValueError(f"payload file changed while hashing: {item.path}")
             hashed.append(
                 HashedPayloadFile(
@@ -388,10 +389,7 @@ def validate_weight_index_closure(
             raise ValueError("weight index must contain a weight_map object")
         weight_map = value["weight_map"]
         if not weight_map or not all(
-            isinstance(name, str)
-            and bool(name)
-            and isinstance(shard, str)
-            and bool(shard)
+            isinstance(name, str) and bool(name) and isinstance(shard, str) and bool(shard)
             for name, shard in weight_map.items()
         ):
             raise ValueError("weight index contains an invalid weight_map")
@@ -404,9 +402,7 @@ def validate_weight_index_closure(
             referenced_shards.add(resolved_shard)
         missing = referenced_shards - selected_paths
         if missing:
-            raise ValueError(
-                f"weight index references shards outside selection: {sorted(missing)}"
-            )
+            raise ValueError(f"weight index references shards outside selection: {sorted(missing)}")
         if any(selection.kinds.get(shard) != "model" for shard in referenced_shards):
             raise ValueError("weight index shards must be explicitly classified as model")
 
@@ -642,10 +638,7 @@ def _validate_manifest_component_sources(
             validate_exact_path(item.source_path, "manifest component source path")
             if not SHA256_RE.fullmatch(item.source_sha256):
                 raise ValueError("manifest component source file SHA-256 is invalid")
-            if (
-                isinstance(item.source_size_bytes, bool)
-                or item.source_size_bytes < 0
-            ):
+            if isinstance(item.source_size_bytes, bool) or item.source_size_bytes < 0:
                 raise ValueError("manifest component source file size is invalid")
             if item.installed_path in claimed_installed_paths:
                 raise ValueError("manifest installed file belongs to multiple component sources")
@@ -688,9 +681,7 @@ def canonical_manifest_bytes(
     """Serialize a manifest as deterministic UTF-8 JSON with one LF terminator."""
     value = manifest.as_dict()
     assert_hf_token_absent(value, token=token, destination="manifest")
-    return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
-        "utf-8"
-    )
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
 
 
 def validate_double_generation_revisions(
@@ -789,9 +780,7 @@ def canonical_bundle_bytes(
         "manifests": entries,
     }
     assert_hf_token_absent(value, token=token, destination="bundle")
-    return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
-        "utf-8"
-    )
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
 
 
 def validate_double_generation_outputs(
@@ -1059,15 +1048,11 @@ def _generate_model_once(
     return GeneratedModelRun(discovery=discovery, payload=classified, manifest=manifest)
 
 
-def _artifact_difference_report(
-    first: Mapping[str, bytes], second: Mapping[str, bytes]
-) -> bytes:
+def _artifact_difference_report(first: Mapping[str, bytes], second: Mapping[str, bytes]) -> bytes:
     differences = [
         {
             "path": path,
-            "first_sha256": None
-            if path not in first
-            else hashlib.sha256(first[path]).hexdigest(),
+            "first_sha256": None if path not in first else hashlib.sha256(first[path]).hexdigest(),
             "second_sha256": None
             if path not in second
             else hashlib.sha256(second[path]).hexdigest(),
@@ -1088,24 +1073,109 @@ def write_release_bundle(
     *,
     token: str | None,
 ) -> None:
-    """Atomically replace canonical members first and the bundle index last."""
+    """Stage a complete validated generation before atomically publishing its directory."""
     if output_directory.is_symlink():
         raise ValueError("bundle output directory must not be a symlink")
-    output_directory.mkdir(mode=0o755, parents=True, exist_ok=True)
-    if not output_directory.is_dir():
-        raise ValueError("bundle output must be a directory")
-    expected_names = {"bundle.v1.json", *(f"{model_id}.json" for model_id in manifests)}
-    existing_names = {path.name for path in output_directory.iterdir()}
-    if existing_names - expected_names:
-        raise ValueError("bundle output contains files outside the generated member set")
-    for model_id in sorted(manifests):
+    output_directory.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    for model_id, content in manifests.items():
         if not IDENTIFIER_RE.fullmatch(model_id):
             raise ValueError("bundle output contains an unsafe model ID")
-        content = manifests[model_id]
         assert_hf_token_absent(content, token=token, destination="manifest")
-        _atomic_write(output_directory / f"{model_id}.json", content)
     assert_hf_token_absent(bundle, token=token, destination="bundle")
-    _atomic_write(output_directory / "bundle.v1.json", bundle)
+    index = json.loads(bundle)
+    entries = index.get("manifests") if isinstance(index, dict) else None
+    if not isinstance(entries, list) or len(entries) != len(manifests):
+        raise ValueError("bundle index differs from the generated member set")
+    indexed: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("model_id") not in manifests:
+            raise ValueError("bundle index contains an unknown model")
+        model_id = entry["model_id"]
+        if (
+            model_id in indexed
+            or entry.get("path") != f"{model_id}.json"
+            or entry.get("sha256") != hashlib.sha256(manifests[model_id]).hexdigest()
+        ):
+            raise ValueError("bundle index does not match generated member bytes")
+        indexed[model_id] = entry["sha256"]
+    expected_names = {"bundle.v1.json", *(f"{key}.json" for key in manifests)}
+    with _publication_lock(output_directory):
+        existed = output_directory.exists()
+        if existed:
+            if not output_directory.is_dir():
+                raise ValueError("bundle output must be a directory")
+            if {path.name for path in output_directory.iterdir()} - expected_names:
+                raise ValueError("bundle output contains files outside the generated member set")
+        staging = Path(tempfile.mkdtemp(prefix=".bundle-staging-", dir=output_directory.parent))
+        published = False
+        try:
+            for model_id in sorted(manifests):
+                _atomic_write(staging / f"{model_id}.json", manifests[model_id])
+            _atomic_write(staging / "bundle.v1.json", bundle)
+            staging.chmod(0o755)
+            _fsync_directory(staging)
+            if existed:
+                _exchange_directories(staging, output_directory)
+            else:
+                os.replace(staging, output_directory)
+            published = True
+            try:
+                _fsync_directory(output_directory.parent)
+            except OSError:
+                if existed:
+                    _exchange_directories(staging, output_directory)
+                else:
+                    os.replace(output_directory, staging)
+                published = False
+                raise
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+            # A published output always contains every indexed member.
+            if published and not output_directory.is_dir():
+                raise RuntimeError("published bundle directory disappeared")
+
+
+@contextmanager
+def _publication_lock(directory: Path) -> Iterator[None]:
+    import fcntl
+
+    descriptor = os.open(
+        directory.parent / f".{directory.name}.publish.lock",
+        os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o600,
+    )
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _exchange_directories(left: Path, right: Path) -> None:
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = libc.renameat2
+    rename.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    rename.restype = ctypes.c_int
+    if rename(-100, os.fsencode(left), -100, os.fsencode(right), 2) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
 
 
 def _atomic_write(path: Path, content: bytes) -> None:

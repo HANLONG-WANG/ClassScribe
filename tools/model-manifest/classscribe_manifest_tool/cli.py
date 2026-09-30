@@ -68,9 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_credential_arguments(generate)
     generate.set_defaults(handler=_run_generate)
 
-    verify = commands.add_parser(
-        "verify", help="offline verification of a local manifest bundle"
-    )
+    verify = commands.add_parser("verify", help="offline verification of a local manifest bundle")
     verify.add_argument("--bundle", type=Path, required=True)
     verify.set_defaults(handler=_run_verify)
 
@@ -129,9 +127,7 @@ def _release_inputs_for_discovery(args: argparse.Namespace) -> ReleaseInputs:
 def _run_discover(args: argparse.Namespace) -> dict[str, object]:
     token = load_hf_token(token_file=args.token_file)
     inputs = _release_inputs_for_discovery(args)
-    if args.output.absolute() == (
-        inputs.root / "config/model-manifests/v1"
-    ).absolute():
+    if args.output.absolute() == (inputs.root / "config/model-manifests/v1").absolute():
         raise ValueError("discovery reports must not use the runtime bundle directory")
     requested_model_ids = tuple(args.model_id)
     if len(requested_model_ids) != len(set(requested_model_ids)):
@@ -200,9 +196,7 @@ def _run_verify(args: argparse.Namespace) -> dict[str, object]:
 def _run_status(args: argparse.Namespace) -> dict[str, object]:
     inputs = _release_inputs_for_discovery(args)
     support = load_worker_support(inputs.root)
-    validate_worker_support(
-        support, {model.model_id: model.worker for model in inputs.models}
-    )
+    validate_worker_support(support, {model.model_id: model.worker for model in inputs.models})
     manifest_hashes: Mapping[str, str] = {}
     bundle_status = "missing"
     if args.bundle is not None:

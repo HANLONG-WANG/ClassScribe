@@ -53,6 +53,23 @@ class BundleVerificationResult:
 
 
 def verify_bundle(bundle_path: Path, *, root: Path | None = None) -> BundleVerificationResult:
+    """Read a consistent directory generation during an atomic bundle publication."""
+    for _attempt in range(3):
+        generation = _bundle_directory_identity(bundle_path.parent)
+        try:
+            result = _verify_bundle_contents(bundle_path, root=root)
+        except Exception:
+            if generation != _bundle_directory_identity(bundle_path.parent):
+                continue
+            raise
+        if generation == _bundle_directory_identity(bundle_path.parent):
+            return result
+    raise BundleVerificationError("bundle directory changed repeatedly during verification")
+
+
+def _verify_bundle_contents(
+    bundle_path: Path, *, root: Path | None = None
+) -> BundleVerificationResult:
     """Verify one source bundle and all frozen inputs without performing network access."""
     repository = _resolve_repository_root(bundle_path, root)
     expected_bundle = repository / "config/model-manifests/v1/bundle.v1.json"
@@ -83,10 +100,7 @@ def verify_bundle(bundle_path: Path, *, root: Path | None = None) -> BundleVerif
         support = load_worker_support(repository)
         validate_worker_support(
             support,
-            {
-                model_id: cast(str, row["worker"])
-                for model_id, row in registry_rows.items()
-            },
+            {model_id: cast(str, row["worker"]) for model_id, row in registry_rows.items()},
         )
     except ValueError as error:
         raise BundleVerificationError(str(error)) from None
@@ -133,12 +147,8 @@ def verify_bundle(bundle_path: Path, *, root: Path | None = None) -> BundleVerif
         raise BundleVerificationError("revision lock IDs do not exactly match the model registry")
     if set(selections.models) != registry_ids:
         raise BundleVerificationError("selection IDs do not exactly match the model registry")
-    expected_license_repositories = {
-        model.repository for model in frozen_inputs.models
-    } | {
-        source.repository
-        for model in frozen_inputs.models
-        for source in model.component_sources
+    expected_license_repositories = {model.repository for model in frozen_inputs.models} | {
+        source.repository for model in frozen_inputs.models for source in model.component_sources
     }
     if set(license_rows) != expected_license_repositories:
         raise BundleVerificationError(
@@ -196,6 +206,14 @@ def verify_bundle(bundle_path: Path, *, root: Path | None = None) -> BundleVerif
     )
 
 
+def _bundle_directory_identity(path: Path) -> tuple[int, int, int] | None:
+    try:
+        metadata = path.stat(follow_symlinks=False)
+    except OSError:
+        return None
+    return metadata.st_dev, metadata.st_ino, metadata.st_mtime_ns
+
+
 def _resolve_repository_root(bundle_path: Path, root: Path | None) -> Path:
     if root is not None:
         try:
@@ -240,9 +258,7 @@ def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _canonical_json_bytes(value: object) -> bytes:
-    return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode(
-        "utf-8"
-    )
+    return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
 
 
 def _require_canonical_json(content: bytes, value: object, label: str) -> None:
@@ -391,9 +407,10 @@ def _verify_manifest_cross_contracts(
     ):
         raise BundleVerificationError("manifest file sizes are invalid")
     total = sum(cast(int, size) for size in sizes)
-    if manifest.get("installed_size_bytes") != total or manifest.get(
-        "estimated_download_bytes"
-    ) != total:
+    if (
+        manifest.get("installed_size_bytes") != total
+        or manifest.get("estimated_download_bytes") != total
+    ):
         raise BundleVerificationError("manifest aggregate sizes differ from its files")
     _verify_manifest_component_sources(manifest, files, component_sources)
 

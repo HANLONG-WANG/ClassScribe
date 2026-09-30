@@ -46,6 +46,7 @@ it("keeps the player on text-layer changes and seeks on the full recording timel
   });
   const segment = {
     id: "s",
+    job_id: "job",
     start_sample: 30 * 16000,
     end_sample: 60 * 16000,
     language: "en",

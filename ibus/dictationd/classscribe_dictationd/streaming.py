@@ -159,8 +159,13 @@ class RollingContext:
         self._segments: deque[str] = deque(maxlen=maximum_segments)
 
     def add(self, text: str) -> None:
-        if text.strip():
-            self._segments.append(text.strip())
+        value = text.strip()
+        if value:
+            # Keep the most recent context within the shared RPC character
+            # budget, including a single unusually long committed chunk.
+            self._segments.append(value[-2400:])
+            while sum(len(item) for item in self._segments) > 2400:
+                self._segments.popleft()
 
     def values(self) -> tuple[str, ...]:
         return tuple(self._segments)

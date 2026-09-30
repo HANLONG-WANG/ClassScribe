@@ -34,7 +34,7 @@ def align_candidates(
     usable = tuple(candidate for candidate in candidates if candidate.quality.valid_for_consensus)
     if not usable:
         return ()
-    if any(candidate.evidence.audio_span != canonical_span for candidate in usable):
+    if any(candidate.evidence.core_span != canonical_span for candidate in usable):
         raise ValueError("all consensus candidates must share one canonical audio interval")
     token_sets = {
         candidate.candidate_id: _candidate_tokens(candidate, language) for candidate in usable
@@ -87,10 +87,17 @@ def align_candidates(
 
     ordered_keys = sorted(by_key)
     spans = _monotonic_column_spans(ordered_keys, preferred_spans, canonical_span)
-    return tuple(
-        AlignmentColumn(index, spans[key], tuple(by_key[key]))
-        for index, key in enumerate(ordered_keys)
-    )
+    columns: list[AlignmentColumn] = []
+    for index, key in enumerate(ordered_keys):
+        votes = by_key[key]
+        present = {vote.candidate_id for vote in votes}
+        votes.extend(
+            _vote(candidate, _CandidateToken("", "", spans[key], -1, "epsilon"))
+            for candidate in usable
+            if candidate.candidate_id not in present
+        )
+        columns.append(AlignmentColumn(index, spans[key], tuple(votes)))
+    return tuple(columns)
 
 
 def _candidate_tokens(
@@ -98,8 +105,15 @@ def _candidate_tokens(
     language: str,
 ) -> tuple[_CandidateToken, ...]:
     result: list[_CandidateToken] = []
-    if candidate.evidence.tokens:
-        for source_index, token in enumerate(candidate.evidence.tokens):
+    pieces = surface_tokens(candidate.evidence.normalized_text, language)
+    native_pieces = tuple(
+        piece
+        for token in candidate.evidence.tokens
+        for piece in surface_tokens(token.text, language)
+    )
+    if candidate.evidence.tokens and native_pieces == pieces:
+        for token in candidate.evidence.tokens:
+            source_index = token.source_index
             pieces = surface_tokens(token.text, language) or (token.text,)
             spans = _partition(token.span, len(pieces))
             result.extend(
@@ -113,7 +127,6 @@ def _candidate_tokens(
                 for piece_index, piece in enumerate(pieces)
             )
         return tuple(result)
-    pieces = surface_tokens(candidate.evidence.normalized_text, language)
     spans = _partition(candidate.evidence.core_span, len(pieces))
     return tuple(
         _CandidateToken(piece, piece.casefold(), spans[index], index, "constrained_interval")

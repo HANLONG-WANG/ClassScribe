@@ -231,7 +231,7 @@ def _render_srt(
     for index, cue in enumerate(build_subtitle_cues(segments, layer), start=1):
         language = _segment_language(segments, cue.segment_ids[0])
         text = transform("\n".join(cue.lines), language)
-        if any(segment_id in coarse_ids for segment_id in cue.segment_ids):
+        if cue.coarse_timing or any(segment_id in coarse_ids for segment_id in cue.segment_ids):
             text = f"[粗时间] {text}"
         start = format_sample_timestamp(cue.start_sample).replace(".", ",")
         end = format_sample_timestamp(cue.end_sample).replace(".", ",")
@@ -247,7 +247,7 @@ def _render_vtt(
     for cue in build_subtitle_cues(segments, layer):
         language = _segment_language(segments, cue.segment_ids[0])
         text = transform(chr(10).join(cue.lines), language)
-        if any(segment_id in coarse_ids for segment_id in cue.segment_ids):
+        if cue.coarse_timing or any(segment_id in coarse_ids for segment_id in cue.segment_ids):
             text = f"[粗时间] {text}"
         blocks.append(
             f"{format_sample_timestamp(cue.start_sample)} --> "

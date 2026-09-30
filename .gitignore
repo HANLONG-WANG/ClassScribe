@@ -21,3 +21,4 @@ test-results/
 
 # Local generated test state
 /.hypothesis/
+/tmp

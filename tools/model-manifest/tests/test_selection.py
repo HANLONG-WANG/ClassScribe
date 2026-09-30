@@ -84,8 +84,7 @@ def test_production_selection_contains_only_reviewed_model_closures() -> None:
     llm = selection.selection("firered_asr2_llm")
     assert "Qwen2-7B-Instruct/model.safetensors.index.json" in llm.include
     assert {
-        f"Qwen2-7B-Instruct/model-{shard:05d}-of-00004.safetensors"
-        for shard in range(1, 5)
+        f"Qwen2-7B-Instruct/model-{shard:05d}-of-00004.safetensors" for shard in range(1, 5)
     } <= set(llm.include)
     assert "Qwen2-7B-Instruct/LICENSE" in llm.exclude
     fun_asr = selection.selection("fun_asr_nano_2512")
@@ -132,14 +131,10 @@ def test_production_selection_contains_only_reviewed_model_closures() -> None:
     } <= set(moss_preview.include)
     for remote_selection in (ark, moss_td, moss_preview):
         dynamic_paths = {
-            path
-            for path in remote_selection.include
-            if Path(path).suffix in {".jinja", ".py"}
+            path for path in remote_selection.include if Path(path).suffix in {".jinja", ".py"}
         }
         assert dynamic_paths == {
-            path
-            for path, kind in remote_selection.kinds.items()
-            if kind == "remote_code"
+            path for path, kind in remote_selection.kinds.items() if kind == "remote_code"
         }
     nemo_multilingual = selection.selection("nemotron_3_5_asr_streaming_0_6b")
     nemo_english = selection.selection("nemotron_speech_streaming_en_0_6b")
@@ -361,9 +356,7 @@ models: {}
 
 def test_selection_schema_describes_exact_path_and_kind_contract() -> None:
     schema = json.loads(
-        (ROOT / "config/schema/model-file-selection.v1.schema.json").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / "config/schema/model-file-selection.v1.schema.json").read_text(encoding="utf-8")
     )
     selection = schema["$defs"]["model_selection"]
     path = schema["$defs"]["safe_exact_path"]
