@@ -10,6 +10,7 @@ import {
   addImports,
   clearCompletedImports,
   reconcileImports,
+  removeImport,
   retryImport,
   useBatchImports,
 } from "../src/batchImports";
@@ -93,4 +94,109 @@ it("removes completed entries missing on the server and allows clearing retained
   ]);
   clearCompletedImports();
   expect(useBatchImports.getState().items).toEqual([]);
+});
+
+it("removes only the chosen local record and persists the removal without deleting server data", () => {
+  useBatchImports.setState({
+    items: [
+      {
+        id: "remove",
+        name: "remove.wav",
+        size: 1,
+        options: {},
+        status: "done",
+        progress: 100,
+        jobId: "server-job",
+      },
+      {
+        id: "keep",
+        name: "keep.wav",
+        size: 1,
+        options: {},
+        status: "prepared",
+        progress: 100,
+      },
+    ],
+  });
+  removeImport("remove");
+  expect(useBatchImports.getState().items.map((item) => item.id)).toEqual([
+    "keep",
+  ]);
+  expect(localStorage.getItem("classscribe-batch-imports-v1")).not.toContain(
+    "server-job",
+  );
+  expect(remote).not.toHaveBeenCalled();
+});
+
+it("aborts only a removed active import, rejects its late result and continues the next file", async () => {
+  let release: ((value: { id: string }) => void) | undefined;
+  let signal: AbortSignal | undefined;
+  let held = false;
+  remote.mockImplementation((path: string, init?: RequestInit) => {
+    if (path.startsWith("/recordings/")) {
+      if (!held) {
+        held = true;
+        signal = init?.signal ?? undefined;
+        return new Promise<{ id: string }>((resolve) => {
+          release = resolve;
+        });
+      }
+      return Promise.resolve({ id: path.split("/").at(-1) });
+    }
+    return Promise.resolve({ job_id: "kept-job" });
+  });
+  addImports([new File(["a"], "a.wav"), new File(["b"], "b.wav")], {
+    language: "ja",
+  });
+  const [first, second] = useBatchImports.getState().items;
+  if (!first || !second) throw new Error("Missing imports");
+  await waitFor(() => {
+    expect(release).toBeDefined();
+  });
+  removeImport(first.id);
+  expect(signal?.aborted).toBe(true);
+  release?.({ id: first.id });
+  await waitFor(() => {
+    expect(useBatchImports.getState().items[0]?.status).toBe("done");
+  });
+  expect(useBatchImports.getState().items.map((item) => item.id)).toEqual([
+    second.id,
+  ]);
+  const jobs = remote.mock.calls.filter(([path]) => path === "/jobs");
+  expect(jobs).toHaveLength(1);
+  const request = jobs[0]?.[1] as RequestInit | undefined;
+  if (typeof request?.body !== "string")
+    throw new Error("Missing JSON request body");
+  expect(JSON.parse(request.body) as unknown).toMatchObject({
+    recording_id: second.id,
+  });
+});
+
+it("removes a waiting file without interrupting the current import", async () => {
+  let release: ((value: { id: string }) => void) | undefined;
+  let signal: AbortSignal | undefined;
+  remote.mockImplementation((path: string, init?: RequestInit) => {
+    if (path.startsWith("/recordings/")) {
+      signal = init?.signal ?? undefined;
+      return new Promise<{ id: string }>((resolve) => {
+        release = resolve;
+      });
+    }
+    return Promise.resolve({ job_id: "first-job" });
+  });
+  addImports([new File(["a"], "a.wav"), new File(["b"], "b.wav")], {});
+  const [first, second] = useBatchImports.getState().items;
+  if (!first || !second) throw new Error("Missing imports");
+  removeImport(second.id);
+  expect(signal?.aborted).toBe(false);
+  release?.({ id: first.id });
+  await waitFor(() => {
+    expect(useBatchImports.getState().items[0]?.status).toBe("done");
+  });
+  expect(remote.mock.calls.filter(([path]) => path === "/jobs")).toHaveLength(
+    1,
+  );
+  expect(useBatchImports.getState().items.map((item) => item.id)).toEqual([
+    first.id,
+  ]);
 });

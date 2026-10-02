@@ -11,6 +11,7 @@ import { api, type Glossary, type ModelInfo } from "../api";
 import {
   addImports,
   clearCompletedImports,
+  removeImport,
   reconcileImports,
   useBatchImports,
   retryImport,
@@ -27,6 +28,7 @@ import {
 } from "../maiOptions";
 import { bodyModel } from "../modelGuidance";
 import { readStorage, writeStorage } from "../storage";
+import { useWorkbench } from "../store";
 import { ClassroomModelGuide } from "./ClassroomModelGuide";
 import { ModelPicker } from "./ModelPicker";
 
@@ -73,6 +75,8 @@ function loadDraft(): UploadDraft {
 }
 
 export function UploadPage() {
+  const setCurrentJob = useWorkbench((state) => state.setCurrentJob);
+  const setPage = useWorkbench((state) => state.setPage);
   const draft = useMemo(loadDraft, []);
   const [files, setFiles] = useState<File[]>([]);
   const [chooseRange, setChooseRange] = useState(false);
@@ -534,20 +538,49 @@ export function UploadPage() {
             {imports.map((item) => (
               <div key={item.id} className="batch-import-row">
                 <div className="import-file-heading">
-                  <strong>{item.name}</strong>
-                  <span className={`import-status ${item.status}`}>
-                    {
+                  <button
+                    type="button"
+                    className="import-file-link"
+                    disabled={!item.jobId}
+                    title={
+                      item.jobId
+                        ? "在转录队列中定位此任务"
+                        : "任务创建后可查看对应队列任务"
+                    }
+                    onClick={() => {
+                      if (!item.jobId) return;
+                      setCurrentJob(item.jobId);
+                      setPage("queue");
+                    }}
+                  >
+                    {item.name}
+                  </button>
+                  <div className="import-file-actions">
+                    <span className={`import-status ${item.status}`}>
                       {
-                        waiting: "待上传",
-                        uploading: "上传 / 校验中",
-                        prepared: "等待选段",
-                        submitting: "正在入队",
-                        done: "已入队",
-                        error: "导入失败",
-                      }[item.status]
-                    }{" "}
-                    · {item.progress}%
-                  </span>
+                        {
+                          waiting: "待上传",
+                          uploading: "上传 / 校验中",
+                          prepared: "等待选段",
+                          submitting: "正在入队",
+                          done: "已入队",
+                          error: "导入失败",
+                        }[item.status]
+                      }{" "}
+                      · {item.progress}%
+                    </span>
+                    <button
+                      type="button"
+                      className="import-record-delete"
+                      aria-label={`删除 ${item.name} 的导入记录`}
+                      title="移除这条导入记录，不删除已创建的任务和录音"
+                      onClick={() => {
+                        removeImport(item.id);
+                      }}
+                    >
+                      删除记录
+                    </button>
+                  </div>
                 </div>
                 {item.status === "prepared" && item.recording && (
                   <AudioClipEditor

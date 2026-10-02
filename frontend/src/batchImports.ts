@@ -128,12 +128,15 @@ function upload(item: ImportItem, signal: AbortSignal): Promise<Recording> {
     xhr.send(item.file);
   });
 }
+let activeImportId: string | null = null;
+
 async function drain() {
   for (;;) {
     const item = useBatchImports
       .getState()
       .items.find((entry) => entry.status === "waiting");
     if (!item) return;
+    activeImportId = item.id;
     controller = new AbortController();
     const signal = controller.signal;
     try {
@@ -181,6 +184,7 @@ async function drain() {
       });
     } finally {
       controller = null;
+      activeImportId = null;
     }
   }
 }
@@ -247,6 +251,13 @@ export function stopImports() {
     ),
   }));
   controller?.abort();
+}
+
+export function removeImport(id: string) {
+  useBatchImports.setState(({ items }) => ({
+    items: items.filter((item) => item.id !== id),
+  }));
+  if (activeImportId === id) controller?.abort();
 }
 
 export function clearCompletedImports() {

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api";
+import { useEffect, useRef } from "react";
+import { api, type Job, type Recording } from "../api";
 import { useWorkbench } from "../store";
 
 interface QueueItem {
@@ -20,16 +21,47 @@ const statuses: Record<string, string> = {
   paused: "已暂停",
   failed: "失败",
   cancelling: "正在取消",
+  completed: "已完成",
+  cancelled: "已取消",
 };
 export function QueuePage() {
   const client = useQueryClient();
   const setJob = useWorkbench((state) => state.setCurrentJob);
   const setPage = useWorkbench((state) => state.setPage);
+  const currentJobId = useWorkbench((state) => state.currentJobId);
+  const selectedCard = useRef<HTMLElement>(null);
   const query = useQuery({
     queryKey: ["queue"],
     queryFn: ({ signal }) => api<QueueSnapshot>("/queue", { signal }),
     refetchInterval: 1500,
   });
+  const selectedInQueue =
+    query.data?.items.some((item) => item.job_id === currentJobId) ?? false;
+  const selectedJob = useQuery({
+    queryKey: ["queue-selected-job", currentJobId],
+    enabled: Boolean(currentJobId) && query.isSuccess && !selectedInQueue,
+    queryFn: async ({ signal }) => {
+      if (!currentJobId) throw new Error("请选择任务");
+      const job = await api<Job>(`/jobs/${currentJobId}`, { signal });
+      const recording = await api<Recording>(
+        `/recordings/${job.recording_id}`,
+        { signal },
+      );
+      return { job, recording };
+    },
+  });
+  const selectedLocation = selectedInQueue
+    ? "queue"
+    : selectedJob.data
+      ? "history"
+      : null;
+  useEffect(() => {
+    const card = selectedCard.current;
+    if (!card) return;
+    if (typeof card.scrollIntoView === "function")
+      card.scrollIntoView({ block: "center" });
+    card.focus({ preventScroll: true });
+  }, [currentJobId, selectedLocation]);
   const change = useMutation({
     mutationFn: ({ path, body }: { path: string; body?: unknown }) =>
       api(path, { method: "POST", body: JSON.stringify(body ?? {}) }),
@@ -93,6 +125,47 @@ export function QueuePage() {
             等待 {pending.length}{" "}
             节课。暂停单课会让后续课堂继续；恢复或重试的课堂加入队尾。
           </p>
+          {currentJobId && !selectedInQueue && selectedJob.isFetching && (
+            <p role="status">正在定位所选任务…</p>
+          )}
+          {!selectedInQueue && selectedJob.error && (
+            <p role="alert">无法定位所选任务：{selectedJob.error.message}</p>
+          )}
+          {!selectedInQueue && selectedJob.data && (
+            <article
+              className="panel queue-card"
+              aria-current="true"
+              tabIndex={-1}
+              ref={selectedCard}
+            >
+              <strong>{selectedJob.data.recording.source_name}</strong>
+              <span className="queue-current-label">当前任务</span>
+              <p>
+                {statuses[selectedJob.data.job.status] ??
+                  selectedJob.data.job.status}{" "}
+                · 已离开当前队列
+              </p>
+              <div className="toolbar">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setJob(selectedJob.data.job.job_id);
+                  }}
+                >
+                  查看任务
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setJob(selectedJob.data.job.job_id);
+                    setPage("transcript");
+                  }}
+                >
+                  查看转录稿
+                </button>
+              </div>
+            </article>
+          )}
           {query.data.items.length === 0 && (
             <p className="empty-state">
               队列已清空，可添加新的课堂或查看历史稿件。
@@ -101,8 +174,17 @@ export function QueuePage() {
           {query.data.items.map((item) => {
             const index = pendingPositions.get(item.job_id) ?? -1;
             return (
-              <article className="panel queue-card" key={item.job_id}>
+              <article
+                className="panel queue-card"
+                key={item.job_id}
+                aria-current={item.job_id === currentJobId ? "true" : undefined}
+                tabIndex={-1}
+                ref={item.job_id === currentJobId ? selectedCard : undefined}
+              >
                 <strong>{item.source_name}</strong>
+                {item.job_id === currentJobId && (
+                  <span className="queue-current-label">当前任务</span>
+                )}
                 <p>
                   {statuses[item.status] ?? item.status}
                   {index >= 0 ? ` · 等待第 ${String(index + 1)} 位` : ""} ·{" "}
@@ -125,7 +207,7 @@ export function QueuePage() {
                       setPage("transcript");
                     }}
                   >
-                    查看稿件
+                    查看转录稿
                   </button>
                   {["pending", "running", "paused", "failed"].includes(
                     item.status,

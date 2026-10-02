@@ -1408,6 +1408,17 @@ details summary {
 .queue-card .toolbar {
   flex-wrap: wrap;
 }
+.queue-card[aria-current="true"] {
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px #2f6a5026;
+}
+.queue-current-label {
+  display: inline-block;
+  margin: 0 0 10px 12px;
+  color: var(--green);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
 
 .anomaly-tag {
   display: block;
@@ -1468,6 +1479,43 @@ details summary {
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+.import-file-link {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--green);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.import-file-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+.import-file-link:disabled {
+  color: var(--ink);
+  opacity: 1;
+  cursor: default;
+}
+.import-file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.import-record-delete {
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+.import-record-delete:hover {
+  border-color: #a52924;
+  color: #a52924;
 }
 .import-status {
   font-size: 0.8rem;

@@ -5,17 +5,26 @@ import { afterEach, expect, it, vi } from "vitest";
 const batch = vi.hoisted(() => vi.fn());
 vi.mock("../src/batchImports", () => ({
   addImports: batch,
-  useBatchImports: () => [],
+  useBatchImports: () => imports.items,
+  removeImport: imports.remove,
   retryImport: vi.fn(),
   stopImports: vi.fn(),
   clearCompletedImports: vi.fn(),
   reconcileImports: vi.fn(),
 }));
 import { UploadPage } from "../src/pages/UploadPage";
+import { useWorkbench } from "../src/store";
+const imports = vi.hoisted(() => ({
+  items: [] as import("../src/batchImports").ImportItem[],
+  remove: vi.fn(),
+}));
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
   batch.mockReset();
+  imports.items = [];
+  imports.remove.mockReset();
+  useWorkbench.setState({ page: "upload", currentJobId: null });
   sessionStorage.clear();
 });
 it("accepts multiple files, reorders them, and freezes one shared settings snapshot", () => {
@@ -99,4 +108,38 @@ it("restores import settings after leaving and returning to the page", () => {
   );
   expect(screen.getByRole("combobox", { name: "语言" })).toHaveValue("en");
   expect(screen.getByRole("radio", { name: "最高精度" })).toBeChecked();
+});
+
+it("offers deletion for every import state and links only records with a created task", () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(new Response("[]"))),
+  );
+  imports.items = (
+    ["waiting", "uploading", "prepared", "submitting", "done", "error"] as const
+  ).map((status) => ({
+    id: status,
+    name: `${status}.wav`,
+    size: 1,
+    status,
+    progress: 0,
+    options: {},
+    ...(status === "done" ? { jobId: "specific-job" } : {}),
+  }));
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <UploadPage />
+    </QueryClientProvider>,
+  );
+  expect(
+    screen.getAllByRole("button", { name: /删除 .* 的导入记录/ }),
+  ).toHaveLength(6);
+  expect(screen.getByRole("button", { name: "waiting.wav" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "done.wav" }));
+  expect(useWorkbench.getState().page).toBe("queue");
+  expect(useWorkbench.getState().currentJobId).toBe("specific-job");
+  fireEvent.click(
+    screen.getByRole("button", { name: "删除 error.wav 的导入记录" }),
+  );
+  expect(imports.remove).toHaveBeenCalledWith("error");
 });
