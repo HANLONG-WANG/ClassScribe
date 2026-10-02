@@ -1480,6 +1480,207 @@ details summary {
 .import-status.error {
   color: #a52924;
 }
+.clip-editor {
+  min-width: 0;
+  margin-top: 16px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f0f4ed;
+}
+.clip-editor:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+}
+.clip-editor-heading,
+.clip-transport,
+.clip-boundaries,
+.clip-footer,
+.clip-zoom-controls,
+.clip-submit-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.clip-editor-heading,
+.clip-footer {
+  justify-content: space-between;
+}
+.clip-editor-heading h3 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+.clip-editor-heading .muted {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+.clip-editor button {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--paper);
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.clip-editor button:hover:not(:disabled) {
+  border-color: var(--green);
+  background: #e3ece1;
+}
+.clip-waveform {
+  position: relative;
+  min-height: 186px;
+  margin-top: 18px;
+  padding: 12px 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  overflow: hidden;
+}
+.clip-waveform ::part(region) {
+  pointer-events: none !important;
+}
+.clip-waveform ::part(region-handle) {
+  pointer-events: auto;
+  width: 12px !important;
+  background: #2f6a501a;
+  border-color: var(--green) !important;
+}
+.clip-waveform ::part(region-handle-left)::after,
+.clip-waveform ::part(region-handle-right)::after {
+  position: absolute;
+  top: 0;
+  padding: 3px;
+  color: white;
+  background: var(--green);
+  font-size: 11px;
+  font-weight: 700;
+}
+.clip-waveform ::part(region-handle-left)::after {
+  left: 0;
+  content: "A";
+}
+.clip-waveform ::part(region-handle-right)::after {
+  right: 0;
+  content: "B";
+}
+.clip-hint,
+.clip-shortcuts,
+.clip-loading {
+  margin: 10px 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.6;
+}
+.clip-transport {
+  padding-block: 8px;
+}
+.clip-loop,
+.clip-speed,
+.clip-volume,
+.clip-boundary,
+.clip-boundary label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.clip-loop input {
+  accent-color: var(--green);
+}
+.clip-clock,
+.clip-boundary input,
+.clip-selection-summary {
+  font-family: "DM Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+.clip-clock {
+  margin-inline: 4px auto;
+  color: var(--green);
+  font-size: 1.1rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.clip-speed select,
+.clip-boundary input {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--paper);
+}
+.clip-volume input {
+  width: 88px;
+  accent-color: var(--green);
+}
+.clip-boundaries {
+  margin-top: 8px;
+  padding-block: 12px;
+  border-block: 1px solid var(--line);
+}
+.clip-boundary input {
+  width: 142px;
+  min-width: 0;
+  font-size: 0.85rem;
+}
+.clip-boundary input[aria-invalid="true"] {
+  border-color: #a52924;
+}
+.clip-boundary-letter {
+  color: var(--green);
+  font-weight: 800;
+}
+.clip-footer {
+  margin-top: 16px;
+}
+.clip-selection-summary {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.clip-footer .clip-hint {
+  margin: 3px 0 0;
+}
+.clip-editor .clip-submit {
+  color: white;
+  border-color: var(--green);
+  background: var(--green);
+  font-weight: 700;
+}
+.clip-editor .clip-submit:hover:not(:disabled) {
+  color: var(--ink);
+}
+.clip-shortcuts {
+  margin-bottom: 0;
+}
+@media (max-width: 600px) {
+  .clip-editor {
+    padding: 12px;
+  }
+  .clip-editor-heading {
+    align-items: flex-start;
+  }
+  .clip-boundaries {
+    align-items: stretch;
+  }
+  .clip-boundary {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .clip-boundary label {
+    flex: 1 1 170px;
+  }
+  .clip-boundary input {
+    width: 100%;
+  }
+  .clip-submit-controls {
+    width: 100%;
+  }
+  .clip-submit-controls button {
+    flex: 1;
+  }
+}
 .batch-import-row progress {
   display: block;
   width: 100%;

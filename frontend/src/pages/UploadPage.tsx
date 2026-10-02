@@ -533,14 +533,6 @@ export function UploadPage() {
           <div className="import-progress-list">
             {imports.map((item) => (
               <div key={item.id} className="batch-import-row">
-                {item.status === "prepared" && item.recording && (
-                  <AudioClipEditor
-                    recording={item.recording}
-                    onSubmit={(clip) => {
-                      submitPreparedImport(item.id, clip);
-                    }}
-                  />
-                )}
                 <div className="import-file-heading">
                   <strong>{item.name}</strong>
                   <span className={`import-status ${item.status}`}>
@@ -557,6 +549,14 @@ export function UploadPage() {
                     · {item.progress}%
                   </span>
                 </div>
+                {item.status === "prepared" && item.recording && (
+                  <AudioClipEditor
+                    recording={item.recording}
+                    onSubmit={(clip) => {
+                      submitPreparedImport(item.id, clip);
+                    }}
+                  />
+                )}
                 <progress
                   max={100}
                   value={item.progress}
