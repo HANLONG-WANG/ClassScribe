@@ -136,7 +136,7 @@ it("offers deletion for every import state and links only records with a created
   ).toHaveLength(6);
   expect(screen.getByRole("button", { name: "waiting.wav" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "done.wav" }));
-  expect(useWorkbench.getState().page).toBe("queue");
+  expect(useWorkbench.getState().page).toBe("job");
   expect(useWorkbench.getState().currentJobId).toBe("specific-job");
   fireEvent.click(
     screen.getByRole("button", { name: "删除 error.wav 的导入记录" }),

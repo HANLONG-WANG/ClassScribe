@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("deletes a single retained record and opens each imported task's own transcript", async ({
+test("deletes a retained record and opens each file's own task details and completed transcript", async ({
   page,
 }) => {
   const samples = 16000;
@@ -42,7 +42,7 @@ test("deletes a single retained record and opens each imported task's own transc
   ].map((task) => ({
     ...task,
     progress: task.status === "completed" ? 1 : 0.5,
-    stage: "asr",
+    stage: task.status === "completed" ? "completed" : "asr",
     options: { provider: "local" },
     events: [],
   }));
@@ -144,27 +144,28 @@ test("deletes a single retained record and opens each imported task's own transc
     page.getByRole("button", { name: /删除 .* 的导入记录/ }),
   ).toHaveCount(2);
 
-  await page.getByRole("button", { name: "正在转录.wav", exact: true }).click();
+  await page
+    .locator("nav")
+    .getByRole("button", { name: /任务队列/ })
+    .click();
   await expect(page.getByRole("heading", { name: "转录队列" })).toBeVisible();
-  const selected = page.locator('article[aria-current="true"]');
-  await expect(selected).toContainText("正在转录.wav");
-  await expect(selected).toBeFocused();
   await expect(page.getByText("移除记录.wav", { exact: true })).toBeVisible();
-  await selected.getByRole("button", { name: "查看转录稿" }).click();
-  await expect(
-    page.getByText("正在转录课堂的正文", { exact: true }),
-  ).toBeVisible();
-  expect(
-    requests.some((request) => request.path === "/jobs/job-active/transcript"),
-  ).toBe(true);
+  await page.locator("nav").getByRole("button", { name: /导入/ }).click();
+  await page.getByRole("button", { name: "正在转录.wav", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "课堂任务" })).toBeVisible();
+  await expect(page.getByText("job-active", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "打开转录稿" })).toBeDisabled();
 
   await page.locator("nav").getByRole("button", { name: /导入/ }).click();
   await page
     .getByRole("button", { name: "已完成课堂.wav", exact: true })
     .click();
-  await expect(selected).toContainText("已完成课堂.wav");
-  await expect(selected).toContainText("已完成 · 已离开当前队列");
-  await selected.getByRole("button", { name: "查看转录稿" }).click();
+  await expect(page.getByRole("heading", { name: "课堂任务" })).toBeVisible();
+  await expect(page.getByText("job-completed", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "课堂任务" })).toBeVisible();
+  await expect(page.getByText("job-completed", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "打开转录稿" }).click();
   await expect(
     page.getByText("已完成课堂的正文", { exact: true }),
   ).toBeVisible();

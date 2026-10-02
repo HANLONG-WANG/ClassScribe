@@ -76,7 +76,6 @@ function loadDraft(): UploadDraft {
 
 export function UploadPage() {
   const setCurrentJob = useWorkbench((state) => state.setCurrentJob);
-  const setPage = useWorkbench((state) => state.setPage);
   const draft = useMemo(loadDraft, []);
   const [files, setFiles] = useState<File[]>([]);
   const [chooseRange, setChooseRange] = useState(false);
@@ -544,13 +543,12 @@ export function UploadPage() {
                     disabled={!item.jobId}
                     title={
                       item.jobId
-                        ? "在转录队列中定位此任务"
-                        : "任务创建后可查看对应队列任务"
+                        ? "查看此文件的课堂任务"
+                        : "任务创建后可查看对应课堂任务"
                     }
                     onClick={() => {
                       if (!item.jobId) return;
                       setCurrentJob(item.jobId);
-                      setPage("queue");
                     }}
                   >
                     {item.name}
