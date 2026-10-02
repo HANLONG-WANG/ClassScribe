@@ -7,6 +7,7 @@ from typing import Any
 
 from classscribe.api.service import ClassScribeService
 from classscribe.classroom import ClassroomPipeline, ProductionStageRunner
+from classscribe.classroom.online import ProviderStageRunner
 from classscribe.config import AppConfig, load_config
 from classscribe.db import create_sqlite_engine, make_session_factory
 from classscribe.db.session import upgrade_schema
@@ -65,7 +66,9 @@ def build_default_service(config: AppConfig | None = None) -> ClassScribeService
     )
     pipeline = ClassroomPipeline(
         sessions,
-        ProductionStageRunner(paths, config, registry, manager, invoker),
+        ProviderStageRunner(
+            ProductionStageRunner(paths, config, registry, manager, invoker), paths, config
+        ),
     )
     resident_workers.can_prewarm = lambda: not pipeline.has_running_jobs()
     return ClassScribeService(

@@ -1,20 +1,37 @@
 {
-  "contract_version": "1.0.0",
-  "product_surfaces": ["classroom_workbench", "ibus_dictation"],
-  "language_modes": ["zh", "ja", "en", "auto_mixed"],
-  "model_selection_modes": ["auto_best", "manual_primary", "strict_single_model"],
-  "text_layers": ["faithful", "corrected", "user"],
+  "contract_version": "1.1.0",
+  "product_surfaces": [
+    "classroom_workbench",
+    "ibus_dictation"
+  ],
+  "language_modes": [
+    "zh",
+    "ja",
+    "en",
+    "auto_mixed"
+  ],
+  "model_selection_modes": [
+    "auto_best",
+    "manual_primary",
+    "strict_single_model"
+  ],
+  "text_layers": [
+    "faithful",
+    "corrected",
+    "user"
+  ],
   "inaudible_markers": {
     "zh": "［听不清 {start}–{end}］",
     "ja": "［聞き取り不明 {start}–{end}］",
     "en": "[inaudible {start}–{end}]"
   },
   "privacy": {
-    "local_inference_only": true,
+    "local_inference_only": false,
     "telemetry": false,
     "network_operations": [
       "user_initiated_model_install",
-      "user_initiated_model_update"
+      "user_initiated_model_update",
+      "user_initiated_classroom_mai_transcription"
     ]
   }
 }

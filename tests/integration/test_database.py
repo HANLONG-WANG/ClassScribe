@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 EXPECTED_TABLES = {
+    "online_request_attempts",
     "app_settings",
     "asr_candidates",
     "benchmark_items",

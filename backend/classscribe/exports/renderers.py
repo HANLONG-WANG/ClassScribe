@@ -157,6 +157,18 @@ def _segment_record(
             }
             for token in tokens
         ],
+        "source": {
+            "recording_id": segment.source_recording_id,
+            "clip_start_sample": segment.source_offset_sample,
+            "start_sample": segment.source_offset_sample + start
+            if segment.timing_quality != "invalid"
+            else None,
+            "end_sample": segment.source_offset_sample + end
+            if segment.timing_quality != "invalid"
+            else None,
+        }
+        if segment.source_recording_id and segment.source_offset_sample is not None
+        else None,
     }
 
 

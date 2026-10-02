@@ -367,6 +367,11 @@ function EmptyJob() {
 }
 
 const operationLabels: Record<string, string> = {
+  mai_request: "准备 Azure MAI 在线转写",
+  mai_prepare: "正在准备无损上传音频",
+  mai_upload: "正在上传音频至 Azure",
+  mai_wait: "等待 Azure 转写结果（服务未提供完成百分比）",
+  mai_import: "正在导入在线转写结果",
   model_error: "模型处理失败",
   reuse_model: "复用已加载模型",
   model_retained: "模型已保留，等待下一片段",

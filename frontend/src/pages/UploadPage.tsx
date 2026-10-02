@@ -15,7 +15,9 @@ import {
   useBatchImports,
   retryImport,
   stopImports,
+  submitPreparedImport,
 } from "../batchImports";
+import { AudioClipEditor } from "../components/AudioClipEditor";
 import { bodyModel } from "../modelGuidance";
 import { readStorage, writeStorage } from "../storage";
 import { ClassroomModelGuide } from "./ClassroomModelGuide";
@@ -60,6 +62,9 @@ function loadDraft(): UploadDraft {
 export function UploadPage() {
   const draft = useMemo(loadDraft, []);
   const [files, setFiles] = useState<File[]>([]);
+  const [chooseRange, setChooseRange] = useState(false);
+  const [provider, setProvider] = useState("local");
+  const [cloudConsent, setCloudConsent] = useState(false);
   const imports = useBatchImports((state) => state.items);
   useEffect(() => {
     void reconcileImports();
@@ -127,12 +132,15 @@ export function UploadPage() {
     event.preventDefault();
     if (!files.length) return;
     addImports(files, {
+      provider,
+      prepare_only: chooseRange,
       language,
       glossary_id: glossaryId || null,
       speaker_count: speakerCount,
-      model_selection: primaryModel ? "manual_primary" : "auto_best",
-      primary_model_id: primaryModel || null,
-      accuracy_mode: accuracy,
+      model_selection:
+        provider === "local" && primaryModel ? "manual_primary" : "auto_best",
+      primary_model_id: provider === "local" ? primaryModel || null : null,
+      accuracy_mode: provider === "local" ? accuracy : "balanced",
       outputs,
       include_faithful: includeFaithful,
       include_smart: includeSmart,
@@ -148,15 +156,43 @@ export function UploadPage() {
         <div>
           <p className="eyebrow">Classroom workspace</p>
           <h1 id="upload-title">批量导入课堂</h1>
-          <p>文件留在本机。任务会自动完成到导出，不要求先进入校对页。</p>
+          <p>任务会自动完成到导出。可选择本地处理或 Azure MAI 在线转写。</p>
         </div>
-        <span className="privacy-badge">离线推理</span>
+        <span className="privacy-badge">
+          {provider === "local" ? "离线推理" : "Azure 在线转写"}
+        </span>
       </header>
 
       <p>
         已入队的课堂在关闭浏览器后继续处理；尚未上传完成的文件需要保持此浏览器开启。
       </p>
       <form className="panel upload-form" onSubmit={submit}>
+        <label>
+          转写服务
+          <select
+            value={provider}
+            onChange={(e) => {
+              setProvider(e.target.value);
+              setCloudConsent(false);
+            }}
+          >
+            <option value="local">本地模型</option>
+            <option value="azure_mai">Azure MAI-Transcribe-2</option>
+          </select>
+        </label>
+        {provider === "azure_mai" && (
+          <label>
+            <input
+              type="checkbox"
+              checked={cloudConsent}
+              onChange={(e) => {
+                setCloudConsent(e.target.checked);
+              }}
+            />
+            我同意将所选音频及术语上传至
+            Azure，服务可能计费。请先在设置页配置凭据并关闭离线模式。
+          </label>
+        )}
         <label
           className={`drop-zone ${files.length ? "has-file" : ""}`}
           onDragOver={(event) => {
@@ -277,69 +313,75 @@ export function UploadPage() {
               <option value="5+">5+</option>
             </select>
           </label>
-          <ModelPicker
-            value={primaryModel}
-            onChange={setPrimaryModel}
-            loading={models.isPending}
-            error={models.error?.message}
-            models={(models.data ?? []).filter((item) =>
-              (language === "auto_mixed"
-                ? ["zh", "ja", "en"]
-                : [language]
-              ).every((code) => bodyModel(item, code)),
-            )}
-          />
+          {provider === "local" && (
+            <ModelPicker
+              value={primaryModel}
+              onChange={setPrimaryModel}
+              loading={models.isPending}
+              error={models.error?.message}
+              models={(models.data ?? []).filter((item) =>
+                (language === "auto_mixed"
+                  ? ["zh", "ja", "en"]
+                  : [language]
+                ).every((code) => bodyModel(item, code)),
+              )}
+            />
+          )}
         </div>
 
-        <fieldset>
-          <legend>处理模式</legend>
-          <div className="choice-row">
-            {(["fast", "balanced", "highest", "strict_single"] as const).map(
-              (mode) => (
-                <label className="choice-card" key={mode}>
-                  <input
-                    aria-label={
+        {provider === "local" && (
+          <fieldset>
+            <legend>处理模式</legend>
+            <div className="choice-row">
+              {(["fast", "balanced", "highest", "strict_single"] as const).map(
+                (mode) => (
+                  <label className="choice-card" key={mode}>
+                    <input
+                      aria-label={
+                        {
+                          fast: "快速",
+                          balanced: "平衡",
+                          highest: "最高精度",
+                          strict_single: "严格单模型",
+                        }[mode]
+                      }
+                      checked={accuracy === mode}
+                      name="accuracy"
+                      onChange={() => {
+                        setAccuracy(mode);
+                      }}
+                      type="radio"
+                    />
+                    <span>
                       {
-                        fast: "快速",
-                        balanced: "平衡",
-                        highest: "最高精度",
-                        strict_single: "严格单模型",
-                      }[mode]
-                    }
-                    checked={accuracy === mode}
-                    name="accuracy"
-                    onChange={() => {
-                      setAccuracy(mode);
-                    }}
-                    type="radio"
-                  />
-                  <span>
-                    {
-                      {
-                        fast: "快速",
-                        balanced: "平衡",
-                        highest: "最高精度",
-                        strict_single: "严格单模型",
-                      }[mode]
-                    }
-                  </span>
-                  <small>
-                    {mode === "strict_single"
-                      ? "指定正文模型，不调用备用 ASR；辅助模型仍使用。"
-                      : "按语言选择主模型，质量异常时调用备用模型复核。"}
-                  </small>
-                </label>
-              ),
-            )}
-          </div>
-        </fieldset>
+                        {
+                          fast: "快速",
+                          balanced: "平衡",
+                          highest: "最高精度",
+                          strict_single: "严格单模型",
+                        }[mode]
+                      }
+                    </span>
+                    <small>
+                      {mode === "strict_single"
+                        ? "指定正文模型，不调用备用 ASR；辅助模型仍使用。"
+                        : "按语言选择主模型，质量异常时调用备用模型复核。"}
+                    </small>
+                  </label>
+                ),
+              )}
+            </div>
+          </fieldset>
+        )}
 
-        <ClassroomModelGuide
-          models={models.data ?? []}
-          language={language}
-          primaryModel={primaryModel}
-          strict={accuracy === "strict_single"}
-        />
+        {provider === "local" && (
+          <ClassroomModelGuide
+            models={models.data ?? []}
+            language={language}
+            primaryModel={primaryModel}
+            strict={accuracy === "strict_single"}
+          />
+        )}
 
         <fieldset>
           <legend>自动输出</legend>
@@ -391,15 +433,30 @@ export function UploadPage() {
           </div>
         </fieldset>
 
-        {accuracy === "strict_single" && !primaryModel && (
-          <p className="error-callout">严格单模型测试需要指定主模型。</p>
-        )}
+        {provider === "local" &&
+          accuracy === "strict_single" &&
+          !primaryModel && (
+            <p className="error-callout">严格单模型测试需要指定主模型。</p>
+          )}
+        <label>
+          <input
+            type="checkbox"
+            checked={chooseRange}
+            onChange={(event) => {
+              setChooseRange(event.target.checked);
+            }}
+          />
+          导入后试听并选择转写范围
+        </label>
         <button
           className="primary-button"
           disabled={
             !files.length ||
             outputs.length === 0 ||
-            (accuracy === "strict_single" && !primaryModel)
+            (provider === "local" &&
+              accuracy === "strict_single" &&
+              !primaryModel) ||
+            (provider === "azure_mai" && !cloudConsent)
           }
           type="submit"
         >
@@ -438,6 +495,14 @@ export function UploadPage() {
           <div className="import-progress-list">
             {imports.map((item) => (
               <div key={item.id} className="batch-import-row">
+                {item.status === "prepared" && item.recording && (
+                  <AudioClipEditor
+                    recording={item.recording}
+                    onSubmit={(clip) => {
+                      submitPreparedImport(item.id, clip);
+                    }}
+                  />
+                )}
                 <div className="import-file-heading">
                   <strong>{item.name}</strong>
                   <span className={`import-status ${item.status}`}>
@@ -445,6 +510,7 @@ export function UploadPage() {
                       {
                         waiting: "待上传",
                         uploading: "上传 / 校验中",
+                        prepared: "等待选段",
                         submitting: "正在入队",
                         done: "已入队",
                         error: "导入失败",

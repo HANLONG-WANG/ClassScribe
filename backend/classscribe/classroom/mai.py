@@ -1,0 +1,358 @@
+"""Explicit, single-attempt Azure MAI transport and lossless result adaptation."""
+# ruff: noqa: RUF001
+
+from __future__ import annotations
+
+import base64
+import http.client
+import json
+import math
+import os
+import re
+import socket
+import ssl
+import threading
+from collections.abc import Callable, Mapping
+from contextlib import suppress
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote, urlsplit
+from urllib.request import getproxies, proxy_bypass
+from uuid import uuid4
+
+from classscribe.errors import ClassScribeError, ErrorCode
+
+API_VERSION = "2025-10-15"
+MODEL = "MAI-Transcribe-2"
+MAX_BYTES = 250_000_000
+
+
+def mai_error(detail: str) -> ClassScribeError:
+    return ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, detail)
+
+
+def normalize_endpoint(value: str) -> str:
+    parsed = urlsplit(value.strip())
+    host = parsed.hostname or ""
+    if (
+        parsed.scheme != "https"
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.port not in (None, 443)
+        or not re.fullmatch(
+            r"[a-z0-9-]+\.(?:api\.cognitive\.microsoft\.com|cognitiveservices\.azure\.com)", host
+        )
+        or parsed.path.rstrip("/") not in ("", "/speechtotext/transcriptions:transcribe")
+    ):
+        raise mai_error("请输入 Azure Speech HTTPS 资源地址。")
+    return f"https://{host}/speechtotext/transcriptions:transcribe?api-version={API_VERSION}"
+
+
+class MaiCredentials:
+    """Process-memory credentials; never serialize the key or persist browser input."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._value: tuple[str, str] | None = None
+
+    def configure(self, endpoint: str, key: str) -> None:
+        endpoint = normalize_endpoint(endpoint)
+        key = key.strip()
+        if not key or any(ord(char) < 33 or ord(char) > 126 for char in key):
+            raise mai_error("请输入有效的 Azure Speech Key。")
+        with self._lock:
+            self._value = endpoint, key
+
+    def clear(self) -> None:
+        with self._lock:
+            self._value = None
+
+    def get(self) -> tuple[str, str]:
+        with self._lock:
+            value = self._value
+        if value is not None:
+            return value
+        endpoint = os.environ.get("AZURE_SPEECH_ENDPOINT", "")
+        key = os.environ.get("AZURE_SPEECH_KEY", "").strip()
+        if not endpoint or not key:
+            raise mai_error("请先配置 Azure Speech Endpoint 和 Key。")
+        endpoint = normalize_endpoint(endpoint)
+        if any(ord(char) < 33 or ord(char) > 126 for char in key):
+            raise mai_error("Azure Speech Key 格式无效。")
+        return endpoint, key
+
+    def status(self) -> dict[str, Any]:
+        try:
+            endpoint, _ = self.get()
+            return {"configured": True, "endpoint": endpoint.split("/speechtotext")[0]}
+        except (ClassScribeError, ValueError):
+            return {"configured": False, "endpoint": ""}
+
+
+def request_definition(options: Mapping[str, Any], terms: list[str]) -> dict[str, Any]:
+    definition: dict[str, Any] = {
+        "enhancedMode": {
+            "enabled": True,
+            "model": MODEL,
+            "modelOptions": {"transcribeStyle": "verbatim", "timestamps": "word"},
+        },
+        "diarization": {"enabled": options.get("speaker_count", "auto") != "1"},
+    }
+    language = options.get("language")
+    if language in {"ja", "zh", "en"}:
+        definition["locales"] = [language]
+    phrases = list(dict.fromkeys(term.strip() for term in terms if term.strip()))
+    if len(phrases) > 500 or any(len(term) > 200 for term in phrases):
+        raise mai_error("MAI 术语最多 500 条，每条最多 200 字符。")
+    if phrases:
+        definition["phraseList"] = {"phrases": phrases}
+    return definition
+
+
+class MaiClient:
+    """Bounded streaming upload, verified TLS, no redirect and no implicit retry."""
+
+    def transcribe(
+        self,
+        endpoint: str,
+        key: str,
+        audio: Path,
+        definition: dict[str, Any],
+        *,
+        cancelled: Callable[[], bool],
+        progress: Callable[[str, int, int], None],
+        timeout: float = 900,
+    ) -> tuple[bytes, str]:
+        size = audio.stat().st_size
+        if not 0 < size < MAX_BYTES:
+            raise mai_error("上传音频必须非空且小于 250 MB，请缩短片段。")
+        parsed = urlsplit(endpoint)
+        host = parsed.hostname or ""
+        context = ssl.create_default_context()
+        proxy = None if proxy_bypass(host) else getproxies().get("https")
+        if proxy:
+            address = urlsplit(proxy if "://" in proxy else "http://" + proxy)
+            if address.scheme != "http" or not address.hostname:
+                raise mai_error("HTTPS_PROXY 需要使用 HTTP CONNECT 代理。")
+            connection = http.client.HTTPSConnection(
+                address.hostname, address.port or 8080, timeout=20, context=context
+            )
+            headers = {}
+            if address.username:
+                auth = f"{unquote(address.username)}:{unquote(address.password or '')}"
+                headers["Proxy-Authorization"] = "Basic " + base64.b64encode(auth.encode()).decode()
+            connection.set_tunnel(host, 443, headers)
+        else:
+            connection = http.client.HTTPSConnection(host, timeout=20, context=context)
+        boundary = "classscribe_" + uuid4().hex
+        head = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="definition"\r\n'
+            "Content-Type: application/json\r\n\r\n"
+        ).encode() + json.dumps(definition, ensure_ascii=False).encode()
+        head += (
+            f"\r\n--{boundary}\r\nContent-Disposition: form-data; "
+            'name="audio"; filename="clip.flac"\r\n'
+            "Content-Type: audio/flac\r\n\r\n"
+        ).encode()
+        tail = f"\r\n--{boundary}--\r\n".encode()
+        done = threading.Event()
+        stopped = threading.Event()
+
+        def check() -> None:
+            if stopped.is_set() or cancelled():
+                raise mai_error("请求已停止；云端可能仍处理并计费。不会自动重发。")
+
+        def watch() -> None:
+            while not done.wait(0.1):
+                if cancelled():
+                    stopped.set()
+                    if connection.sock is not None:
+                        with suppress(OSError):
+                            connection.sock.shutdown(socket.SHUT_RDWR)
+                    connection.close()
+                    return
+
+        monitor = threading.Thread(target=watch, daemon=True)
+        monitor.start()
+        try:
+            check()
+            connection.connect()
+            check()
+            if connection.sock is not None:
+                connection.sock.settimeout(timeout)
+            connection.putrequest("POST", parsed.path + "?" + parsed.query)
+            connection.putheader("Ocp-Apim-Subscription-Key", key)
+            connection.putheader("Content-Type", f"multipart/form-data; boundary={boundary}")
+            connection.putheader("Content-Length", str(len(head) + size + len(tail)))
+            connection.endheaders()
+            connection.send(head)
+            sent = 0
+            with audio.open("rb") as source:
+                while block := source.read(256 * 1024):
+                    check()
+                    connection.send(block)
+                    sent += len(block)
+                    progress("mai_upload", sent, size)
+            connection.send(tail)
+            progress("mai_wait", 0, 0)
+            response = connection.getresponse()
+            # Service bodies may echo user content or credentials. Never show error bodies.
+            if response.status != 200:
+                raise mai_error(
+                    f"Azure HTTP {response.status}；请检查资源、权限或额度。未自动重发。"
+                )
+            chunks: list[bytes] = []
+            count = 0
+            while block := response.read(64 * 1024):
+                check()
+                count += len(block)
+                if count > 80_000_000:
+                    raise mai_error("MAI 响应超过 80 MB。未自动重发。")
+                chunks.append(block)
+            check()
+            return b"".join(chunks), (response.getheader("apim-request-id") or "")[:256]
+        except ClassScribeError:
+            raise
+        except (OSError, ValueError, http.client.HTTPException):
+            check()
+            raise mai_error("MAI 网络请求失败，结果未知；云端可能计费。未自动重发。") from None
+        finally:
+            done.set()
+            connection.close()
+            monitor.join(timeout=1)
+
+
+@dataclass(frozen=True)
+class MaiPhrase:
+    text: str
+    start: int
+    end: int
+    language: str
+    speaker: str | None
+    timed: bool
+    words: tuple[tuple[str, int, int], ...]
+
+
+def split_timed_phrase(phrase: MaiPhrase) -> tuple[MaiPhrase, ...]:
+    """Split only when every character and word time can be accounted for."""
+    cursor = 0
+    previous_end = -1
+    cuts: list[tuple[int, tuple[str, int, int]]] = []
+    for token, start, end in phrase.words:
+        index = phrase.text.find(token, cursor)
+        if (
+            not token
+            or index < 0
+            or phrase.text[cursor:index].strip()
+            or start < previous_end
+            or (phrase.timed and (start < phrase.start or end > phrase.end))
+        ):
+            break
+        cursor = index + len(token)
+        previous_end = end
+        cuts.append((cursor, (token, start, end)))
+    else:
+        if cuts and not phrase.text[cursor:].strip():
+            groups: list[MaiPhrase] = []
+            text_start = 0
+            words: list[tuple[str, int, int]] = []
+            for index, (text_end, word) in enumerate(cuts):
+                words.append(word)
+                if re.search(r"[。！？.!?]$", word[0]) or index == len(cuts) - 1:
+                    groups.append(
+                        MaiPhrase(
+                            phrase.text[text_start:text_end].strip(),
+                            words[0][1],
+                            words[-1][2],
+                            phrase.language,
+                            phrase.speaker,
+                            True,
+                            tuple(words),
+                        )
+                    )
+                    text_start = text_end
+                    words = []
+            return tuple(groups)
+    # Incomplete word evidence must not truncate text or contaminate subtitle token projection.
+    return (
+        MaiPhrase(
+            phrase.text, phrase.start, phrase.end, phrase.language, phrase.speaker, phrase.timed, ()
+        ),
+    )
+
+
+def parse_mai_response(payload: bytes, duration: int, language: str) -> tuple[MaiPhrase, ...]:
+    try:
+        raw = json.loads(payload)
+    except (ValueError, UnicodeError):
+        raise mai_error("MAI 返回了无效 JSON；原始响应已保留。") from None
+    if not isinstance(raw, dict) or "error" in raw:
+        raise mai_error("MAI 响应结构无效；原始响应已保留。")
+
+    def interval(item: dict[str, Any]) -> tuple[int, int] | None:
+        start, length = item.get("offsetMilliseconds"), item.get("durationMilliseconds")
+        if any(
+            isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v < 0
+            for v in (start, length)
+        ):
+            return None
+        assert isinstance(start, (int, float)) and isinstance(length, (int, float))
+        left, right = round(start * 16), min(duration, round((start + length) * 16))
+        return (left, right) if 0 <= left < right <= duration else None
+
+    phrases = raw.get("phrases", [])
+    if not isinstance(phrases, list):
+        raise mai_error("MAI phrases 格式无效；原始响应已保留。")
+    result: list[MaiPhrase] = []
+    for phrase in phrases:
+        if not isinstance(phrase, dict) or not isinstance(phrase.get("text"), str):
+            continue
+        text = phrase["text"].strip()
+        if not text:
+            continue
+        span = interval(phrase)
+        words = phrase.get("words", [])
+        tokens: list[tuple[str, int, int]] = []
+        if isinstance(words, list):
+            for word in words:
+                if (
+                    isinstance(word, dict)
+                    and isinstance(word.get("text"), str)
+                    and (bounds := interval(word))
+                ):
+                    tokens.append((word["text"], *bounds))
+        locale = str(phrase.get("locale", language)).split("-")[0]
+        if locale not in {"ja", "zh", "en"}:
+            locale = language if language in {"ja", "zh", "en"} else "auto_mixed"
+        speaker = phrase.get("speaker")
+        result.extend(
+            split_timed_phrase(
+                MaiPhrase(
+                    text,
+                    *(span or (0, 0)),
+                    locale,
+                    str(speaker) if isinstance(speaker, (str, int)) else None,
+                    span is not None,
+                    tuple(tokens),
+                )
+            )
+        )
+    if not result:
+        combined = raw.get("combinedPhrases", [])
+        text = (
+            "\n".join(
+                p["text"]
+                for p in combined
+                if isinstance(p, dict) and isinstance(p.get("text"), str)
+            )
+            if isinstance(combined, list)
+            else ""
+        )
+        if text.strip():
+            result.append(MaiPhrase(text.strip(), 0, 0, language, None, False, ()))
+        elif "phrases" not in raw and "combinedPhrases" not in raw:
+            raise mai_error("MAI 响应缺少转写字段；原始响应已保留。")
+    return tuple(result)

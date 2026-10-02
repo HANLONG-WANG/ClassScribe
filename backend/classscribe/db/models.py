@@ -131,6 +131,12 @@ class Recording(Base):
     channels: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     audio_qc_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    parent_recording_id: Mapped[str | None] = mapped_column(
+        ForeignKey("recordings.id", ondelete="RESTRICT"), index=True
+    )
+    source_start_sample: Mapped[int | None] = mapped_column(Integer)
+    source_end_sample: Mapped[int | None] = mapped_column(Integer)
+    clip_submission_key: Mapped[str | None] = mapped_column(String(36), unique=True)
 
     jobs: Mapped[list[Job]] = relationship(back_populates="recording", cascade="all, delete-orphan")
 
@@ -188,6 +194,31 @@ class Job(Base):
     )
     transcript_segments: Mapped[list[TranscriptSegment]] = relationship(
         back_populates="job", cascade="all, delete-orphan"
+    )
+
+
+class OnlineRequestAttempt(Base):
+    """Durable send intent; an unresolved send must never be retried automatically."""
+
+    __tablename__ = "online_request_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('prepared', 'sending', 'responded', 'imported', 'uncertain', 'failed')",
+            name="online_attempt_status",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), unique=True)
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    audio_sha256: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="prepared")
+    service_request_id: Mapped[str | None] = mapped_column(String(256))
+    response_path: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
 

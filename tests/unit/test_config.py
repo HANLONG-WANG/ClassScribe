@@ -47,7 +47,6 @@ def test_future_version_is_rejected() -> None:
 @pytest.mark.parametrize(
     ("yaml_text", "message"),
     [
-        ("config_version: 1\nprivacy:\n  runtime_offline: false\n", "runtime_offline"),
         ("config_version: 1\nhardware:\n  one_heavy_worker: false\n", "one_heavy_worker"),
         ("config_version: 1\nserver:\n  host: 0.0.0.0\n", "host"),
         ("config_version: 1\nunknown: true\n", "unknown"),
@@ -97,3 +96,13 @@ def test_invalid_speaker_policies_are_rejected(classroom_yaml: str, tmp_path: Pa
     user.write_text(f"config_version: 1\nclassroom:\n  {classroom_yaml}\n", encoding="utf-8")
     with pytest.raises(ConfigError, match=r"speaker|expected|prior_typical"):
         load_config(user, environment={})
+
+
+def test_online_permission_requires_explicit_opt_in() -> None:
+    assert load_config(environment={}).privacy.runtime_offline is True
+    assert (
+        load_config(
+            environment={"CLASSSCRIBE__PRIVACY__RUNTIME_OFFLINE": "false"}
+        ).privacy.runtime_offline
+        is False
+    )

@@ -58,6 +58,11 @@ def build_subtitle_cues(
 ) -> tuple[SubtitleCue, ...]:
     cues: list[SubtitleCue] = []
     for segment in segments:
+        if (
+            segment.timing_quality == "invalid"
+            or segment.span.end_sample <= segment.span.start_sample
+        ):
+            continue
         text, _ = segment.text_for(layer)
         tokens = segment.tokens_for(layer)
         tokens = _project_surface(_expand_tokens(tokens, segment.language), text)

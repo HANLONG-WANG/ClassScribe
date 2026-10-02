@@ -32,13 +32,17 @@ function Waveform({
   job,
   duration,
   onReady,
+  request,
 }: {
   job: Job;
   duration: number;
   onReady: (wave: WaveSurfer | null) => void;
+  request: { start: number; end: number; play: boolean } | null;
 }) {
   const target = useRef<HTMLDivElement>(null);
   const instance = useRef<WaveSurfer | null>(null);
+  const endAt = useRef<number | null>(null);
+  const generation = useRef(0);
   const [ready, setReady] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [position, setPosition] = useState(0);
@@ -46,6 +50,36 @@ function Waveform({
   const [loadRequested, setLoadRequested] = useState(
     duration <= 30 * 60 * 16000,
   );
+  useEffect(() => {
+    if (request) setLoadRequested(true);
+  }, [request]);
+  useEffect(() => {
+    const wave = instance.current;
+    if (!request || !ready || !wave) return;
+    const current = ++generation.current;
+    endAt.current = null;
+    wave.pause();
+    const end = Math.min(request.end, wave.getDuration());
+    if (
+      !Number.isFinite(request.start) ||
+      !Number.isFinite(end) ||
+      request.start < 0 ||
+      end <= request.start
+    ) {
+      setError("该句段缺少可用时间戳，无法回听。");
+      return;
+    }
+    setError(null);
+    wave.setTime(request.start);
+    if (request.play) {
+      endAt.current = end;
+      void wave.play().catch((reason: unknown) => {
+        if (generation.current !== current || instance.current !== wave) return;
+        endAt.current = null;
+        setError(reason instanceof Error ? reason.message : "播放失败，请重试");
+      });
+    }
+  }, [request, ready]);
   useEffect(() => {
     if (!loadRequested || target.current === null) return;
     const wave = WaveSurfer.create({
@@ -74,12 +108,23 @@ function Waveform({
     });
     wave.on("timeupdate", (seconds) => {
       setPosition(seconds);
+      if (endAt.current !== null && seconds >= endAt.current) {
+        const end = endAt.current;
+        endAt.current = null;
+        wave.pause();
+        wave.setTime(end);
+      }
+    });
+    wave.on("interaction", () => {
+      endAt.current = null;
+      generation.current++;
     });
     wave.on("error", (reason) => {
       setError(reason.message);
       setReady(false);
     });
     return () => {
+      endAt.current = null;
       instance.current = null;
       onReady(null);
       wave.destroy();
@@ -108,6 +153,8 @@ function Waveform({
           disabled={!ready}
           onClick={() => {
             setError(null);
+            endAt.current = null;
+            generation.current++;
             void instance.current?.playPause().catch((reason: unknown) => {
               setError(
                 reason instanceof Error ? reason.message : "播放失败，请重试",
@@ -121,6 +168,7 @@ function Waveform({
           type="button"
           disabled={!ready}
           onClick={() => {
+            endAt.current = null;
             instance.current?.skip(-10);
           }}
         >
@@ -130,6 +178,7 @@ function Waveform({
           type="button"
           disabled={!ready}
           onClick={() => {
+            endAt.current = null;
             instance.current?.skip(10);
           }}
         >
@@ -159,7 +208,9 @@ function Waveform({
           <span role="status">音频加载中…</span>
         )}
       </div>
-      <p className="muted">点击波形或句段可定位音频，再按播放开始收听。</p>
+      <p className="muted">
+        点击句段立即回听，到句尾自动停止。点击波形可自由定位。
+      </p>
       {error && <p role="alert">音频不可播放：{error}</p>}
     </>
   );
@@ -175,6 +226,12 @@ export function TranscriptPage() {
   const lowOnly = useWorkbench((state) => state.lowConfidenceOnly);
   const setLowOnly = useWorkbench((state) => state.setLowConfidenceOnly);
   const wave = useRef<WaveSurfer | null>(null);
+  const [playback, setPlayback] = useState<{
+    jobId: string | null;
+    start: number;
+    end: number;
+    play: boolean;
+  } | null>(null);
   const client = useQueryClient();
   const [mediaDuration, setMediaDuration] = useState(0);
   const onWaveReady = useCallback((instance: WaveSurfer | null) => {
@@ -306,7 +363,12 @@ export function TranscriptPage() {
 
   function seek(segment: Segment) {
     selectSegment(segment.id);
-    wave.current?.setTime(segment.start_sample / 16000);
+    setPlayback({
+      jobId,
+      start: segment.start_sample / 16000,
+      end: segment.end_sample / 16000,
+      play: true,
+    });
   }
 
   return (
@@ -344,12 +406,44 @@ export function TranscriptPage() {
         </label>
       </header>
       <div className="panel timeline-panel">
+        {recording.data?.parent_recording_id && (
+          <p className="muted">
+            来源录音片段：
+            {formatSamples(recording.data.source_start_sample ?? 0)} —{" "}
+            {formatSamples(recording.data.source_end_sample ?? 0)}
+            。下方时间从片段起点计算。
+          </p>
+        )}
         <Waveform
           key={job.data.recording_id}
           duration={duration}
           job={job.data}
           onReady={onWaveReady}
+          request={playback?.jobId === jobId ? playback : null}
         />
+        <button
+          type="button"
+          disabled={!selectedId}
+          onClick={() => {
+            const segment = fullSegments.find((item) => item.id === selectedId);
+            if (segment)
+              setPlayback({
+                jobId,
+                start: segment.start_sample / 16000,
+                end: segment.end_sample / 16000,
+                play: false,
+              });
+          }}
+        >
+          仅定位所选句段
+        </button>
+        {fullSegments.some(
+          (segment) => segment.timing_quality === "invalid",
+        ) && (
+          <p role="status">
+            部分文本缺少有效时间戳，无法回听，也不会写入字幕；全文仍保留。
+          </p>
+        )}
         <TimelineTrack
           label="说话人"
           segments={fullSegments}
@@ -407,6 +501,16 @@ export function TranscriptPage() {
                   {formatSamples(segment.start_sample)}
                   <br />
                   {formatSamples(segment.end_sample)}
+                  {recording.data?.source_start_sample != null &&
+                    segment.timing_quality !== "invalid" && (
+                      <small>
+                        原录音{" "}
+                        {formatSamples(
+                          recording.data.source_start_sample +
+                            segment.start_sample,
+                        )}
+                      </small>
+                    )}
                 </span>
                 <span className="speaker-chip">
                   {segment.speaker_name ?? segment.speaker_id ?? "Speaker ?"}

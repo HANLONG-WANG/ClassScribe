@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from classscribe.contracts import LanguageMode, ModelSelectionMode
 from classscribe.exports import ExportFormat, ExportLayer, ExportView
@@ -18,7 +18,13 @@ class LocalDataClearRequest(APIModel):
     confirmation: str
 
 
+class MaiCredentialUpdate(APIModel):
+    endpoint: str
+    key: SecretStr
+
+
 class JobCreate(APIModel):
+    provider: Literal["local", "azure_mai"] = "local"
     submission_key: str | None = None
     recording_id: str
     language: LanguageMode
@@ -46,6 +52,18 @@ class JobCreate(APIModel):
             raise ValueError("strict single mode requires primary_model_id")
         if not self.outputs:
             raise ValueError("at least one output format is required")
+        return self
+
+
+class ClipCreate(APIModel):
+    submission_key: str = Field(min_length=1, max_length=36)
+    start_sample: int = Field(strict=True, ge=0)
+    end_sample: int = Field(strict=True, gt=0)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> ClipCreate:
+        if self.start_sample >= self.end_sample:
+            raise ValueError("clip start must precede end")
         return self
 
 

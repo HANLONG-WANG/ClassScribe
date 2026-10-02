@@ -184,6 +184,9 @@ export async function uploadRecording(
 }
 
 export interface Recording {
+  parent_recording_id?: string | null;
+  source_start_sample?: number | null;
+  source_end_sample?: number | null;
   id: string;
   source_name: string;
   duration_samples: number;

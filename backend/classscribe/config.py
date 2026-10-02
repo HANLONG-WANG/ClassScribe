@@ -40,7 +40,7 @@ class ServerConfig(StrictModel):
 
 
 class PrivacyConfig(StrictModel):
-    runtime_offline: Literal[True] = True
+    runtime_offline: bool = True
     save_dictation_audio: bool = False
     log_transcript_text: bool = False
 

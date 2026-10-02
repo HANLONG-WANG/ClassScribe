@@ -6,6 +6,7 @@ import { removeStorage } from "../storage";
 import { useAuthStatus } from "../authStatus";
 import { useBatchImports } from "../batchImports";
 import { useTranscriptSaves } from "../transcriptSaves";
+import { MaiSettings } from "../components/MaiSettings";
 
 const deleteAllPhrase = "DELETE ALL CLASSSCRIBE DATA";
 
@@ -116,6 +117,7 @@ export function SettingsPage() {
           <p>正文默认不进入日志；听写原始音频默认不保存。</p>
         </div>
       </header>
+      <MaiSettings />
       <div className="settings-grid">
         <article className="panel">
           <h2>API 访问</h2>

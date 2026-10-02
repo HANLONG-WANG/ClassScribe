@@ -229,6 +229,13 @@ GLOBAL_CHECKPOINTS = (
     (JobStage.STRUCTURE, "moss_structure", 0),
     (JobStage.EXPORT, "automatic_exports", 0),
 )
+ONLINE_CHECKPOINTS = (
+    (JobStage.AUDIO_IMPORT, "upload_validate", 0),
+    (JobStage.AUDIO_IMPORT, "normalize_audio_master", 1),
+    (JobStage.TRANSCRIPTION, "mai_request", 0),
+    (JobStage.TRANSCRIPTION, "mai_import", 1),
+    (JobStage.EXPORT, "automatic_exports", 0),
+)
 SEGMENT_CHECKPOINTS = (
     (JobStage.TRANSCRIPTION, "primary_asr", 0),
     (JobStage.QUALITY, "quality_and_review", 0),
@@ -287,7 +294,11 @@ class ClassroomPipeline:
                 job,
                 (
                     CheckpointSpec(stage, key, position, dict(parameters))
-                    for stage, key, position in GLOBAL_CHECKPOINTS
+                    for stage, key, position in (
+                        ONLINE_CHECKPOINTS
+                        if parameters.get("provider", "local") == "azure_mai"
+                        else GLOBAL_CHECKPOINTS
+                    )
                 ),
             )
         self.broker.publish(job_id, "pipeline_initialized", stage=JobStage.CREATED.value)
@@ -499,7 +510,20 @@ class ClassroomPipeline:
                 self.runner.run(session, session.get_one(Job, job_id), checkpoint)
 
         try:
-            self.state.run_checkpoint(self.sessions, job_id, checkpoint_id, operation)
+            if key == "mai_request":
+                reporter = ActivityReporter(
+                    lambda **payload: self.broker.publish(job_id, "activity", **payload),
+                    run_id=run_id,
+                    checkpoint_id=checkpoint_id,
+                    checkpoint_key=key,
+                    attempt=attempt,
+                    stage=stage,
+                    segment_id=segment_id,
+                )
+                with activity_scope(reporter):
+                    self.runner.run_external(self.sessions, job_id, checkpoint_id)  # type: ignore[attr-defined]
+            else:
+                self.state.run_checkpoint(self.sessions, job_id, checkpoint_id, operation)
         except CheckpointInterrupted:
             self.broker.publish(job_id, "checkpoint_yielded", run_id=run_id, stage=stage)
             return True
@@ -650,6 +674,12 @@ class ClassroomPipeline:
         with self.sessions.begin() as session:
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             job = session.get_one(Job, job_id)
+            if job.options_json.get("provider", "local") == "azure_mai":
+                raise ClassScribeError(
+                    ErrorCode.JOB_STATE_CONFLICT,
+                    "Online segments cannot be rerun locally. "
+                    "Create a new MAI job to submit again.",
+                )
             if job.status in {JobStatus.RUNNING, JobStatus.CANCELLING} or any(
                 item.status is CheckpointStatus.RUNNING for item in job.checkpoints
             ):
@@ -813,6 +843,8 @@ class ClassroomPipeline:
         with self.sessions.begin() as session:
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             job = session.get_one(Job, job_id)
+            if job.options_json.get("provider", "local") == "azure_mai":
+                return
             existing = {
                 (checkpoint.segment_id, checkpoint.checkpoint_key) for checkpoint in job.checkpoints
             }

@@ -15,7 +15,10 @@ export interface ImportItem {
   size: number;
   file?: File | undefined;
   options: ApiObject;
-  status: "waiting" | "uploading" | "submitting" | "done" | "error";
+  status:
+    "waiting" | "uploading" | "prepared" | "submitting" | "done" | "error";
+  recording?: Recording;
+  clip?: { start_sample: number; end_sample: number };
   progress: number;
   error?: string | undefined;
   jobId?: string;
@@ -29,9 +32,12 @@ function restored(): ImportItem[] {
     return saved.map((item) => ({
       ...item,
       file: undefined,
-      status: item.status === "done" ? "done" : "error",
+      status:
+        item.status === "done" || item.status === "prepared"
+          ? item.status
+          : "error",
       error:
-        item.status === "done"
+        item.status === "done" || item.status === "prepared"
           ? undefined
           : "导入尚未完成，点击重试；未上传的文件需要重新选择。",
     }));
@@ -133,19 +139,36 @@ async function drain() {
     try {
       update(item.id, { status: "uploading", error: undefined });
       // A stable recording ID recovers uploads whose success response was lost.
-      const recording = await api<Recording>(`/recordings/${item.id}`, {
+      let recording = await api<Recording>(`/recordings/${item.id}`, {
         signal,
       }).catch((error: unknown) => {
         if (signal.aborted) throw error;
         return upload(item, signal);
       });
       if (signal.aborted) throw new Error("已停止入队，可重试");
+      const { prepare_only, ...jobOptions } = item.options;
+      if (prepare_only) {
+        update(item.id, {
+          status: "prepared",
+          recording,
+          progress: 100,
+          file: undefined,
+        });
+        continue;
+      }
+      if (item.clip) {
+        recording = await api<Recording>(`/recordings/${recording.id}/clips`, {
+          signal,
+          method: "POST",
+          body: JSON.stringify({ ...item.clip, submission_key: item.id }),
+        });
+      }
       update(item.id, { status: "submitting", progress: 100 });
       const job = await api<Job>("/jobs", {
         signal,
         method: "POST",
         body: JSON.stringify({
-          ...item.options,
+          ...jobOptions,
           recording_id: recording.id,
           submission_key: item.id,
         }),
@@ -170,6 +193,21 @@ function start() {
     )
       start();
   });
+}
+export function submitPreparedImport(
+  id: string,
+  clip?: { start_sample: number; end_sample: number },
+) {
+  const item = useBatchImports
+    .getState()
+    .items.find((entry) => entry.id === id);
+  if (!item || item.status !== "prepared") return;
+  update(id, {
+    options: { ...item.options, prepare_only: false },
+    ...(clip ? { clip } : {}),
+    status: "waiting",
+  });
+  start();
 }
 export function addImports(files: File[], options: ApiObject) {
   useBatchImports.setState(({ items }) => ({

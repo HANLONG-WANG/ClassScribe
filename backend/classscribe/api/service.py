@@ -2329,6 +2329,9 @@ def _recording_payload(item: Recording) -> dict[str, Any]:
         "audio_qc": item.audio_qc_json,
         "created_at": item.created_at.isoformat(),
         "media_url": f"/api/v1/recordings/{item.id}/media",
+        "parent_recording_id": item.parent_recording_id,
+        "source_start_sample": item.source_start_sample,
+        "source_end_sample": item.source_end_sample,
     }
 
 

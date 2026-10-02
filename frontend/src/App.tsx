@@ -109,7 +109,7 @@ export function App() {
           <span />
           <div>
             <strong>本机模式</strong>
-            <small>无遥测 · 无上传</small>
+            <small>默认本地 · 在线需授权</small>
           </div>
         </div>
       </aside>

@@ -3,12 +3,15 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from classscribe.db.models import SpeakerDisplayName, TokenSpan, TranscriptSegment
+from classscribe.db.models import Job, Recording, SpeakerDisplayName, TokenSpan, TranscriptSegment
 from classscribe.exports.models import ExportSegment, ExportToken
 from classscribe.timeline import SAMPLE_RATE, AudioSpan
 
 
 def load_export_segments(session: Session, job_id: str) -> tuple[ExportSegment, ...]:
+    recording = session.scalar(
+        select(Recording).join(Job, Job.recording_id == Recording.id).where(Job.id == job_id)
+    )
     names = {
         item.speaker_global_id: item.display_name
         for item in session.scalars(
@@ -56,6 +59,8 @@ def load_export_segments(session: Session, job_id: str) -> tuple[ExportSegment, 
                 if previous_end is not None
                 else 0,
                 timing_quality=segment.timing_quality.value,
+                source_recording_id=recording.parent_recording_id if recording else None,
+                source_offset_sample=recording.source_start_sample if recording else None,
             )
         )
         previous_end = segment.end_sample

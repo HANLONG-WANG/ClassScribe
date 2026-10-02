@@ -79,7 +79,12 @@ class DeletionService:
             select(func.count()).select_from(Job).where(Job.recording_id == job.recording_id)
         )
         roots = [job_root]
-        if recording is not None and other_jobs == 0:
+        child_clips = session.scalar(
+            select(func.count())
+            .select_from(Recording)
+            .where(Recording.parent_recording_id == job.recording_id)
+        )
+        if recording is not None and other_jobs == 0 and child_clips == 0:
             parse_uuid(recording.id, field="recording_id")
             roots.append(self.paths.data_path("recordings", recording.id))
             session.delete(recording)

@@ -15,6 +15,7 @@ from classscribe.api.schemas import (
     ApplyRanking,
     BenchmarkCreate,
     CandidateAdoption,
+    ClipCreate,
     ExportCreate,
     GlossaryCreate,
     GlossaryTermInput,
@@ -22,6 +23,7 @@ from classscribe.api.schemas import (
     HistoryAction,
     JobCreate,
     LocalDataClearRequest,
+    MaiCredentialUpdate,
     ModelInstallConfirmation,
     ModelInstallRequest,
     ModelRevisionRequest,
@@ -33,6 +35,8 @@ from classscribe.api.schemas import (
     SettingsUpdate,
 )
 from classscribe.api.service import ClassScribeService
+from classscribe.audio.clips import create_recording_clip
+from classscribe.classroom.online import ProviderStageRunner
 from classscribe.db.models import JobStatus
 from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.terminology import TermSource
@@ -65,6 +69,38 @@ async def bounded_body(request: Request, *, max_bytes: int = 64 * 1024 * 1024) -
 
 def create_api_router(service: ClassScribeService) -> APIRouter:
     router = APIRouter(prefix="/api/v1")
+
+    def online_runner() -> ProviderStageRunner:
+        runner = service.pipeline.runner if service.pipeline else None
+        if not isinstance(runner, ProviderStageRunner):
+            raise ClassScribeError(ErrorCode.JOB_STATE_CONFLICT, "MAI runtime unavailable")
+        return runner
+
+    @router.get("/online/mai")
+    def mai_status() -> dict[str, object]:
+        runner = online_runner()
+        return {**runner.credentials.status(), "offline": runner.config.privacy.runtime_offline}
+
+    @router.put("/online/mai")
+    async def configure_mai(request: Request) -> dict[str, object]:
+        # Do not let request-validation errors echo credential input to the browser.
+        try:
+            value = MaiCredentialUpdate.model_validate_json(
+                await bounded_body(request, max_bytes=8192)
+            )
+        except ValueError:
+            raise ClassScribeError(
+                ErrorCode.JOB_STATE_CONFLICT, "Invalid MAI credential input"
+            ) from None
+        runner = online_runner()
+        runner.credentials.configure(value.endpoint, value.key.get_secret_value())
+        return {**runner.credentials.status(), "offline": runner.config.privacy.runtime_offline}
+
+    @router.delete("/online/mai")
+    def clear_mai() -> dict[str, object]:
+        runner = online_runner()
+        runner.credentials.clear()
+        return {**runner.credentials.status(), "offline": runner.config.privacy.runtime_offline}
 
     @router.post("/recordings", status_code=status.HTTP_201_CREATED)
     async def create_recording(
@@ -103,6 +139,35 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
     def get_recording_media(recording_id: str) -> Response:
         path, source_name = service.recording_file(recording_id)
         return FileResponse(path, filename=source_name)
+
+    @router.post("/recordings/{recording_id}/clips", status_code=status.HTTP_201_CREATED)
+    async def clip_recording(
+        recording_id: str, value: ClipCreate, request: Request
+    ) -> dict[str, object]:
+        import threading
+
+        cancelled = threading.Event()
+        task = asyncio.create_task(
+            asyncio.to_thread(
+                create_recording_clip,
+                service.sessions,
+                service.paths,
+                recording_id,
+                value.submission_key,
+                value.start_sample,
+                value.end_sample,
+                cancelled=cancelled,
+            )
+        )
+        try:
+            while not task.done():
+                if await request.is_disconnected():
+                    cancelled.set()
+                await asyncio.sleep(0.1)
+            return service.recording(await task)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
 
     @router.post("/jobs", status_code=status.HTTP_201_CREATED)
     async def create_job(value: JobCreate) -> dict[str, object]:

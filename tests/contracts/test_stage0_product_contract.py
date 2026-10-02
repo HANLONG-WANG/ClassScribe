@@ -38,11 +38,15 @@ class ProductContractTests(unittest.TestCase):
 
     def test_local_only_privacy_policy(self) -> None:
         privacy = self.contract["privacy"]
-        self.assertIs(privacy["local_inference_only"], True)
+        self.assertIs(privacy["local_inference_only"], False)
         self.assertIs(privacy["telemetry"], False)
         self.assertEqual(
             privacy["network_operations"],
-            ["user_initiated_model_install", "user_initiated_model_update"],
+            [
+                "user_initiated_model_install",
+                "user_initiated_model_update",
+                "user_initiated_classroom_mai_transcription",
+            ],
         )
 
     def test_language_specific_inaudible_markers(self) -> None:

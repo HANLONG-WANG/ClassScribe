@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -11,14 +12,20 @@ import { afterEach, expect, it, vi } from "vitest";
 import { TranscriptPage } from "../src/pages/TranscriptPage";
 import { useWorkbench } from "../src/store";
 
-const player = vi.hoisted(() => ({
-  create: vi.fn(),
-  destroy: vi.fn(),
-  setTime: vi.fn(),
-  playPause: vi.fn().mockResolvedValue(undefined),
-  skip: vi.fn(),
-  setPlaybackRate: vi.fn(),
-}));
+const player = vi.hoisted(() => {
+  const events: Record<string, (seconds: number) => void> = {};
+  return {
+    events,
+    create: vi.fn(),
+    destroy: vi.fn(),
+    setTime: vi.fn(),
+    play: vi.fn().mockResolvedValue(undefined),
+    pause: vi.fn(),
+    playPause: vi.fn().mockResolvedValue(undefined),
+    skip: vi.fn(),
+    setPlaybackRate: vi.fn(),
+  };
+});
 vi.mock("wavesurfer.js", () => ({ default: { create: player.create } }));
 afterEach(() => {
   cleanup();
@@ -28,11 +35,14 @@ afterEach(() => {
 
 it("keeps the player on text-layer changes and seeks on the full recording timeline", async () => {
   player.create.mockImplementation(() => ({
-    on: (event: string, callback: () => void) => {
-      if (event === "ready") callback();
+    on: (event: string, callback: (seconds: number) => void) => {
+      player.events[event] = callback;
+      if (event === "ready") callback(0);
     },
     getDuration: () => 120,
     setTime: player.setTime,
+    play: player.play,
+    pause: player.pause,
     destroy: player.destroy,
     playPause: player.playPause,
     skip: player.skip,
@@ -127,6 +137,17 @@ it("keeps the player on text-layer changes and seeks on the full recording timel
   fireEvent.click(screen.getByRole("tab", { name: "忠实" }));
   fireEvent.click(row);
   expect(player.setTime).toHaveBeenCalledWith(30);
+  expect(player.play).toHaveBeenCalledOnce();
+  act(() => {
+    player.events.timeupdate?.(60.1);
+  });
+  expect(player.pause).toHaveBeenCalledTimes(2);
+  expect(player.setTime).toHaveBeenLastCalledWith(60);
+  fireEvent.click(row);
+  expect(player.play).toHaveBeenCalledTimes(2);
+  fireEvent.click(screen.getByRole("button", { name: "仅定位所选句段" }));
+  expect(player.play).toHaveBeenCalledTimes(2);
+  expect(player.setTime).toHaveBeenLastCalledWith(30);
   expect(player.create).toHaveBeenCalledTimes(1);
   expect(player.destroy).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "播放" }));

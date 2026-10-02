@@ -54,6 +54,44 @@ class Response:
         return json.loads(self.content or b"{}")
 
 
+def test_mai_credentials_require_auth_and_never_echo_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from classscribe.classroom.online import ProviderStageRunner
+    from classscribe.classroom.pipeline import ClassroomPipeline
+    from classscribe.config import load_config
+
+    monkeypatch.delenv("AZURE_SPEECH_ENDPOINT", raising=False)
+    monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
+    service, sessions = service_fixture(tmp_path)
+    runner = ProviderStageRunner(object(), service.paths, load_config(environment={}))
+    service.pipeline = ClassroomPipeline(sessions, runner)
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+    endpoint = "https://eastus.api.cognitive.microsoft.com"
+    secret = "private-credential-test-marker"
+    unauthorized = asyncio.run(request(app, "GET", "/api/v1/online/mai"))
+    assert unauthorized.status == 401
+    for key, success in [(secret, True), ({"invalid": secret}, False)]:
+        response = asyncio.run(
+            request(
+                app,
+                "PUT",
+                "/api/v1/online/mai",
+                headers=auth(token, csrf, write=True),
+                body=json.dumps({"endpoint": endpoint, "key": key}).encode(),
+            )
+        )
+        assert (response.status == 200) is success
+        assert secret not in response.content.decode()
+    response = asyncio.run(request(app, "GET", "/api/v1/online/mai", headers=auth(token, csrf)))
+    assert response.json() == {"configured": True, "endpoint": endpoint, "offline": True}
+    response = asyncio.run(
+        request(app, "DELETE", "/api/v1/online/mai", headers=auth(token, csrf, write=True))
+    )
+    assert response.json()["configured"] is False
+
+
 async def request(
     app: ASGIApp,
     method: str,

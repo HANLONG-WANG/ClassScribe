@@ -58,11 +58,15 @@ class ExportSegment:
     chapter_marker: str | None = None
     semantic_boundary_before: bool = False
     timing_quality: str = "aligned"
+    source_recording_id: str | None = None
+    source_offset_sample: int | None = None
 
     def __post_init__(self) -> None:
-        if not self.segment_id or self.language not in {"zh", "ja", "en"}:
+        if not self.segment_id or self.language not in {"zh", "ja", "en", "auto_mixed"}:
             raise ValueError("export segment identity/language is invalid")
-        if self.span.duration_samples <= 0 or self.pause_before_ms < 0:
+        if (
+            self.span.duration_samples <= 0 and self.timing_quality != "invalid"
+        ) or self.pause_before_ms < 0:
             raise ValueError("export segment timing is invalid")
         for tokens in (self.faithful_tokens, self.smart_tokens, self.user_tokens):
             previous_end = self.span.start_sample
