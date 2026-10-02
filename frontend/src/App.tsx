@@ -109,7 +109,7 @@ export function App() {
           <span />
           <div>
             <strong>本机模式</strong>
-            <small>默认本地 · 在线需授权</small>
+            <small>本地或在线 · 按所选服务处理</small>
           </div>
         </div>
       </aside>

@@ -41,7 +41,7 @@ def test_unified_doctor_reports_dependencies_diagnostics_and_bundle(
     payload = json.loads(capsys.readouterr().out)
     assert payload["dependencies"]["ready"] is True
     assert payload["system"]["distribution"] == "Fedora fixture"
-    assert payload["configuration"]["runtime_offline"] is True
+    assert "runtime_offline" not in payload["configuration"]
     assert payload["bundle"] == {"written": True, "path": str(bundle)}
     assert bundle.is_file() and bundle.stat().st_mode & 0o777 == 0o600
 

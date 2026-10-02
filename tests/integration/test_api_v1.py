@@ -85,11 +85,18 @@ def test_mai_credentials_require_auth_and_never_echo_keys(
         assert (response.status == 200) is success
         assert secret not in response.content.decode()
     response = asyncio.run(request(app, "GET", "/api/v1/online/mai", headers=auth(token, csrf)))
-    assert response.json() == {"configured": True, "endpoint": endpoint, "offline": True}
+    assert response.json() == {"configured": True, "endpoint": endpoint}
+    credential_path = service.paths.config / "azure-mai.env"
+    assert credential_path.stat().st_mode & 0o777 == 0o600
+    restarted = ProviderStageRunner(object(), service.paths, load_config(environment={}))
+    assert restarted.credentials.get()[1] == secret
+    assert secret not in json.dumps(restarted.credentials.status())
     response = asyncio.run(
         request(app, "DELETE", "/api/v1/online/mai", headers=auth(token, csrf, write=True))
     )
     assert response.json()["configured"] is False
+    assert not credential_path.exists()
+    assert not restarted.credentials.status()["configured"]
 
 
 async def request(

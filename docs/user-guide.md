@@ -36,12 +36,13 @@ manifest SHA、下载量、安装后占用、临时空间、独立 worker 环境
 
 默认使用本地模型。也可选择 **Azure MAI-Transcribe-2** 在线转写，无需安装本地语音模型：
 
-1. 在用户 `config.yaml` 的 `privacy` 分组中设置 `runtime_offline: false`，或为 core
-   进程设置 `CLASSSCRIBE__PRIVACY__RUNTIME_OFFLINE=false`，然后重启。
-2. 在“设置与诊断 → Azure MAI 在线转写”填写 Azure Speech HTTPS Endpoint 和 Key。
-   Key 仅保存在当前后端进程内，重启后清除；也支持进程环境变量
-   `AZURE_SPEECH_ENDPOINT` 和 `AZURE_SPEECH_KEY`。清除内存凭据不会删除环境变量配置。
-3. 导入页选择 MAI，勾选上传授权后提交。上传的是实际转写范围的无损 FLAC 及所选词典术语，
+1. 在“设置与诊断 → Azure MAI 在线转写”填写 Azure Speech HTTPS Endpoint 和 Key。
+   点击“保存凭据”后，凭据以 0600 权限持久化到 `$XDG_CONFIG_HOME/classscribe/azure-mai.env`
+   （默认 `~/.config/classscribe/azure-mai.env`），重启后仍然有效。该专用文件及写入临时文件
+   已加入 Git 忽略规则，也支持进程环境变量 `AZURE_SPEECH_ENDPOINT` 和 `AZURE_SPEECH_KEY`。
+   “清除凭据”会删除已保存的文件；环境变量配置仍然有效。
+2. 导入页选择 MAI 后直接提交，无需额外勾选上传授权或开启联网开关。
+   本地模型在本机处理，MAI 在线处理。上传的是实际转写范围的无损 FLAC 及所选词典术语，
    不上传原文件名。Azure 可能计费；取消本地请求不保证云端停止处理或计费。
 
 MAI 使用 Speech REST `2025-10-15`，请求 verbatim 文本和 word 时间戳；自动／混合语言不强制

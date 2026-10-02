@@ -34,7 +34,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     payload["configuration"] = {
         "status": "ok",
         "version": config.config_version,
-        "runtime_offline": config.privacy.runtime_offline,
         "loopback_host": config.server.host,
     }
     if args.bundle is not None:

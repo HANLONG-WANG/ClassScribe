@@ -52,7 +52,7 @@ class ProviderStageRunner:
         self.local = local
         self.paths = paths
         self.config = config
-        self.credentials = MaiCredentials()
+        self.credentials = MaiCredentials(paths.config / "azure-mai.env")
         self.client = MaiClient()
 
     def __getattr__(self, name: str) -> Any:
@@ -70,10 +70,6 @@ class ProviderStageRunner:
         if parameters.get("provider", "local") == "local":
             self.local.preflight(parameters, session)
             return
-        if self.config.privacy.runtime_offline:
-            raise mai_error(
-                "当前启用了离线模式。请在配置中将 privacy.runtime_offline 设为 false 后重启。"
-            )
         self.credentials.get()
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
             raise mai_error("MAI 音频处理需要 ffmpeg 和 ffprobe。")
@@ -132,7 +128,7 @@ class ProviderStageRunner:
     def _request(self, sessions: sessionmaker[Session], job_id: str) -> None:
         response_path = self.paths.data_path("jobs", job_id, "online", "response.raw.json")
         # Atomic response publication can precede the database commit during a crash.
-        # Recover local evidence before consulting network permissions or volatile credentials.
+        # Recover local evidence before consulting credentials or sending another request.
         with sessions.begin() as session:
             attempt = session.scalar(
                 select(OnlineRequestAttempt).where(OnlineRequestAttempt.job_id == job_id)
@@ -146,8 +142,6 @@ class ProviderStageRunner:
                     attempt.status = "responded"
                 attempt.response_path = str(response_path)
                 return
-        if self.config.privacy.runtime_offline:
-            raise mai_error("离线模式禁止 MAI 请求。")
         endpoint, key = self.credentials.get()
         with sessions() as session:
             job = session.get_one(Job, job_id)

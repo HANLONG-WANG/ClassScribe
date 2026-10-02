@@ -941,6 +941,25 @@ details summary {
   margin: 0.8rem 0 0;
   font-size: 1rem;
 }
+.mai-settings {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.mai-settings p {
+  margin-bottom: 0;
+}
+.mai-settings .form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+}
+.mai-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.mai-credential-status {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
 .toggle-line {
   display: flex;
   align-items: center;

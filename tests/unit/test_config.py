@@ -13,7 +13,7 @@ def test_default_and_full_example_parse() -> None:
     assert default == example
     assert default.config_version == 1
     assert default.classroom.default_language is LanguageMode.JAPANESE
-    assert default.privacy.runtime_offline is True
+    assert "runtime_offline" not in default.privacy.model_dump()
     assert default.hardware.one_heavy_worker is True
     assert default.classroom.auto_export == ("json", "markdown", "srt", "vtt")
     assert default.classroom.expected_speakers == "auto"
@@ -36,7 +36,7 @@ def test_v0_migration_renames_legacy_fields(tmp_path: Path) -> None:
     config = load_config(user, environment={})
     assert config.config_version == 1
     assert config.server.host == "localhost"
-    assert config.privacy.runtime_offline is True
+    assert "runtime_offline" not in config.privacy.model_dump()
 
 
 def test_future_version_is_rejected() -> None:
@@ -98,11 +98,10 @@ def test_invalid_speaker_policies_are_rejected(classroom_yaml: str, tmp_path: Pa
         load_config(user, environment={})
 
 
-def test_online_permission_requires_explicit_opt_in() -> None:
-    assert load_config(environment={}).privacy.runtime_offline is True
-    assert (
-        load_config(
-            environment={"CLASSSCRIBE__PRIVACY__RUNTIME_OFFLINE": "false"}
-        ).privacy.runtime_offline
-        is False
-    )
+@pytest.mark.parametrize("value", ["true", "false"])
+def test_legacy_offline_settings_are_ignored(tmp_path: Path, value: str) -> None:
+    default = load_config(environment={})
+    user = tmp_path / "config.yaml"
+    user.write_text(f"config_version: 1\nprivacy:\n  runtime_offline: {value}\n")
+    assert load_config(user, environment={}) == default
+    assert load_config(environment={"CLASSSCRIBE__PRIVACY__RUNTIME_OFFLINE": value}) == default

@@ -42,6 +42,68 @@ def test_credentials_status_never_contains_key(monkeypatch: pytest.MonkeyPatch) 
     assert not credentials.status()["configured"]
 
 
+def test_credentials_persist_replace_and_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
+    path = tmp_path / "config" / "azure-mai.env"
+    endpoint = "https://eastus.api.cognitive.microsoft.com"
+    credentials = MaiCredentials(path)
+    credentials.configure(endpoint, "first-test-key")
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert path.parent.stat().st_mode & 0o777 == 0o700
+    restarted = MaiCredentials(path)
+    assert restarted.get() == (normalize_endpoint(endpoint), "first-test-key")
+    credentials.configure(endpoint, "replacement-test-key")
+    assert restarted.get()[1] == "replacement-test-key"
+    assert "first-test-key" not in path.read_text()
+    with pytest.raises(ClassScribeError):
+        credentials.configure(endpoint, "invalid key")
+    assert restarted.get()[1] == "replacement-test-key"
+    assert "replacement-test-key" not in json.dumps(restarted.status())
+    restarted.clear()
+    assert not path.exists()
+    assert not credentials.status()["configured"]
+    assert not MaiCredentials(path).status()["configured"]
+
+
+def test_cleared_credentials_keep_environment_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    endpoint = "https://eastus.api.cognitive.microsoft.com"
+    monkeypatch.setenv("AZURE_SPEECH_ENDPOINT", endpoint)
+    monkeypatch.setenv("AZURE_SPEECH_KEY", "environment-test-key")
+    credentials = MaiCredentials(tmp_path / "azure-mai.env")
+    assert credentials.get()[1] == "environment-test-key"
+    credentials.configure(endpoint, "saved-test-key")
+    assert credentials.get()[1] == "saved-test-key"
+    credentials.clear()
+    assert credentials.get()[1] == "environment-test-key"
+
+
+def test_credential_file_errors_are_private(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AZURE_SPEECH_KEY", raising=False)
+    endpoint = "https://eastus.api.cognitive.microsoft.com"
+    path = tmp_path / "azure-mai.env"
+    credentials = MaiCredentials(path)
+    credentials.configure(endpoint, "private-test-marker")
+    path.chmod(0o644)
+    with pytest.raises(ClassScribeError, match="无法读取本地 MAI 凭据") as error:
+        credentials.get()
+    assert "private-test-marker" not in str(error.value)
+    assert not credentials.status()["configured"]
+    credentials.configure(endpoint, "replacement-test-marker")
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert credentials.get()[1] == "replacement-test-marker"
+    path.unlink()
+    path.mkdir()
+    with pytest.raises(ClassScribeError, match="无法保存本地 MAI 凭据") as error:
+        credentials.configure(endpoint, "private-test-marker")
+    assert "private-test-marker" not in str(error.value)
+
+
 def test_definition_is_explicit_mai_with_verbatim_words() -> None:
     definition = request_definition({"language": "ja", "speaker_count": "1"}, ["GPU", "GPU"])
     assert definition["locales"] == ["ja"]

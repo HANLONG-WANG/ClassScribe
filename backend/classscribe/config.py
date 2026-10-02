@@ -40,7 +40,6 @@ class ServerConfig(StrictModel):
 
 
 class PrivacyConfig(StrictModel):
-    runtime_offline: bool = True
     save_dictation_audio: bool = False
     log_transcript_text: bool = False
 
@@ -211,12 +210,12 @@ def migrate_config(raw: Mapping[str, Any]) -> dict[str, Any]:
             if "host" in server:
                 raise ConfigError("legacy server.bind conflicts with server.host")
             server["host"] = server.pop("bind")
-        privacy = migrated.get("privacy")
-        if isinstance(privacy, dict) and "offline" in privacy:
-            if "runtime_offline" in privacy:
-                raise ConfigError("legacy privacy.offline conflicts with privacy.runtime_offline")
-            privacy["runtime_offline"] = privacy.pop("offline")
         migrated["config_version"] = 1
+    privacy = migrated.get("privacy")
+    if isinstance(privacy, dict):
+        # Provider selection controls online transcription; discard obsolete switches.
+        privacy.pop("runtime_offline", None)
+        privacy.pop("offline", None)
     return migrated
 
 
@@ -256,6 +255,7 @@ def load_config(
     if "config_version" in overrides:
         raise ConfigError("config_version cannot be overridden through the environment")
     _deep_merge(merged, overrides)
+    merged = migrate_config(merged)
     try:
         return AppConfig.model_validate(merged)
     except ValidationError as exc:

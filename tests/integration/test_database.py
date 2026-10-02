@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from alembic import command
@@ -356,4 +357,151 @@ def test_production_upgrade_uses_authoritative_path(
     assert "is_active" in {c["name"] for c in inspect(engine).get_columns("transcript_segments")}
     assert not (tmp_path / "wrong.sqlite3").exists()
     upgrade_schema(engine)
+    engine.dispose()
+
+
+def _populated_previous_database(path: Path) -> tuple[Config, Engine]:
+    from classscribe.db.session import create_sqlite_engine
+
+    config = Config()
+    config.set_main_option(
+        "script_location", str(Path("backend/classscribe/db/migrations").resolve())
+    )
+    config.attributes["database_url"] = f"sqlite:///{path}"
+    command.upgrade(config, "b12d940ac831")
+    engine = create_sqlite_engine(path)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "INSERT INTO recordings "
+            "(id, source_name, source_sha256, source_path, duration_samples, "
+            "sample_rate, channels, created_at, audio_qc_json) "
+            "VALUES ('recording', 'lecture.wav', ?, 'jobs/source', 16000, "
+            "16000, 1, CURRENT_TIMESTAMP, '{}')",
+            ("a" * 64,),
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO jobs "
+            "(id, recording_id, language_mode, profile_id, status, stage, progress, "
+            "created_at, updated_at, options_json) "
+            "VALUES ('job', 'recording', 'ja', 'auto_best', 'completed', 'completed', "
+            "1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, '{}')"
+        )
+    with Session(engine) as session:
+        session.add(
+            TranscriptSegment(
+                job_id="job",
+                start_sample=0,
+                end_sample=16000,
+                language=LanguageMode.JAPANESE,
+                faithful_text="Existing transcript",
+            )
+        )
+        session.commit()
+    return config, engine
+
+
+@pytest.mark.parametrize("failed_batch_table", [False, True])
+def test_populated_recordings_migration_preserves_history(
+    tmp_path: Path, failed_batch_table: bool
+) -> None:
+    from classscribe.db.session import upgrade_schema
+
+    config, engine = _populated_previous_database(tmp_path / "populated.sqlite3")
+    with engine.begin() as connection:
+        recordings_before = connection.exec_driver_sql("SELECT * FROM recordings").all()
+        jobs_before = connection.exec_driver_sql("SELECT * FROM jobs").all()
+        transcripts_before = connection.exec_driver_sql("SELECT * FROM transcript_segments").all()
+        if failed_batch_table:
+            connection.exec_driver_sql(
+                "CREATE TABLE _alembic_tmp_recordings AS SELECT * FROM recordings WHERE 0"
+            )
+    upgrade_schema(engine)
+    upgrade_schema(engine)
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql(
+            "SELECT version_num FROM alembic_version"
+        ).scalar_one() == ("f2a6c8419d30")
+        recordings_after = connection.exec_driver_sql("SELECT * FROM recordings").all()
+        assert [row[: len(recordings_before[0])] for row in recordings_after] == recordings_before
+        assert connection.exec_driver_sql("SELECT * FROM jobs").all() == jobs_before
+        assert connection.exec_driver_sql("SELECT * FROM transcript_segments").all() == (
+            transcripts_before
+        )
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    assert "_alembic_tmp_recordings" not in inspect(engine).get_table_names()
+    assert sqlite_pragmas(engine)["foreign_keys"] == 1
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.exec_driver_sql("DELETE FROM recordings WHERE id='recording'")
+    command.check(config)
+    command.downgrade(config, "b12d940ac831")
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT * FROM recordings").all() == recordings_before
+        assert connection.exec_driver_sql("SELECT * FROM jobs").all() == jobs_before
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    upgrade_schema(engine)
+    engine.dispose()
+
+
+def test_recordings_migration_preserves_populated_temporary_table(tmp_path: Path) -> None:
+    from classscribe.db.session import upgrade_schema
+
+    _, engine = _populated_previous_database(tmp_path / "temporary-data.sqlite3")
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "CREATE TABLE _alembic_tmp_recordings AS SELECT * FROM recordings"
+        )
+    with pytest.raises(RuntimeError, match="contains temporary data"):
+        upgrade_schema(engine)
+    assert "parent_recording_id" not in {
+        column["name"] for column in inspect(engine).get_columns("recordings")
+    }
+    with engine.connect() as connection:
+        assert (
+            connection.exec_driver_sql("SELECT count(*) FROM _alembic_tmp_recordings").scalar_one()
+            == 1
+        )
+        assert connection.exec_driver_sql(
+            "SELECT version_num FROM alembic_version"
+        ).scalar_one() == ("b12d940ac831")
+    engine.dispose()
+
+
+@pytest.mark.parametrize("failure", ["exception", "foreign_key"])
+def test_recordings_migration_rolls_back_schema_and_data_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    from alembic import op
+    from classscribe.db.session import upgrade_schema
+
+    _, engine = _populated_previous_database(tmp_path / "rollback.sqlite3")
+    create_table = op.create_table
+
+    def fail_after_recordings_rebuild(*args: Any, **kwargs: Any) -> object:
+        if args[0] == "online_request_attempts":
+            if failure == "exception":
+                raise RuntimeError("Injected migration failure")
+            op.get_bind().exec_driver_sql("UPDATE jobs SET recording_id='missing' WHERE id='job'")
+        return create_table(*args, **kwargs)
+
+    monkeypatch.setattr(op, "create_table", fail_after_recordings_rebuild)
+    message = "Injected migration failure" if failure == "exception" else "foreign key constraints"
+    with pytest.raises(RuntimeError, match=message):
+        upgrade_schema(engine)
+    assert "parent_recording_id" not in {
+        column["name"] for column in inspect(engine).get_columns("recordings")
+    }
+    assert "_alembic_tmp_recordings" not in inspect(engine).get_table_names()
+    assert "online_request_attempts" not in inspect(engine).get_table_names()
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql(
+            "SELECT version_num FROM alembic_version"
+        ).scalar_one() == ("b12d940ac831")
+        assert connection.exec_driver_sql("SELECT recording_id FROM jobs").scalar_one() == (
+            "recording"
+        )
+        assert (
+            connection.exec_driver_sql("SELECT count(*) FROM transcript_segments").scalar_one() == 1
+        )
+        assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+    assert sqlite_pragmas(engine)["foreign_keys"] == 1
     engine.dispose()

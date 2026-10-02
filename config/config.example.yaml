@@ -10,8 +10,7 @@ server:
   require_token: true
 
 privacy:
-  # runtime_offline is an invariant and therefore can only be true.
-  runtime_offline: true
+  # The selected transcription provider determines local or online processing.
   save_dictation_audio: false
   log_transcript_text: false
 

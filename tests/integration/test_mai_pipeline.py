@@ -56,7 +56,7 @@ def setup_online(
                     output.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
                     output.writeframes(b"\0\0" * 160000)
 
-    config = load_config(environment={"CLASSSCRIBE__PRIVACY__RUNTIME_OFFLINE": "false"})
+    config = load_config(environment={})
     runner = ProviderStageRunner(Local(), paths, config)
     runner.credentials.configure("https://eastus.api.cognitive.microsoft.com", "secret-marker")
     pipeline = ClassroomPipeline(sessions, runner)
@@ -153,11 +153,11 @@ def test_uncertain_send_is_never_repeated(database: Any, tmp_path: Path) -> None
     assert len(calls) == 1
 
 
-def test_offline_mode_blocks_before_transport(database: Any, tmp_path: Path) -> None:
+def test_selected_provider_controls_preflight(database: Any, tmp_path: Path) -> None:
     _, runner, _, _ = setup_online(database, tmp_path)
-    runner.config = load_config(environment={})
-    with pytest.raises(ClassScribeError, match="离线模式"):
-        runner.preflight({"provider": "azure_mai"})
+    runner.preflight({"provider": "azure_mai"})
+    with pytest.raises(AssertionError, match="online preflight must not load local models"):
+        runner.preflight({"provider": "local"})
 
 
 def test_recovers_published_response_without_credentials_or_network(
@@ -215,7 +215,7 @@ def test_real_clip_normalization_online_import_and_exports(database: Any, tmp_pa
             )
         )
     clip_id = create_recording_clip(sessions, paths, recording_id, str(uuid4()), 1234, 30000)
-    config = load_config(environment={"CLASSSCRIBE__PRIVACY__RUNTIME_OFFLINE": "false"})
+    config = load_config(environment={})
     local = ProductionStageRunner(
         paths,
         config,

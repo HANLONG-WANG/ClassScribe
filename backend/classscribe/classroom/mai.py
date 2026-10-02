@@ -22,6 +22,7 @@ from urllib.request import getproxies, proxy_bypass
 from uuid import uuid4
 
 from classscribe.errors import ClassScribeError, ErrorCode
+from classscribe.security import RestrictedCredentialEnvironment
 
 API_VERSION = "2025-10-15"
 MODEL = "MAI-Transcribe-2"
@@ -52,31 +53,63 @@ def normalize_endpoint(value: str) -> str:
 
 
 class MaiCredentials:
-    """Process-memory credentials; never serialize the key or persist browser input."""
+    """Private local credentials with optional persistence and environment fallback."""
 
-    def __init__(self) -> None:
+    def __init__(self, path: Path | None = None) -> None:
         self._lock = threading.Lock()
+        self._path = path
         self._value: tuple[str, str] | None = None
 
     def configure(self, endpoint: str, key: str) -> None:
-        endpoint = normalize_endpoint(endpoint)
+        endpoint = normalize_endpoint(endpoint).split("?")[0]
         key = key.strip()
         if not key or any(ord(char) < 33 or ord(char) > 126 for char in key):
             raise mai_error("请输入有效的 Azure Speech Key。")
         with self._lock:
+            if self._path is not None:
+                try:
+                    RestrictedCredentialEnvironment(self._path).write(
+                        {
+                            "AZURE_SPEECH_ENDPOINT": endpoint.split("/speechtotext")[0],
+                            "AZURE_SPEECH_KEY": key,
+                        }
+                    )
+                except (OSError, ValueError):
+                    raise mai_error("无法保存本地 MAI 凭据，请检查配置目录权限。") from None
             self._value = endpoint, key
 
     def clear(self) -> None:
         with self._lock:
+            if self._path is not None:
+                try:
+                    self._path.unlink(missing_ok=True)
+                except OSError:
+                    raise mai_error("无法清除本地 MAI 凭据，请检查配置目录权限。") from None
             self._value = None
 
     def get(self) -> tuple[str, str]:
         with self._lock:
             value = self._value
-        if value is not None:
-            return value
-        endpoint = os.environ.get("AZURE_SPEECH_ENDPOINT", "")
-        key = os.environ.get("AZURE_SPEECH_KEY", "").strip()
+            if self._path is not None:
+                try:
+                    saved = RestrictedCredentialEnvironment(self._path).load()
+                except FileNotFoundError:
+                    value = None
+                except (OSError, ValueError):
+                    raise mai_error("无法读取本地 MAI 凭据，请重新保存凭据。") from None
+                else:
+                    value = (
+                        saved.get("AZURE_SPEECH_ENDPOINT", ""),
+                        saved.get("AZURE_SPEECH_KEY", ""),
+                    )
+        endpoint, key = (
+            value
+            if value is not None
+            else (
+                os.environ.get("AZURE_SPEECH_ENDPOINT", ""),
+                os.environ.get("AZURE_SPEECH_KEY", "").strip(),
+            )
+        )
         if not endpoint or not key:
             raise mai_error("请先配置 Azure Speech Endpoint 和 Key。")
         endpoint = normalize_endpoint(endpoint)

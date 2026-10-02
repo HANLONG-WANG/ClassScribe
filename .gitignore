@@ -22,3 +22,7 @@ test-results/
 # Local generated test state
 /.hypothesis/
 /tmp
+
+# Private Azure MAI credentials, including atomic-write temporary files
+azure-mai.env
+.azure-mai.env.*.tmp

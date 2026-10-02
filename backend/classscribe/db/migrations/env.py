@@ -72,20 +72,40 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        if connection.dialect.name == "sqlite":
-            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        is_sqlite = connection.dialect.name == "sqlite"
+        if is_sqlite:
+            # Batch migrations replace referenced tables. Disable enforcement only
+            # on this migration connection, outside a transaction.
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
             connection.exec_driver_sql("PRAGMA journal_mode=WAL")
             connection.exec_driver_sql("PRAGMA synchronous=FULL")
             connection.commit()
-        context.configure(
-            connection=connection,
-            target_metadata=target_metadata,
-            render_as_batch=True,
-            compare_type=True,
-            include_object=include_object,
-        )
-        with context.begin_transaction():
-            context.run_migrations()
+        try:
+            if is_sqlite:
+                # sqlite3's legacy transaction mode does not BEGIN for DDL.
+                # Explicitly include table replacement and revision updates in
+                # one transaction so a failed migration leaves no partial schema.
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                render_as_batch=True,
+                compare_type=True,
+                include_object=include_object,
+            )
+            with context.begin_transaction():
+                context.run_migrations()
+            if is_sqlite:
+                if connection.exec_driver_sql("PRAGMA foreign_key_check").first() is not None:
+                    raise RuntimeError("Database migration would violate foreign key constraints")
+                connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
+        finally:
+            if is_sqlite:
+                connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+                connection.commit()
 
 
 if context.is_offline_mode():

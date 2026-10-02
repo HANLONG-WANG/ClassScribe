@@ -6,7 +6,6 @@ server:
   require_token: true
 
 privacy:
-  runtime_offline: true
   save_dictation_audio: false
   log_transcript_text: false
 

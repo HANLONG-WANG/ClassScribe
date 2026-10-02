@@ -30,9 +30,8 @@
     "privacy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["runtime_offline", "save_dictation_audio", "log_transcript_text"],
+      "required": ["save_dictation_audio", "log_transcript_text"],
       "properties": {
-        "runtime_offline": { "const": true },
         "save_dictation_audio": { "type": "boolean" },
         "log_transcript_text": { "type": "boolean" }
       }

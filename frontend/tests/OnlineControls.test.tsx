@@ -37,7 +37,6 @@ it("sends credentials only to the backend and clears the input after saving", as
         JSON.stringify({
           configured: init?.method === "PUT",
           endpoint: "https://eastus.api.cognitive.microsoft.com",
-          offline: false,
         }),
       ),
     ),
@@ -55,7 +54,10 @@ it("sends credentials only to the backend and clears the input after saving", as
   fireEvent.change(screen.getByLabelText("Azure Speech Key"), {
     target: { value: "private-test-key" },
   });
-  fireEvent.click(screen.getByText("保存到本次运行"));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "保存凭据" })).toBeEnabled(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "保存凭据" }));
   await waitFor(() =>
     expect(screen.getByLabelText("Azure Speech Key")).toHaveValue(""),
   );
@@ -72,7 +74,44 @@ it("sends credentials only to the backend and clears the input after saving", as
   expect(persist).not.toHaveBeenCalled();
 });
 
-it("requires explicit cloud consent and does not send local model options to MAI", () => {
+it("restores the saved endpoint and clears credentials through the backend", async () => {
+  const endpoint = "https://eastus.api.cognitive.microsoft.com";
+  const fetch = vi.fn((_url: string, init?: RequestInit) =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          configured: init?.method !== "DELETE",
+          endpoint: init?.method === "DELETE" ? "" : endpoint,
+        }),
+      ),
+    ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <MaiSettings />
+    </QueryClientProvider>,
+  );
+  await waitFor(() =>
+    expect(screen.getByLabelText("Azure Speech Endpoint")).toHaveValue(
+      endpoint,
+    ),
+  );
+  expect(screen.getByLabelText("Azure Speech Key")).toHaveValue("");
+  expect(screen.getByText("凭据已配置")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "清除凭据" }));
+  await waitFor(() =>
+    expect(screen.getByText("已清除保存的凭据")).toBeInTheDocument(),
+  );
+  expect(screen.getByLabelText("Azure Speech Endpoint")).toHaveValue("");
+  expect(screen.getByText("尚未配置凭据")).toBeInTheDocument();
+  expect(fetch).toHaveBeenCalledWith(
+    "/api/v1/online/mai",
+    expect.objectContaining({ method: "DELETE" }),
+  );
+});
+
+it("submits MAI without a consent checkbox and excludes local model options", () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(() => Promise.resolve(new Response("[]"))),
@@ -91,8 +130,10 @@ it("requires explicit cloud consent and does not send local model options to MAI
     target: { value: "azure_mai" },
   });
   const submit = screen.getByRole("button", { name: "加入转录队列" });
-  expect(submit).toBeDisabled();
-  fireEvent.click(screen.getByRole("checkbox", { name: /我同意/ }));
+  expect(
+    screen.queryByRole("checkbox", { name: /我同意/ }),
+  ).not.toBeInTheDocument();
+  expect(submit).toBeEnabled();
   fireEvent.click(submit);
   expect(batch).toHaveBeenCalledWith(
     expect.anything(),

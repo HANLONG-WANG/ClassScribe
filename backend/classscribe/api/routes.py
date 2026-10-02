@@ -79,7 +79,7 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
     @router.get("/online/mai")
     def mai_status() -> dict[str, object]:
         runner = online_runner()
-        return {**runner.credentials.status(), "offline": runner.config.privacy.runtime_offline}
+        return runner.credentials.status()
 
     @router.put("/online/mai")
     async def configure_mai(request: Request) -> dict[str, object]:
@@ -94,13 +94,13 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
             ) from None
         runner = online_runner()
         runner.credentials.configure(value.endpoint, value.key.get_secret_value())
-        return {**runner.credentials.status(), "offline": runner.config.privacy.runtime_offline}
+        return runner.credentials.status()
 
     @router.delete("/online/mai")
     def clear_mai() -> dict[str, object]:
         runner = online_runner()
         runner.credentials.clear()
-        return {**runner.credentials.status(), "offline": runner.config.privacy.runtime_offline}
+        return runner.credentials.status()
 
     @router.post("/recordings", status_code=status.HTTP_201_CREATED)
     async def create_recording(

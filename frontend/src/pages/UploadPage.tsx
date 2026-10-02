@@ -64,7 +64,6 @@ export function UploadPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [chooseRange, setChooseRange] = useState(false);
   const [provider, setProvider] = useState("local");
-  const [cloudConsent, setCloudConsent] = useState(false);
   const imports = useBatchImports((state) => state.items);
   useEffect(() => {
     void reconcileImports();
@@ -173,26 +172,12 @@ export function UploadPage() {
             value={provider}
             onChange={(e) => {
               setProvider(e.target.value);
-              setCloudConsent(false);
             }}
           >
             <option value="local">本地模型</option>
             <option value="azure_mai">Azure MAI-Transcribe-2</option>
           </select>
         </label>
-        {provider === "azure_mai" && (
-          <label>
-            <input
-              type="checkbox"
-              checked={cloudConsent}
-              onChange={(e) => {
-                setCloudConsent(e.target.checked);
-              }}
-            />
-            我同意将所选音频及术语上传至
-            Azure，服务可能计费。请先在设置页配置凭据并关闭离线模式。
-          </label>
-        )}
         <label
           className={`drop-zone ${files.length ? "has-file" : ""}`}
           onDragOver={(event) => {
@@ -455,8 +440,7 @@ export function UploadPage() {
             outputs.length === 0 ||
             (provider === "local" &&
               accuracy === "strict_single" &&
-              !primaryModel) ||
-            (provider === "azure_mai" && !cloudConsent)
+              !primaryModel)
           }
           type="submit"
         >
