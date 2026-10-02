@@ -45,9 +45,17 @@ manifest SHA、下载量、安装后占用、临时空间、独立 worker 环境
    本地模型在本机处理，MAI 在线处理。上传的是实际转写范围的无损 FLAC 及所选词典术语，
    不上传原文件名。Azure 可能计费；取消本地请求不保证云端停止处理或计费。
 
-MAI 使用 Speech REST `2025-10-15`，请求 verbatim 文本和 word 时间戳；自动／混合语言不强制
-指定 locale。模型版本未被服务返回时显示 `service-unreported`，不伪造模型 revision。
-接口依据：[Microsoft MAI 文档](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe)。
+MAI 使用 Speech REST `2025-10-15`。导入页可选择逐字（verbatim）或清理口语（clean）、
+词级／段落级／无时间戳、自动说话人分离、脏话处理，以及自动检测或指定一种支持的语言。
+默认保留逐字和词级时间戳；选择无时间戳时禁用 SRT/VTT 字幕输出。
+选择 MAI 后不显示本地模型的说话人人数控件，分离开关独立控制 `diarization.enabled`。
+所选课程词典的标准词条会与手动输入的额外术语合并去重，作为 `phraseList.phrases` 提示；
+词典的读音、别名和单条权重不直接映射到 Azure。术语提示强度可设 0–2，统一影响整份提示列表。
+本应用的合并列表最多 500 条，每条最多 200 字符，超限会在上传至 Azure 前拒绝。
+模型版本未被服务返回时显示 `service-unreported`，不伪造模型 revision。
+接口依据：[Microsoft MAI 文档](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/mai-transcribe)、
+[Speech 功能支持表](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/fast-transcription-create)、
+[术语列表参数](https://learn.microsoft.com/en-us/python/api/azure-ai-transcription/azure.ai.transcription.models.phraselistproperties)。
 
 在线请求不会自动重发。发送后断网、取消或进程退出导致结果未知时，需要确认可能重复计费后
 创建新任务；已经保存响应的任务重试只重新解析响应。原始响应和不含密钥的请求元数据保存在

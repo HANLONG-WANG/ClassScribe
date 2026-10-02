@@ -16,6 +16,8 @@ from classscribe.config import load_config
 from classscribe.contracts import LanguageMode
 from classscribe.db.models import (
     AppSetting,
+    Glossary,
+    GlossaryTerm,
     Job,
     JobCheckpoint,
     JobStatus,
@@ -297,3 +299,73 @@ def test_real_clip_normalization_online_import_and_exports(database: Any, tmp_pa
         )
     with pytest.raises(ClassScribeError, match="cannot be rerun locally"):
         pipeline.retry_segment(job_id, segment_id)
+
+
+def test_course_glossary_and_import_options_reach_transport(
+    database: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions, runner, pipeline, identifier = setup_online(database, tmp_path)
+    options = {
+        "transcribe_style": "clean",
+        "timestamps": "none",
+        "diarization": False,
+        "locale": "en",
+        "profanity_filter_mode": "Removed",
+        "phrases": ["GPU", "manual term"],
+        "phrase_biasing_weight": 1.5,
+    }
+    with sessions.begin() as session:
+        glossary = Glossary(name="course vocabulary")
+        glossary.terms = [
+            GlossaryTerm(
+                canonical="GPU",
+                reading="reading-marker",
+                aliases=["alias-marker"],
+                language=LanguageMode.ENGLISH,
+                weight=0.8,
+                source="manual",
+                user_confirmed=True,
+            )
+        ]
+        session.add(glossary)
+        session.flush()
+        job = session.get_one(Job, identifier)
+        job.options_json = {
+            **job.options_json,
+            "glossary_id": glossary.id,
+            "mai_options": options,
+        }
+        runner.preflight(job.options_json, session)
+    captured: list[dict[str, Any]] = []
+
+    def transcribe(
+        endpoint: str, key: str, audio: Path, definition: dict[str, Any], *args: Any, **kwargs: Any
+    ) -> tuple[bytes, str]:
+        captured.append(definition)
+        return b'{"phrases":[{"text":"Clean transcript","locale":"en"}]}', "request-id"
+
+    monkeypatch.setattr(runner.client, "transcribe", transcribe)
+    pipeline.run_until_blocked(identifier)
+    assert len(captured) == 1
+    definition = captured[0]
+    assert definition["phraseList"] == {
+        "phrases": ["GPU", "manual term"],
+        "biasingWeight": 1.5,
+    }
+    assert "reading-marker" not in json.dumps(definition)
+    assert "alias-marker" not in json.dumps(definition)
+    assert definition["enhancedMode"]["modelOptions"] == {
+        "transcribeStyle": "clean",
+        "timestamps": "none",
+    }
+    assert definition["diarization"] == {"enabled": False}
+    assert definition["profanityFilterMode"] == "Removed"
+    assert definition["locales"] == ["en"]
+    with sessions() as session:
+        job = session.get_one(Job, identifier)
+        assert job.status == JobStatus.COMPLETED, job.error_detail
+        assert job.options_json["mai_options"] == options
+        segment = session.scalar(select(TranscriptSegment))
+        assert segment.raw_text == "Clean transcript"
+        assert segment.speaker_id is None
+        assert segment.start_sample == segment.end_sample == 0

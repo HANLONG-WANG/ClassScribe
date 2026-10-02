@@ -18,6 +18,13 @@ import {
   submitPreparedImport,
 } from "../batchImports";
 import { AudioClipEditor } from "../components/AudioClipEditor";
+import { MaiTranscriptionSettings } from "../components/MaiTranscriptionSettings";
+import {
+  defaultMaiDraft,
+  maiJobLanguage,
+  maiRequestOptions,
+  type MaiDraft,
+} from "../maiOptions";
 import { bodyModel } from "../modelGuidance";
 import { readStorage, writeStorage } from "../storage";
 import { ClassroomModelGuide } from "./ClassroomModelGuide";
@@ -27,6 +34,7 @@ type Language = "zh" | "ja" | "en" | "auto_mixed";
 type Accuracy = "fast" | "balanced" | "highest" | "strict_single";
 const draftKey = "classscribe-upload-draft-v1";
 interface UploadDraft {
+  mai: MaiDraft;
   language: Language;
   accuracy: Accuracy;
   speakerCount: string;
@@ -38,6 +46,7 @@ interface UploadDraft {
   includeSpeakers: boolean;
 }
 const defaultDraft: UploadDraft = {
+  mai: defaultMaiDraft,
   language: "auto_mixed",
   accuracy: "balanced",
   speakerCount: "auto",
@@ -50,9 +59,13 @@ const defaultDraft: UploadDraft = {
 };
 function loadDraft(): UploadDraft {
   try {
+    const saved = JSON.parse(
+      readStorage(draftKey) ?? "{}",
+    ) as Partial<UploadDraft>;
     return {
       ...defaultDraft,
-      ...(JSON.parse(readStorage(draftKey) ?? "{}") as Partial<UploadDraft>),
+      ...saved,
+      mai: { ...defaultMaiDraft, ...saved.mai },
     };
   } catch {
     return defaultDraft;
@@ -64,6 +77,7 @@ export function UploadPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [chooseRange, setChooseRange] = useState(false);
   const [provider, setProvider] = useState("local");
+  const [maiDraft, setMaiDraft] = useState(draft.mai);
   const imports = useBatchImports((state) => state.items);
   useEffect(() => {
     void reconcileImports();
@@ -82,6 +96,7 @@ export function UploadPage() {
     writeStorage(
       draftKey,
       JSON.stringify({
+        mai: maiDraft,
         language,
         accuracy,
         speakerCount,
@@ -94,6 +109,7 @@ export function UploadPage() {
       } satisfies UploadDraft),
     );
   }, [
+    maiDraft,
     language,
     accuracy,
     speakerCount,
@@ -129,25 +145,40 @@ export function UploadPage() {
 
   function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!files.length) return;
+    if (!files.length || !selectedOutputs.length || invalidMaiPhrases) return;
     addImports(files, {
       provider,
       prepare_only: chooseRange,
-      language,
+      language:
+        provider === "local" ? language : maiJobLanguage(maiDraft.locale),
       glossary_id: glossaryId || null,
-      speaker_count: speakerCount,
+      ...(provider === "local"
+        ? { speaker_count: speakerCount }
+        : { mai_options: maiOptions }),
       model_selection:
         provider === "local" && primaryModel ? "manual_primary" : "auto_best",
       primary_model_id: provider === "local" ? primaryModel || null : null,
       accuracy_mode: provider === "local" ? accuracy : "balanced",
-      outputs,
+      outputs: selectedOutputs,
       include_faithful: includeFaithful,
       include_smart: includeSmart,
       include_speakers: includeSpeakers,
-      include_subtitles: outputs.includes("srt") || outputs.includes("vtt"),
+      include_subtitles:
+        selectedOutputs.includes("srt") || selectedOutputs.includes("vtt"),
     });
     setFiles([]);
   }
+
+  const maiOptions = maiRequestOptions(maiDraft);
+  const noMaiTiming =
+    provider === "azure_mai" && maiDraft.timestamps === "none";
+  const selectedOutputs = noMaiTiming
+    ? outputs.filter((format) => format !== "srt" && format !== "vtt")
+    : outputs;
+  const invalidMaiPhrases =
+    provider === "azure_mai" &&
+    (maiOptions.phrases.length > 500 ||
+      maiOptions.phrases.some((phrase) => Array.from(phrase).length > 200));
 
   return (
     <section className="page-stack" aria-labelledby="upload-title">
@@ -242,31 +273,33 @@ export function UploadPage() {
         </ol>
 
         <div className="form-grid">
-          <label>
-            <span>语言</span>
-            <select
-              value={language}
-              onChange={(event) => {
-                const next = event.target.value as Language;
-                setLanguage(next);
-                const selected = models.data?.find(
-                  (item) => item.id === primaryModel,
-                );
-                if (
-                  selected &&
-                  !(next === "auto_mixed" ? ["zh", "ja", "en"] : [next]).every(
-                    (code) => bodyModel(selected, code),
+          {provider === "local" && (
+            <label>
+              <span>语言</span>
+              <select
+                value={language}
+                onChange={(event) => {
+                  const next = event.target.value as Language;
+                  setLanguage(next);
+                  const selected = models.data?.find(
+                    (item) => item.id === primaryModel,
+                  );
+                  if (
+                    selected &&
+                    !(
+                      next === "auto_mixed" ? ["zh", "ja", "en"] : [next]
+                    ).every((code) => bodyModel(selected, code))
                   )
-                )
-                  setPrimaryModel("");
-              }}
-            >
-              <option value="auto_mixed">自动 / 混合</option>
-              <option value="zh">中文</option>
-              <option value="ja">日本語</option>
-              <option value="en">English</option>
-            </select>
-          </label>
+                    setPrimaryModel("");
+                }}
+              >
+                <option value="auto_mixed">自动 / 混合</option>
+                <option value="zh">中文</option>
+                <option value="ja">日本語</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+          )}
           <label>
             <span>课程词典</span>
             <select
@@ -283,21 +316,23 @@ export function UploadPage() {
               ))}
             </select>
           </label>
-          <label>
-            <span>说话人数</span>
-            <select
-              value={speakerCount}
-              onChange={(event) => {
-                setSpeakerCount(event.target.value);
-              }}
-            >
-              <option value="auto">自动</option>
-              <option value="1">1</option>
-              <option value="2">2</option>
-              <option value="3-4">3–4</option>
-              <option value="5+">5+</option>
-            </select>
-          </label>
+          {provider === "local" && (
+            <label>
+              <span>说话人数</span>
+              <select
+                value={speakerCount}
+                onChange={(event) => {
+                  setSpeakerCount(event.target.value);
+                }}
+              >
+                <option value="auto">自动</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3-4">3–4</option>
+                <option value="5+">5+</option>
+              </select>
+            </label>
+          )}
           {provider === "local" && (
             <ModelPicker
               value={primaryModel}
@@ -313,6 +348,21 @@ export function UploadPage() {
             />
           )}
         </div>
+
+        {provider === "azure_mai" && (
+          <MaiTranscriptionSettings value={maiDraft} onChange={setMaiDraft} />
+        )}
+        {invalidMaiPhrases && (
+          <p role="alert" className="error-callout">
+            额外术语最多 500 条，每条最多 200
+            字符；课程词典的合并数量将在提交时检查。
+          </p>
+        )}
+        {noMaiTiming && (
+          <p role="status" className="muted">
+            未返回时间戳时无法按词定位或生成 SRT/VTT 字幕；请选择文本输出格式。
+          </p>
+        )}
 
         {provider === "local" && (
           <fieldset>
@@ -374,7 +424,10 @@ export function UploadPage() {
             {["txt", "md", "json", "srt", "vtt", "csv"].map((format) => (
               <label key={format}>
                 <input
-                  checked={outputs.includes(format)}
+                  checked={selectedOutputs.includes(format)}
+                  disabled={
+                    noMaiTiming && (format === "srt" || format === "vtt")
+                  }
                   onChange={() => {
                     toggleOutput(format);
                   }}
@@ -423,7 +476,7 @@ export function UploadPage() {
           !primaryModel && (
             <p className="error-callout">严格单模型测试需要指定主模型。</p>
           )}
-        <label>
+        <label className="toggle-line">
           <input
             type="checkbox"
             checked={chooseRange}
@@ -437,7 +490,8 @@ export function UploadPage() {
           className="primary-button"
           disabled={
             !files.length ||
-            outputs.length === 0 ||
+            selectedOutputs.length === 0 ||
+            invalidMaiPhrases ||
             (provider === "local" &&
               accuracy === "strict_single" &&
               !primaryModel)

@@ -239,6 +239,14 @@ pre {
 .upload-form .form-grid {
   grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr));
 }
+.mai-transcription-settings {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+.mai-transcription-settings .form-grid {
+  align-items: start;
+}
 .drop-zone {
   display: grid;
   min-height: 210px;

@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
+from classscribe.classroom.mai_options import MaiTranscriptionOptions
 from classscribe.contracts import LanguageMode, ModelSelectionMode
 from classscribe.exports import ExportFormat, ExportLayer, ExportView
 
@@ -25,6 +26,7 @@ class MaiCredentialUpdate(APIModel):
 
 class JobCreate(APIModel):
     provider: Literal["local", "azure_mai"] = "local"
+    mai_options: MaiTranscriptionOptions | None = None
     submission_key: str | None = None
     recording_id: str
     language: LanguageMode
@@ -46,6 +48,8 @@ class JobCreate(APIModel):
 
     @model_validator(mode="after")
     def validate_model_choice(self) -> JobCreate:
+        if self.provider == "local" and self.mai_options is not None:
+            raise ValueError("MAI options require the azure_mai provider")
         if self.model_selection is ModelSelectionMode.MANUAL_PRIMARY and not self.primary_model_id:
             raise ValueError("manual primary selection requires primary_model_id")
         if self.accuracy_mode == "strict_single" and not self.primary_model_id:

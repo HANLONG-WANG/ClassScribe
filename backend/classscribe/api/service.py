@@ -303,6 +303,9 @@ class ClassScribeService:
         recording_id = _id(value.recording_id, "recording_id")
         glossary_id = _optional_id(value.glossary_id, "glossary_id")
         options = value.model_dump(mode="json")
+        if value.mai_options is None:
+            # Keep existing submissions and local jobs byte-compatible with older options.
+            options.pop("mai_options")
         with self.sessions.begin() as session:
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
             submission_key = _optional_id(value.submission_key, "submission_key")

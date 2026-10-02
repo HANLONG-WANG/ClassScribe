@@ -21,6 +21,9 @@ from urllib.parse import unquote, urlsplit
 from urllib.request import getproxies, proxy_bypass
 from uuid import uuid4
 
+from pydantic import ValidationError
+
+from classscribe.classroom.mai_options import MaiTranscriptionOptions
 from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.security import RestrictedCredentialEnvironment
 
@@ -126,22 +129,42 @@ class MaiCredentials:
 
 
 def request_definition(options: Mapping[str, Any], terms: list[str]) -> dict[str, Any]:
+    raw_options = options.get("mai_options")
+    legacy = raw_options is None
+    if legacy:
+        language = options.get("language")
+        raw_options = {
+            "diarization": options.get("speaker_count", "auto") != "1",
+            "locale": language if language in {"ja", "zh", "en"} else None,
+        }
+    try:
+        settings = MaiTranscriptionOptions.model_validate(raw_options)
+    except ValidationError:
+        raise mai_error("MAI 转写选项无效，请检查设置。") from None
     definition: dict[str, Any] = {
         "enhancedMode": {
             "enabled": True,
             "model": MODEL,
-            "modelOptions": {"transcribeStyle": "verbatim", "timestamps": "word"},
+            "modelOptions": {
+                "transcribeStyle": settings.transcribe_style,
+                "timestamps": settings.timestamps,
+            },
         },
-        "diarization": {"enabled": options.get("speaker_count", "auto") != "1"},
+        "diarization": {"enabled": settings.diarization},
     }
-    language = options.get("language")
-    if language in {"ja", "zh", "en"}:
-        definition["locales"] = [language]
-    phrases = list(dict.fromkeys(term.strip() for term in terms if term.strip()))
+    if settings.locale is not None:
+        definition["locales"] = [settings.locale]
+    if not legacy:
+        definition["profanityFilterMode"] = settings.profanity_filter_mode
+    phrases = list(
+        dict.fromkeys(term.strip() for term in [*terms, *settings.phrases] if term.strip())
+    )
     if len(phrases) > 500 or any(len(term) > 200 for term in phrases):
         raise mai_error("MAI 术语最多 500 条，每条最多 200 字符。")
     if phrases:
         definition["phraseList"] = {"phrases": phrases}
+        if settings.phrase_biasing_weight is not None:
+            definition["phraseList"]["biasingWeight"] = settings.phrase_biasing_weight
     return definition
 
 
