@@ -1,0 +1,73 @@
+{
+  "sentences": [
+    {
+      "text": "Use .5 mg and -.25 g. Next sentence.",
+      "pieces": ["Use .5 mg and -.25 g. ", "Next sentence."]
+    },
+    {
+      "text": "「今日は晴れです。」 次は雨です。",
+      "pieces": ["「今日は晴れです。」 ", "次は雨です。"]
+    },
+    {
+      "text": "Dr. Smith measured 3.14 mg. \"Next sentence!\"",
+      "pieces": ["Dr. Smith measured 3.14 mg. ", "\"Next sentence!\""]
+    },
+    {
+      "text": "Visit example.com. Use e.g. this paper.",
+      "pieces": ["Visit example.com. ", "Use e.g. this paper."]
+    },
+    {
+      "text": "第一句。\n\n第二句。",
+      "pieces": ["第一句。\n\n", "第二句。"]
+    },
+    {
+      "text": "🙂第一句！第二句？",
+      "pieces": ["🙂第一句！", "第二句？"]
+    },
+    { "text": "  \n\n  ", "pieces": ["  \n\n  "] },
+    { "text": "", "pieces": [""] }
+  ],
+  "paragraphs": [
+    {
+      "sources": [
+        { "text": "One.", "language": "en", "speaker_id": "a", "start_sample": 0, "end_sample": 16000 },
+        { "text": "Two.", "language": "en", "speaker_id": "a", "start_sample": 16000, "end_sample": 32000 }
+      ],
+      "groups": [["One.", "Two."]]
+    },
+    {
+      "sources": [
+        { "text": "老师。", "language": "zh", "speaker_id": "a", "start_sample": 0, "end_sample": 16000 },
+        { "text": "学生。", "language": "zh", "speaker_id": "b", "start_sample": 16000, "end_sample": 32000 }
+      ],
+      "groups": [["老师。"], ["学生。"]]
+    },
+    {
+      "sources": [
+        { "text": "One.", "language": "en", "speaker_id": "a", "start_sample": 0, "end_sample": 16000 },
+        { "text": "Two.", "language": "en", "speaker_id": "a", "start_sample": 35184, "end_sample": 51184 },
+        { "text": "Three.", "language": "en", "speaker_id": "a", "start_sample": 70384, "end_sample": 86384 }
+      ],
+      "groups": [["One.", "Two."], ["Three."]]
+    },
+    {
+      "sources": [
+        { "text": "一。二。三。四。五。六。七。", "language": "zh", "speaker_id": "a", "start_sample": 0, "end_sample": 16000 }
+      ],
+      "groups": [["一。", "二。", "三。", "四。"], ["五。", "六。", "七。"]]
+    },
+    {
+      "sources": [
+        { "text": "第一句。\n\n第二句。", "language": "zh", "speaker_id": "a", "start_sample": 0, "end_sample": 16000 }
+      ],
+      "groups": [["第一句。\n\n"], ["第二句。"]]
+    },
+    {
+      "sources": [
+        { "text": "中文。", "language": "zh", "speaker_id": "a", "start_sample": 0, "end_sample": 16000 },
+        { "text": "English.", "language": "en", "speaker_id": "a", "start_sample": 16000, "end_sample": 32000 }
+      ],
+      "groups": [["中文。"], ["English."]]
+    }
+  ]
+}

@@ -25,6 +25,7 @@ from pydantic import ValidationError
 
 from classscribe.classroom.mai_options import MaiTranscriptionOptions
 from classscribe.errors import ClassScribeError, ErrorCode
+from classscribe.readability import lexical_positions, sentence_spans
 from classscribe.security import RestrictedCredentialEnvironment
 
 API_VERSION = "2025-10-15"
@@ -293,51 +294,93 @@ class MaiPhrase:
 
 
 def split_timed_phrase(phrase: MaiPhrase) -> tuple[MaiPhrase, ...]:
-    """Split only when every character and word time can be accounted for."""
-    cursor = 0
+    """Split original text only at boundaries supported by complete word evidence."""
+    positions = lexical_positions(phrase.text)
+    content = "".join(character for character, _ in positions)
+    cursor = raw_cursor = 0
     previous_end = -1
-    cuts: list[tuple[int, tuple[str, int, int]]] = []
+    aligned: list[tuple[int, int, int, int]] = []
+
+    def fallback() -> tuple[MaiPhrase, ...]:
+        return (
+            MaiPhrase(
+                phrase.text,
+                phrase.start,
+                phrase.end,
+                phrase.language,
+                phrase.speaker,
+                phrase.timed,
+                (),
+            ),
+        )
+
     for token, start, end in phrase.words:
-        index = phrase.text.find(token, cursor)
         if (
-            not token
-            or index < 0
-            or phrase.text[cursor:index].strip()
+            not token.strip()
             or start < previous_end
+            or start >= end
             or (phrase.timed and (start < phrase.start or end > phrase.end))
         ):
-            break
-        cursor = index + len(token)
+            return fallback()
         previous_end = end
-        cuts.append((cursor, (token, start, end)))
-    else:
-        if cuts and not phrase.text[cursor:].strip():
-            groups: list[MaiPhrase] = []
-            text_start = 0
-            words: list[tuple[str, int, int]] = []
-            for index, (text_end, word) in enumerate(cuts):
-                words.append(word)
-                if re.search(r"[。！？.!?]$", word[0]) or index == len(cuts) - 1:
-                    groups.append(
-                        MaiPhrase(
-                            phrase.text[text_start:text_end].strip(),
-                            words[0][1],
-                            words[-1][2],
-                            phrase.language,
-                            phrase.speaker,
-                            True,
-                            tuple(words),
-                        )
-                    )
-                    text_start = text_end
-                    words = []
-            return tuple(groups)
-    # Incomplete word evidence must not truncate text or contaminate subtitle token projection.
-    return (
-        MaiPhrase(
-            phrase.text, phrase.start, phrase.end, phrase.language, phrase.speaker, phrase.timed, ()
-        ),
-    )
+        token_content = "".join(character for character, _ in lexical_positions(token))
+        if not token_content:
+            # Preserve separately timed punctuation when it occurs in the original gap.
+            gap_end = positions[cursor][1] if cursor < len(positions) else len(phrase.text)
+            raw_start = phrase.text.find(token.strip(), raw_cursor, gap_end)
+            if raw_start >= 0:
+                raw_end = raw_start + len(token.strip())
+                aligned.append((raw_start, raw_end, start, end))
+                raw_cursor = raw_end
+            continue
+        if content[cursor : cursor + len(token_content)] != token_content:
+            return fallback()
+        raw_start = positions[cursor][1]
+        cursor += len(token_content)
+        raw_end = positions[cursor - 1][1] + 1
+        aligned.append((raw_start, raw_end, start, end))
+        raw_cursor = raw_end
+    if cursor != len(positions) or not aligned:
+        return fallback()
+
+    sentence_ends = {end for _, end in sentence_spans(phrase.text)}
+    groups: list[MaiPhrase] = []
+    text_start = word_start = 0
+    for index, (_, raw_end, _, _) in enumerate(aligned):
+        next_start = aligned[index + 1][0] if index + 1 < len(aligned) else len(phrase.text)
+        # A boundary inside one timed token cannot be assigned a new timestamp.
+        ends = [end for end in sentence_ends if raw_end <= end <= next_start]
+        if not ends:
+            continue
+        text_end = max(ends)
+        words = tuple(
+            (
+                phrase.text[
+                    text_start if word_index == word_start else aligned[word_index][0] : aligned[
+                        word_index + 1
+                    ][0]
+                    if word_index < index
+                    else text_end
+                ].strip(),
+                aligned[word_index][2],
+                aligned[word_index][3],
+            )
+            for word_index in range(word_start, index + 1)
+        )
+        groups.append(
+            MaiPhrase(
+                phrase.text[text_start:text_end].strip(),
+                aligned[word_start][2],
+                aligned[index][3],
+                phrase.language,
+                phrase.speaker,
+                True,
+                words,
+            )
+        )
+        text_start = text_end
+        word_start = index + 1
+    return tuple(groups) if text_start == len(phrase.text) else fallback()
 
 
 def parse_mai_response(payload: bytes, duration: int, language: str) -> tuple[MaiPhrase, ...]:

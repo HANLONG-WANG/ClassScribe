@@ -3,6 +3,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -19,6 +20,7 @@ import {
   type Transcript,
 } from "../api";
 import { type TextLayer, useWorkbench } from "../store";
+import { buildReadableParagraphs } from "../readability";
 import { scheduleTranscriptSave, useTranscriptSaves } from "../transcriptSaves";
 
 function segmentText(segment: Segment, layer: TextLayer) {
@@ -234,6 +236,9 @@ export function TranscriptPage() {
   } | null>(null);
   const client = useQueryClient();
   const [mediaDuration, setMediaDuration] = useState(0);
+  const [readingView, setReadingView] = useState<"sentences" | "paragraphs">(
+    "sentences",
+  );
   const onWaveReady = useCallback((instance: WaveSurfer | null) => {
     wave.current = instance;
     if (instance)
@@ -480,63 +485,97 @@ export function TranscriptPage() {
           </button>
         ))}
       </div>
+      <div className="reading-view" role="group" aria-label="转录稿视图">
+        <button
+          type="button"
+          aria-pressed={readingView === "sentences"}
+          onClick={() => {
+            setReadingView("sentences");
+          }}
+        >
+          句段
+        </button>
+        <button
+          type="button"
+          aria-pressed={readingView === "paragraphs"}
+          onClick={() => {
+            setReadingView("paragraphs");
+          }}
+        >
+          自然段
+        </button>
+        {readingView === "paragraphs" && (
+          <span className="muted">点击文字可回听并校对对应片段。</span>
+        )}
+      </div>
       <div className="transcript-layout">
-        <div className="segment-list" aria-label="句段列表">
-          {segments.length === 0 && (
-            <p className="empty-state">该筛选下没有句段。</p>
-          )}
-          <SegmentList
-            segments={segments}
+        {readingView === "paragraphs" ? (
+          <ParagraphList
+            key={`${jobId}:${layer}:${String(lowOnly)}`}
+            segments={fullSegments}
+            layer={layer}
+            lowOnly={lowOnly}
             selectedId={selectedId}
-            renderRow={(segment) => (
-              <button
-                className={`segment-row ${selectedId === segment.id ? "selected" : ""}`}
-                key={segment.id}
-                onClick={() => {
-                  seek(segment);
-                }}
-                type="button"
-              >
-                <span className="segment-time">
-                  {formatSamples(segment.start_sample)}
-                  <br />
-                  {formatSamples(segment.end_sample)}
-                  {recording.data?.source_start_sample != null &&
-                    segment.timing_quality !== "invalid" && (
-                      <small>
-                        原录音{" "}
-                        {formatSamples(
-                          recording.data.source_start_sample +
-                            segment.start_sample,
-                        )}
-                      </small>
-                    )}
-                </span>
-                <span className="speaker-chip">
-                  {segment.speaker_name ?? segment.speaker_id ?? "Speaker ?"}
-                </span>
-                <span className="segment-copy">
-                  {segmentText(segment, layer) || <em>空句段</em>}
-                  {segment.repetition_warning && (
-                    <span className="anomaly-tag">
-                      {segment.repetition_warning.all_candidates
-                        ? "所有候选均疑似重复"
-                        : "候选疑似重复"}{" "}
-                      · 待复核
-                    </span>
-                  )}
-                </span>
-                <span
-                  className={`confidence ${segment.low_confidence ? "low" : ""}`}
-                >
-                  {segment.quality_score === null
-                    ? "—"
-                    : `${String(Math.round(segment.quality_score * 100))}%`}
-                </span>
-              </button>
-            )}
+            onSelect={seek}
           />
-        </div>
+        ) : (
+          <div className="segment-list" aria-label="句段列表">
+            {segments.length === 0 && (
+              <p className="empty-state">该筛选下没有句段。</p>
+            )}
+            <SegmentList
+              segments={segments}
+              selectedId={selectedId}
+              renderRow={(segment) => (
+                <button
+                  className={`segment-row ${selectedId === segment.id ? "selected" : ""}`}
+                  key={segment.id}
+                  onClick={() => {
+                    seek(segment);
+                  }}
+                  type="button"
+                >
+                  <span className="segment-time">
+                    {formatSamples(segment.start_sample)}
+                    <br />
+                    {formatSamples(segment.end_sample)}
+                    {recording.data?.source_start_sample != null &&
+                      segment.timing_quality !== "invalid" && (
+                        <small>
+                          原录音{" "}
+                          {formatSamples(
+                            recording.data.source_start_sample +
+                              segment.start_sample,
+                          )}
+                        </small>
+                      )}
+                  </span>
+                  <span className="speaker-chip">
+                    {segment.speaker_name ?? segment.speaker_id ?? "Speaker ?"}
+                  </span>
+                  <span className="segment-copy">
+                    {segmentText(segment, layer) || <em>空句段</em>}
+                    {segment.repetition_warning && (
+                      <span className="anomaly-tag">
+                        {segment.repetition_warning.all_candidates
+                          ? "所有候选均疑似重复"
+                          : "候选疑似重复"}{" "}
+                        · 待复核
+                      </span>
+                    )}
+                  </span>
+                  <span
+                    className={`confidence ${segment.low_confidence ? "low" : ""}`}
+                  >
+                    {segment.quality_score === null
+                      ? "—"
+                      : `${String(Math.round(segment.quality_score * 100))}%`}
+                  </span>
+                </button>
+              )}
+            />
+          </div>
+        )}
         <SegmentInspector
           adopt={(id) => {
             if (detail.data)
@@ -642,6 +681,136 @@ function SegmentList({
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function ParagraphList({
+  segments,
+  layer,
+  lowOnly,
+  selectedId,
+  onSelect,
+}: {
+  segments: Segment[];
+  layer: TextLayer;
+  lowOnly: boolean;
+  selectedId: string | null;
+  onSelect: (segment: Segment) => void;
+}) {
+  const paragraphs = useMemo(
+    () =>
+      buildReadableParagraphs(
+        segments,
+        (segment) => segmentText(segment, layer),
+        (segment) => !lowOnly || segment.low_confidence,
+      ),
+    [segments, layer, lowOnly],
+  );
+  const pageSize = 40;
+  const [requestedPage, setRequestedPage] = useState(0);
+  const page = Math.min(
+    requestedPage,
+    Math.max(0, Math.ceil(paragraphs.length / pageSize) - 1),
+  );
+  useEffect(() => {
+    if (!selectedId) return;
+    const index = paragraphs.findIndex((parts) =>
+      parts.some((part) => part.source.id === selectedId),
+    );
+    if (index >= 0)
+      setRequestedPage((current) => {
+        const visible = paragraphs.slice(
+          current * pageSize,
+          (current + 1) * pageSize,
+        );
+        return visible.some((parts) =>
+          parts.some((part) => part.source.id === selectedId),
+        )
+          ? current
+          : Math.floor(index / pageSize);
+      });
+  }, [paragraphs, selectedId]);
+
+  return (
+    <div className="paragraph-list" aria-label="自然段列表">
+      {paragraphs.length === 0 && (
+        <p className="empty-state">该筛选下没有句段。</p>
+      )}
+      {paragraphs.slice(page * pageSize, (page + 1) * pageSize).map((parts) => {
+        const first = parts[0];
+        if (!first) return null;
+        return (
+          <article
+            className="readable-paragraph"
+            key={first.source.id + ":" + String(first.start)}
+          >
+            <div className="paragraph-meta">
+              <span className="speaker-chip">
+                {first.source.speaker_name ??
+                  first.source.speaker_id ??
+                  "Speaker ?"}
+              </span>
+            </div>
+            <p className="paragraph-copy">
+              {parts.map((part) => (
+                <span key={part.source.id + ":" + String(part.start)}>
+                  {part.separator}
+                  <button
+                    type="button"
+                    className={
+                      "paragraph-fragment" +
+                      (selectedId === part.source.id ? " selected" : "") +
+                      (part.source.low_confidence ? " low-confidence" : "")
+                    }
+                    title={
+                      part.source.timing_quality === "invalid"
+                        ? "该片段缺少有效时间戳"
+                        : "回听片段 " +
+                          formatSamples(part.source.start_sample) +
+                          " — " +
+                          formatSamples(part.source.end_sample)
+                    }
+                    onClick={() => {
+                      onSelect(part.source);
+                    }}
+                  >
+                    {part.text || <em>空句段</em>}
+                  </button>
+                  {part.source.repetition_warning && (
+                    <span className="anomaly-tag">候选疑似重复 · 待复核</span>
+                  )}
+                </span>
+              ))}
+            </p>
+          </article>
+        );
+      })}
+      {paragraphs.length > pageSize && (
+        <nav className="paragraph-pages" aria-label="自然段分页">
+          <button
+            type="button"
+            disabled={page === 0}
+            onClick={() => {
+              setRequestedPage(page - 1);
+            }}
+          >
+            上一页
+          </button>
+          <span>
+            {page + 1} / {Math.ceil(paragraphs.length / pageSize)}
+          </span>
+          <button
+            type="button"
+            disabled={(page + 1) * pageSize >= paragraphs.length}
+            onClick={() => {
+              setRequestedPage(page + 1);
+            }}
+          >
+            下一页
+          </button>
+        </nav>
+      )}
     </div>
   );
 }

@@ -17,6 +17,7 @@ from classscribe.exports.models import (
     ExportView,
 )
 from classscribe.exports.subtitles import build_subtitle_cues
+from classscribe.readability import PARAGRAPH_PAUSE_MS, paragraph_slices
 from classscribe.recovery import atomic_write_text
 from classscribe.timeline import format_sample_timestamp
 
@@ -100,26 +101,34 @@ def _records(
     sentence_records = [_segment_record(item, layer, transform) for item in segments]
     if view is ExportView.SENTENCES:
         return sentence_records
-    paragraphs: list[dict[str, Any]] = []
-    current: list[dict[str, Any]] = []
-    previous_segment: ExportSegment | None = None
-    for segment, record in zip(segments, sentence_records, strict=True):
-        boundary = bool(
-            current
+    boundaries = [
+        bool(
+            index
             and (
-                segment.pause_before_ms >= 1200
+                segment.pause_before_ms >= PARAGRAPH_PAUSE_MS
                 or segment.chapter_marker is not None
                 or segment.semantic_boundary_before
-                or (previous_segment is not None and segment.speaker != previous_segment.speaker)
+                or segment.speaker != segments[index - 1].speaker
+                or segment.language != segments[index - 1].language
             )
         )
-        if boundary:
-            paragraphs.append(_merge_records(current))
-            current = []
-        current.append(record)
-        previous_segment = segment
-    if current:
-        paragraphs.append(_merge_records(current))
+        for index, segment in enumerate(segments)
+    ]
+    texts = [str(record["text"]) for record in sentence_records]
+    paragraphs: list[dict[str, Any]] = []
+    for group in paragraph_slices(texts, boundaries):
+        records: list[dict[str, Any]] = []
+        for piece in group:
+            record = dict(sentence_records[piece.source_index])
+            record["text"] = texts[piece.source_index][piece.start : piece.end]
+            # Reading fragments keep the source range; they are not aligned subtitles.
+            record["display_text_start"] = piece.start
+            record["display_text_end"] = piece.end
+            record["timing_scope"] = "source_segment"
+            if piece.start != 0 or piece.end != len(texts[piece.source_index]):
+                record["coarse_timing"] = True
+            records.append(record)
+        paragraphs.append(_merge_records(records))
     return paragraphs
 
 
@@ -173,13 +182,34 @@ def _segment_record(
 
 
 def _merge_records(records: list[dict[str, Any]]) -> dict[str, Any]:
-    first, last = records[0], records[-1]
+    first = records[0]
+    text = ""
+    previous: dict[str, Any] | None = None
+    for record in records:
+        piece = str(record["text"])
+        separator = ""
+        if (
+            previous is not None
+            and previous["segment_ids"] != record["segment_ids"]
+            and text
+            and piece
+            and not text[-1].isspace()
+            and not piece[0].isspace()
+            and record["language"] not in {"zh", "ja"}
+        ):
+            separator = " "
+        text += separator + piece
+        previous = record
+    start = min(record["start_sample"] for record in records)
+    end = max(record["end_sample"] for record in records)
     return {
-        "segment_ids": [item for record in records for item in record["segment_ids"]],
-        "start_sample": first["start_sample"],
-        "end_sample": last["end_sample"],
-        "start": first["start"],
-        "end": last["end"],
+        "segment_ids": list(
+            dict.fromkeys(item for record in records for item in record["segment_ids"])
+        ),
+        "start_sample": start,
+        "end_sample": end,
+        "start": format_sample_timestamp(start),
+        "end": format_sample_timestamp(end),
         "speaker": first["speaker"],
         "language": first["language"],
         "requested_layer": first["requested_layer"],
@@ -190,7 +220,7 @@ def _merge_records(records: list[dict[str, Any]]) -> dict[str, Any]:
             else "mixed"
         ),
         "coarse_timing": any(record["coarse_timing"] for record in records),
-        "text": " ".join(str(record["text"]).strip() for record in records),
+        "text": text,
         "sentences": records,
     }
 

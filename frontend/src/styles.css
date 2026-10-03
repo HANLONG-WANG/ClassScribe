@@ -582,6 +582,60 @@ details summary {
   display: grid;
   gap: 0.35rem;
 }
+.reading-view,
+.paragraph-pages {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.reading-view button[aria-pressed="true"] {
+  color: var(--ink);
+  border-color: var(--accent);
+  background: var(--paper);
+}
+.paragraph-list {
+  min-width: 0;
+}
+.readable-paragraph {
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--paper);
+}
+.paragraph-meta {
+  margin-bottom: 0.35rem;
+}
+.paragraph-copy {
+  margin: 0;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.paragraph-fragment {
+  display: inline;
+  padding: 0;
+  border: 0;
+  border-radius: 0.2rem;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: inherit;
+  background: transparent;
+}
+.paragraph-fragment:hover,
+.paragraph-fragment.selected {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.paragraph-fragment.low-confidence {
+  text-decoration: underline dotted var(--accent);
+  text-underline-offset: 0.2em;
+}
+.paragraph-fragment:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .virtual-segment-list {
   position: relative;
   height: min(70vh, 760px);
