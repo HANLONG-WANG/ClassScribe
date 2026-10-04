@@ -141,13 +141,14 @@ describe("classroom workbench", () => {
     vi.unstubAllGlobals();
   });
 
-  it("starts at the complete upload workflow and states the local boundary", () => {
+  it("starts at the complete upload workflow with Azure MAI selected", () => {
     renderApp();
     expect(
       screen.getByRole("heading", { name: "批量导入课堂" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("离线推理")).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "语言" })).toBeInTheDocument();
+    expect(screen.getByText("Azure 在线转写")).toBeInTheDocument();
+    expect(screen.getByLabelText("转写服务")).toHaveValue("azure_mai");
+    expect(screen.getByLabelText("MAI 转写语言")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "加入转录队列" })).toBeDisabled();
   });
 

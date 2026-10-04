@@ -22,6 +22,7 @@ import {
 import { type TextLayer, useWorkbench } from "../store";
 import { buildReadableParagraphs } from "../readability";
 import { scheduleTranscriptSave, useTranscriptSaves } from "../transcriptSaves";
+import { TranscriptExportDialog } from "../components/TranscriptExportDialog";
 
 function segmentText(segment: Segment, layer: TextLayer) {
   if (layer === "raw") return segment.raw_text;
@@ -236,6 +237,7 @@ export function TranscriptPage() {
   } | null>(null);
   const client = useQueryClient();
   const [mediaDuration, setMediaDuration] = useState(0);
+  const [exportOpen, setExportOpen] = useState(false);
   const [readingView, setReadingView] = useState<"sentences" | "paragraphs">(
     "sentences",
   );
@@ -398,18 +400,44 @@ export function TranscriptPage() {
           <h1 id="transcript-title">转录工作台</h1>
           <p>每句绑定真实音频范围；自动结果可直接导出，校对是可选增强。</p>
         </div>
-        <label className="toggle">
-          <input
-            checked={lowOnly}
-            onChange={(event) => {
-              setLowOnly(event.target.checked);
+        <div className="toolbar transcript-header-actions">
+          <button
+            className="primary-button"
+            type="button"
+            disabled={fullSegments.length === 0}
+            onClick={() => {
+              setExportOpen(true);
             }}
-            type="checkbox"
-          />
-          <span />
-          仅低置信度
-        </label>
+          >
+            导出转录稿
+          </button>
+          <label className="toggle">
+            <input
+              checked={lowOnly}
+              onChange={(event) => {
+                setLowOnly(event.target.checked);
+              }}
+              type="checkbox"
+            />
+            <span />
+            仅低置信度
+          </label>
+        </div>
       </header>
+      {exportOpen && (
+        <TranscriptExportDialog
+          key={jobId}
+          jobId={jobId}
+          sourceName={recording.data?.source_name ?? "课堂转录稿"}
+          initialLayer={layer === "raw" ? "faithful" : layer}
+          initialView={
+            readingView === "paragraphs" ? "readable_paragraphs" : "sentences"
+          }
+          onClose={() => {
+            setExportOpen(false);
+          }}
+        />
+      )}
       <div className="panel timeline-panel">
         {recording.data?.parent_recording_id && (
           <p className="muted">

@@ -970,6 +970,24 @@ details summary {
   gap: 1rem;
   padding: 1.2rem;
 }
+.export-results {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+}
+.export-results h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.export-results p {
+  margin-bottom: 0;
+}
+.export-results .artifact-list {
+  max-height: min(22rem, 45vh);
+  overflow-y: auto;
+}
 .artifact-list {
   display: grid;
   gap: 0.5rem;
@@ -980,13 +998,68 @@ details summary {
   gap: 1rem;
   align-items: center;
   padding: 0.9rem;
+  flex-wrap: wrap;
 }
 .artifact-list article > div {
   display: grid;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .artifact-list .mono {
   color: var(--muted);
   font-size: 0.65rem;
+}
+.transcript-header-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.transcript-export-dialog {
+  width: min(560px, calc(100% - 2rem));
+  max-height: calc(100dvh - 2rem);
+  padding: 1.5rem;
+  color: var(--ink);
+  overflow-y: auto;
+  box-shadow: 0 24px 80px #17211d33;
+}
+.transcript-export-dialog::backdrop {
+  background: #17211d66;
+}
+.dialog-heading,
+.export-dialog-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.dialog-heading h2 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+.transcript-export-dialog p {
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+.transcript-export-dialog .form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(140px, 100%), 1fr));
+}
+.export-dialog-result {
+  padding: 1rem;
+  border: 1px solid #b8c8bf;
+  border-radius: 10px;
+  background: #e7efe9;
+}
+.export-dialog-result > div {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.export-dialog-result button {
+  flex-shrink: 0;
+}
+.dialog-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 .settings-grid {
   display: grid;

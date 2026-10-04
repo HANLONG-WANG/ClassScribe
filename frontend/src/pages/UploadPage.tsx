@@ -36,6 +36,7 @@ type Language = "zh" | "ja" | "en" | "auto_mixed";
 type Accuracy = "fast" | "balanced" | "highest" | "strict_single";
 const draftKey = "classscribe-upload-draft-v1";
 interface UploadDraft {
+  provider: "local" | "azure_mai";
   mai: MaiDraft;
   language: Language;
   accuracy: Accuracy;
@@ -48,6 +49,7 @@ interface UploadDraft {
   includeSpeakers: boolean;
 }
 const defaultDraft: UploadDraft = {
+  provider: "azure_mai",
   mai: defaultMaiDraft,
   language: "auto_mixed",
   accuracy: "balanced",
@@ -79,7 +81,7 @@ export function UploadPage() {
   const draft = useMemo(loadDraft, []);
   const [files, setFiles] = useState<File[]>([]);
   const [chooseRange, setChooseRange] = useState(false);
-  const [provider, setProvider] = useState("local");
+  const [provider, setProvider] = useState(draft.provider);
   const [maiDraft, setMaiDraft] = useState(draft.mai);
   const imports = useBatchImports((state) => state.items);
   useEffect(() => {
@@ -99,6 +101,7 @@ export function UploadPage() {
     writeStorage(
       draftKey,
       JSON.stringify({
+        provider,
         mai: maiDraft,
         language,
         accuracy,
@@ -112,6 +115,7 @@ export function UploadPage() {
       } satisfies UploadDraft),
     );
   }, [
+    provider,
     maiDraft,
     language,
     accuracy,
@@ -205,7 +209,7 @@ export function UploadPage() {
           <select
             value={provider}
             onChange={(e) => {
-              setProvider(e.target.value);
+              setProvider(e.target.value === "local" ? "local" : "azure_mai");
             }}
           >
             <option value="local">本地模型</option>

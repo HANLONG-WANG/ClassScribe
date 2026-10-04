@@ -260,6 +260,7 @@ test("complete local classroom workflow is operable", async ({ page }) => {
   await expect(
     page.getByRole("heading", { name: "批量导入课堂" }),
   ).toBeVisible();
+  await page.getByLabel("转写服务").selectOption("local");
   await page
     .locator('input[type="file"][accept="audio/*,video/*"]')
     .setInputFiles({

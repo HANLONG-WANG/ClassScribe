@@ -11,6 +11,7 @@ export function ExportsPage() {
   const [downloadError, setDownloadError] = useState("");
   const [downloading, setDownloading] = useState(false);
   const downloadController = useRef<AbortController | null>(null);
+  const resultsRef = useRef<HTMLElement>(null);
   useEffect(
     () => () => {
       downloadController.current?.abort();
@@ -40,6 +41,13 @@ export function ExportsPage() {
   const [artifacts, setArtifacts] = useState<
     (ExportArtifact & { source_name: string })[]
   >([]);
+  useEffect(() => {
+    if (artifacts.length > 0)
+      resultsRef.current?.scrollIntoView({
+        block: "start",
+        behavior: "smooth",
+      });
+  }, [artifacts.length]);
   const create = useMutation({
     mutationFn: async (manuscripts: Manuscript[]) => {
       setFailures([]);
@@ -159,6 +167,72 @@ export function ExportsPage() {
         {create.error && (
           <p className="error-callout">{create.error.message}</p>
         )}
+        {progress.total > 0 && (
+          <section
+            className="export-results"
+            aria-label="导出结果"
+            ref={resultsRef}
+          >
+            <h2>导出文件</h2>
+            {!create.isPending && (
+              <p role="status">
+                导出完成：成功 {progress.total - failures.length} 份，失败{" "}
+                {failures.length} 份。
+              </p>
+            )}
+            {failures.map((failure, index) => (
+              <p className="error-callout" role="alert" key={index}>
+                {failure}
+              </p>
+            ))}
+            {downloadError && (
+              <p className="error-callout" role="alert">
+                {downloadError}
+              </p>
+            )}
+            {downloading && (
+              <button
+                type="button"
+                onClick={() => {
+                  downloadController.current?.abort();
+                }}
+              >
+                取消下载
+              </button>
+            )}
+            <div className="artifact-list">
+              {artifacts.map((artifact) => (
+                <article className="panel" key={artifact.id}>
+                  <div>
+                    <strong>{artifact.source_name}</strong>
+                    <small>{artifact.file_name}</small>
+                    <small>
+                      {artifact.format.toUpperCase()} · {artifact.layer} ·{" "}
+                      {artifact.size_bytes} bytes
+                    </small>
+                  </div>
+                  <span className="mono">
+                    SHA {artifact.sha256.slice(0, 12)}
+                  </span>
+                  <button
+                    disabled={downloading}
+                    onClick={() => {
+                      setDownloadError("");
+                      void download(artifact).catch((error: unknown) => {
+                        setDownloadError(
+                          error instanceof Error ? error.message : "下载失败",
+                        );
+                      });
+                    }}
+                    type="button"
+                  >
+                    下载
+                  </button>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
       <div className="page-stack" aria-label="选择导出稿件">
         <div className="toolbar export-selection-toolbar">
@@ -269,61 +343,6 @@ export function ExportsPage() {
             </div>
           </>
         )}
-      </div>
-      {progress.total > 0 && !create.isPending && (
-        <p role="status">
-          导出完成：成功 {progress.total - failures.length} 份，失败{" "}
-          {failures.length} 份。
-        </p>
-      )}
-      {failures.map((failure, index) => (
-        <p className="error-callout" role="alert" key={index}>
-          {failure}
-        </p>
-      ))}
-      {downloadError && (
-        <p className="error-callout" role="alert">
-          {downloadError}
-        </p>
-      )}
-      {downloading && (
-        <button
-          type="button"
-          onClick={() => {
-            downloadController.current?.abort();
-          }}
-        >
-          取消下载
-        </button>
-      )}
-      <div className="artifact-list">
-        {artifacts.map((artifact) => (
-          <article className="panel" key={artifact.id}>
-            <div>
-              <strong>{artifact.source_name}</strong>
-              <small>{artifact.file_name}</small>
-              <small>
-                {artifact.format.toUpperCase()} · {artifact.layer} ·{" "}
-                {artifact.size_bytes} bytes
-              </small>
-            </div>
-            <span className="mono">SHA {artifact.sha256.slice(0, 12)}</span>
-            <button
-              disabled={downloading}
-              onClick={() => {
-                setDownloadError("");
-                void download(artifact).catch((error: unknown) => {
-                  setDownloadError(
-                    error instanceof Error ? error.message : "下载失败",
-                  );
-                });
-              }}
-              type="button"
-            >
-              下载
-            </button>
-          </article>
-        ))}
       </div>
     </section>
   );

@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { ExportsPage } from "../src/pages/ExportsPage";
 
+HTMLElement.prototype.scrollIntoView = vi.fn();
+
 const manuscript = (id: string, name: string, has = true) => ({
   job_id: id,
   source_name: name,

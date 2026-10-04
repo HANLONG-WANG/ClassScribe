@@ -126,9 +126,7 @@ it("submits MAI without a consent checkbox and excludes local model options", ()
   fireEvent.change(input, {
     target: { files: [new File(["audio"], "lesson.wav")] },
   });
-  fireEvent.change(screen.getByLabelText("转写服务"), {
-    target: { value: "azure_mai" },
-  });
+  expect(screen.getByLabelText("转写服务")).toHaveValue("azure_mai");
   const submit = screen.getByRole("button", { name: "加入转录队列" });
   expect(
     screen.queryByRole("checkbox", { name: /我同意/ }),

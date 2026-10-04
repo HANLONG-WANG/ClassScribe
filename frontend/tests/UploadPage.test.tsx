@@ -96,6 +96,10 @@ it("restores import settings after leaving and returning to the page", () => {
       <UploadPage />
     </QueryClientProvider>,
   );
+  expect(screen.getByLabelText("转写服务")).toHaveValue("azure_mai");
+  fireEvent.change(screen.getByLabelText("转写服务"), {
+    target: { value: "local" },
+  });
   fireEvent.change(screen.getByRole("combobox", { name: "语言" }), {
     target: { value: "en" },
   });
@@ -106,6 +110,7 @@ it("restores import settings after leaving and returning to the page", () => {
       <UploadPage />
     </QueryClientProvider>,
   );
+  expect(screen.getByLabelText("转写服务")).toHaveValue("local");
   expect(screen.getByRole("combobox", { name: "语言" })).toHaveValue("en");
   expect(screen.getByRole("radio", { name: "最高精度" })).toBeChecked();
 });
