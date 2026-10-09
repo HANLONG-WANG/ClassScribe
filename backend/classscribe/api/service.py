@@ -425,7 +425,10 @@ class ClassScribeService:
                 by_id[identifier].queue_order = position
         return self.queue()
 
-    def list_jobs(self, *, limit: int = 30, offset: int = 0) -> dict[str, Any]:
+    def list_jobs(
+        self, *, limit: int = 30, offset: int = 0, job_status: JobStatus | None = None
+    ) -> dict[str, Any]:
+        filters = (Job.status == job_status,) if job_status is not None else ()
         with self.sessions() as session:
             rows = session.execute(
                 select(
@@ -439,6 +442,7 @@ class ClassScribeService:
                     .exists(),
                 )
                 .join(Recording, Job.recording_id == Recording.id)
+                .where(*filters)
                 .order_by(Job.created_at.desc(), Job.id.desc())
                 .offset(offset)
                 .limit(limit)
@@ -457,7 +461,7 @@ class ClassScribeService:
                     }
                     for job, recording, has_transcript in rows
                 ],
-                "total": session.scalar(select(func.count()).select_from(Job)),
+                "total": session.scalar(select(func.count()).select_from(Job).where(*filters)),
             }
 
     def job(self, job_id: str) -> dict[str, Any]:

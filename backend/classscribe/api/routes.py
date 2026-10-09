@@ -187,8 +187,9 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
     def list_jobs(
         limit: int = Query(default=30, ge=1, le=100),
         offset: int = Query(default=0, ge=0),
+        job_status: Annotated[JobStatus | None, Query(alias="status")] = None,
     ) -> dict[str, object]:
-        return service.list_jobs(limit=limit, offset=offset)
+        return service.list_jobs(limit=limit, offset=offset, job_status=job_status)
 
     @router.get("/queue")
     def queue() -> dict[str, object]:

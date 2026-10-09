@@ -48,11 +48,15 @@ function renderHistory(initial: Manuscript[], failIds: string[] = []) {
       return Promise.resolve(new Response(JSON.stringify({ deleted: true })));
     }
     const offset = Number(path.searchParams.get("offset") ?? 0);
+    const status = path.searchParams.get("status");
+    const matching = status
+      ? items.filter((item) => item.status === status)
+      : items;
     return Promise.resolve(
       new Response(
         JSON.stringify({
-          items: items.slice(offset, offset + 30),
-          total: items.length,
+          items: matching.slice(offset, offset + 30),
+          total: matching.length,
         }),
       ),
     );
@@ -70,6 +74,107 @@ function renderHistory(initial: Manuscript[], failIds: string[] = []) {
   );
   return { requests, confirmation, remote };
 }
+
+it("filters all history before pagination and clears hidden selections when switching status", async () => {
+  const today = new Date();
+  const { remote } = renderHistory([
+    ...Array.from({ length: 31 }, (_, index) =>
+      historyItem(`failed-${String(index)}`, today, "failed"),
+    ),
+    historyItem("cancelled", today, "cancelled"),
+    historyItem("completed", today),
+  ]);
+  await screen.findByRole("checkbox", { name: "选择 failed-0.wav" });
+  fireEvent.click(screen.getByRole("checkbox", { name: "选择 failed-0.wav" }));
+  fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+  await screen.findByRole("button", { name: /completed.wav/ });
+
+  const filter = screen.getByRole("combobox", { name: "转录稿状态" });
+  fireEvent.change(filter, { target: { value: "failed" } });
+  await screen.findByRole("button", { name: /failed-0.wav/ });
+  expect(screen.getByText("第 1 页")).toBeInTheDocument();
+  expect(screen.getByText("已选择 0 项")).toBeInTheDocument();
+  expect(screen.getByText(/「失败」状态下共 31 份稿件/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /cancelled.wav/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+  await screen.findByRole("button", { name: /failed-30.wav/ });
+  expect(screen.queryByRole("button", { name: /completed.wav/ })).toBeNull();
+  expect(screen.getByRole("button", { name: "下一页" })).toBeDisabled();
+  expect(
+    remote.mock.calls.some(([url]) => {
+      const params = new URL(url, "http://localhost").searchParams;
+      return params.get("status") === "failed" && params.get("offset") === "30";
+    }),
+  ).toBe(true);
+
+  fireEvent.change(filter, { target: { value: "cancelled" } });
+  await screen.findByRole("button", { name: /cancelled.wav/ });
+  expect(screen.getByText(/「已取消」状态下共 1 份稿件/)).toBeInTheDocument();
+  expect(screen.getByText("第 1 页")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("checkbox", { name: "选择 cancelled.wav" }));
+  fireEvent.change(filter, { target: { value: "paused" } });
+  await screen.findByText("没有符合此状态的稿件，可切换状态查看。");
+  expect(screen.getByText("已选择 0 项")).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: "删除所选任务及录音（0）" }),
+  ).toBeDisabled();
+
+  fireEvent.change(filter, { target: { value: "" } });
+  await screen.findByRole("button", { name: /failed-0.wav/ });
+  expect(screen.getByText(/共 33 份稿件/)).toBeInTheDocument();
+});
+
+it("keeps the active filter and fixes pagination after deleting the last matching page", async () => {
+  const today = new Date();
+  const { requests } = renderHistory([
+    ...Array.from({ length: 31 }, (_, index) =>
+      historyItem(`failed-${String(index)}`, today, "failed"),
+    ),
+    historyItem("completed", today),
+  ]);
+  await screen.findByRole("button", { name: /failed-0.wav/ });
+  fireEvent.change(screen.getByRole("combobox", { name: "转录稿状态" }), {
+    target: { value: "failed" },
+  });
+  await screen.findByText(/「失败」状态下共 31 份稿件/);
+  fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+  fireEvent.click(
+    await screen.findByRole("checkbox", { name: "选择 failed-30.wav" }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "删除所选任务及录音（1）" }),
+  );
+  await screen.findByRole("button", { name: /failed-0.wav/ });
+  expect(screen.getByText("第 1 页")).toBeInTheDocument();
+  expect(screen.getByText(/「失败」状态下共 30 份稿件/)).toBeInTheDocument();
+  expect(screen.getByRole("combobox", { name: "转录稿状态" })).toHaveValue(
+    "failed",
+  );
+  expect(screen.queryByRole("button", { name: /completed.wav/ })).toBeNull();
+  expect(requests).toEqual(["failed-30"]);
+});
+
+it.each([
+  ["completed", "已完成"],
+  ["running", "处理中"],
+  ["pending", "等待处理"],
+  ["paused", "已暂停"],
+  ["cancelling", "正在取消"],
+])("filters the %s state", async (status, label) => {
+  renderHistory([
+    historyItem("matching", new Date(), status),
+    historyItem("other", new Date(), "failed"),
+  ]);
+  await screen.findByRole("button", { name: /other.wav/ });
+  fireEvent.change(screen.getByRole("combobox", { name: "转录稿状态" }), {
+    target: { value: status },
+  });
+  await screen.findByText(new RegExp(`「${label}」状态下共 1 份稿件`));
+  expect(
+    screen.getByRole("button", { name: /matching.wav/ }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /other.wav/ })).toBeNull();
+});
 
 it("selects by day and page, skips active tasks, and honours cancelled batch confirmation", async () => {
   const today = new Date();

@@ -11,6 +11,16 @@ interface DeletionFailure {
   message: string;
 }
 
+const statusFilters = {
+  completed: "已完成",
+  failed: "失败",
+  cancelled: "已取消",
+  running: "处理中",
+  pending: "等待处理",
+  paused: "已暂停",
+  cancelling: "正在取消",
+};
+
 function canDelete(item: Manuscript) {
   return ["completed", "failed", "cancelled"].includes(item.status);
 }
@@ -46,6 +56,7 @@ function HistoryCheckbox({
 export function TranscriptsPage() {
   const client = useQueryClient();
   const [offset, setOffset] = useState(0);
+  const [statusFilter, setStatusFilter] = useState("");
   const [selected, setSelected] = useState<Record<string, Manuscript>>({});
   const [deletionNotice, setDeletionNotice] = useState("");
   const [deletionFailures, setDeletionFailures] = useState<DeletionFailure[]>(
@@ -58,10 +69,10 @@ export function TranscriptsPage() {
   const setCurrentJob = useWorkbench((state) => state.setCurrentJob);
   const setPage = useWorkbench((state) => state.setPage);
   const query = useQuery({
-    queryKey: ["manuscripts", offset],
+    queryKey: ["manuscripts", offset, statusFilter],
     queryFn: ({ signal }) =>
       api<{ items: Manuscript[]; total: number }>(
-        `/jobs?limit=30&offset=${String(offset)}`,
+        `/jobs?limit=30&offset=${String(offset)}${statusFilter ? `&status=${encodeURIComponent(statusFilter)}` : ""}`,
         { signal },
       ),
   });
@@ -266,6 +277,26 @@ export function TranscriptsPage() {
           导入新音频
         </button>
       </header>
+      <div className="panel toolbar">
+        <label htmlFor="history-status-filter">转录稿状态</label>
+        <select
+          id="history-status-filter"
+          value={statusFilter}
+          disabled={busy}
+          onChange={(event) => {
+            setStatusFilter(event.target.value);
+            setOffset(0);
+            setSelected({});
+          }}
+        >
+          <option value="">全部状态</option>
+          {Object.entries(statusFilters).map(([value, label]) => (
+            <option value={value} key={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+      </div>
       <div className="panel history-selection-toolbar">
         <label className="history-select">
           <HistoryCheckbox
@@ -350,11 +381,18 @@ export function TranscriptsPage() {
       {query.data && (
         <>
           <p className="muted">
+            {statusFilter
+              ? `「${statusFilters[statusFilter as keyof typeof statusFilters]}」状态下`
+              : ""}
             共 {query.data.total} 份稿件 · 按创建时间从新到旧排列 ·
             日期按本地时区显示
           </p>
           {query.data.total === 0 && (
-            <p className="empty-state">暂无稿件，请先导入音频创建课堂任务。</p>
+            <p className="empty-state">
+              {statusFilter
+                ? "没有符合此状态的稿件，可切换状态查看。"
+                : "暂无稿件，请先导入音频创建课堂任务。"}
+            </p>
           )}
           {groups.filter((group) => !group.older).map(renderGroup)}
           {groups.some((group) => group.older) && (

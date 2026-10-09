@@ -1966,6 +1966,99 @@ def test_job_history_route_validates_pagination_and_requires_auth(tmp_path: Path
     asyncio.run(check())
 
 
+@pytest.mark.parametrize(
+    "status_value",
+    ["completed", "failed", "cancelled", "running", "pending", "paused", "cancelling"],
+)
+def test_job_history_filters_status_before_pagination(tmp_path: Path, status_value: str) -> None:
+    from datetime import UTC, datetime
+
+    from classscribe.db.models import Job, JobStatus, Recording
+
+    service, sessions = service_fixture(tmp_path)
+    expected_ids: list[str] = []
+    with sessions.begin() as session:
+        for job_status in JobStatus:
+            for index in range(3):
+                recording = Recording(
+                    source_name=f"{job_status.value}-{index}.wav",
+                    source_sha256=hashlib.sha256(
+                        f"{job_status.value}-{index}".encode()
+                    ).hexdigest(),
+                    source_path=f"{job_status.value}-{index}.wav",
+                    duration_samples=16000,
+                    sample_rate=16000,
+                    channels=1,
+                )
+                job = Job(
+                    recording=recording,
+                    language_mode=LanguageMode.JAPANESE,
+                    profile_id="balanced",
+                    status=job_status,
+                    created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                )
+                session.add(job)
+                session.flush()
+                if job_status.value == status_value:
+                    expected_ids.append(job.id)
+    expected_ids.sort(reverse=True)
+    first = service.list_jobs(limit=2, job_status=JobStatus(status_value))
+    second = service.list_jobs(limit=2, offset=2, job_status=JobStatus(status_value))
+    assert first["total"] == second["total"] == 3
+    items = first["items"] + second["items"]
+    assert [item["job_id"] for item in items] == expected_ids
+    assert all(item["status"] == status_value for item in items)
+    assert service.list_jobs()["total"] == 3 * len(JobStatus)
+
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+
+    async def check() -> None:
+        response = await asyncio.wait_for(
+            request(
+                app,
+                "GET",
+                "/api/v1/jobs",
+                headers=auth(token, csrf),
+                query={"status": status_value, "limit": "2", "offset": "2"},
+            ),
+            timeout=3,
+        )
+        assert response.status == 200
+        assert response.json() == second
+
+    asyncio.run(check())
+
+
+def test_job_history_status_filter_validates_input_and_returns_empty_matches(
+    tmp_path: Path,
+) -> None:
+    service, _ = service_fixture(tmp_path)
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+
+    async def check() -> None:
+        for query, expected_status in [
+            ({"status": "failed"}, 200),
+            ({"status": "unknown"}, 422),
+            ({"status": ""}, 422),
+        ]:
+            response = await asyncio.wait_for(
+                request(app, "GET", "/api/v1/jobs", headers=auth(token, csrf), query=query),
+                timeout=3,
+            )
+            assert response.status == expected_status
+            if expected_status == 200:
+                assert response.json() == {"items": [], "total": 0}
+        response = await asyncio.wait_for(
+            request(app, "GET", "/api/v1/jobs", query={"status": "failed"}),
+            timeout=3,
+        )
+        assert response.status in {401, 403}
+
+    asyncio.run(check())
+
+
 def test_stream_upload_idempotence_cleanup_and_job_queue_order(tmp_path: Path) -> None:
     from uuid import uuid4
 
