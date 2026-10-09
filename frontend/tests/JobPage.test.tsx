@@ -1,6 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as api from "../src/api";
 import type { Job } from "../src/api";
@@ -43,6 +51,98 @@ function setup(status: string, stage: string, progress: number) {
     await act(() => client.invalidateQueries({ queryKey: ["job", "job-1"] }));
   };
 }
+
+it.each([false, true])(
+  "requires consent before manually resending an online request (uncertain: %s)",
+  async (uncertain) => {
+    const update = setup("failed", "transcription", 0.4);
+    await screen.findByText("主 ASR", { selector: "strong" });
+    await update({
+      online_retry: {
+        attempt_id: "attempt-1",
+        requires_confirmation: true,
+        result_uncertain: uncertain,
+        retry_at: null,
+        retry_after_seconds: 0,
+        recovers_saved_response: false,
+      },
+    });
+    await screen.findByRole("button", { name: "重试 MAI 请求" });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const fetch = vi.mocked(globalThis.fetch);
+    fetch.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "重试 MAI 请求" }));
+    expect(confirm).toHaveBeenCalledWith(
+      expect.stringContaining(uncertain ? "结果无法确认" : "再次计费"),
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByRole("button", { name: "重试 MAI 请求" }));
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalled();
+    });
+    expect(fetch.mock.calls[0]?.[0]).toContain("/jobs/job-1/retry");
+    const body = fetch.mock.calls[0]?.[1]?.body;
+    if (typeof body !== "string") throw new Error("missing retry body");
+    expect(JSON.parse(body)).toEqual({
+      confirm_resend: true,
+      expected_attempt_id: "attempt-1",
+    });
+  },
+);
+
+it("enforces retry cooldown locally and enables the button when the wait ends", async () => {
+  const update = setup("failed", "transcription", 0.4);
+  await screen.findByText("主 ASR", { selector: "strong" });
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  try {
+    await update({
+      online_retry: {
+        attempt_id: "attempt-1",
+        requires_confirmation: true,
+        result_uncertain: false,
+        retry_at: new Date(Date.now() + 3000).toISOString(),
+        retry_after_seconds: 3,
+        recovers_saved_response: false,
+      },
+    });
+    expect(
+      await screen.findByRole("button", { name: /等待.*秒后重试/ }),
+    ).toBeDisabled();
+    await act(async () => {
+      vi.advanceTimersByTime(4000);
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("button", { name: "重试 MAI 请求" })).toBeEnabled();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("shows rejected retry errors and disables duplicate clicks while submitting", async () => {
+  setup("failed", "transcription", 0.4);
+  await screen.findByText("主 ASR", { selector: "strong" });
+  let complete: ((response: Response) => void) | undefined;
+  vi.mocked(globalThis.fetch).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        complete = resolve;
+      }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "重试失败点" }));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "重试失败点" })).toBeDisabled(),
+  );
+  await act(async () => {
+    complete?.(
+      new Response(JSON.stringify({ detail: "请求记录已变化，请刷新后重试" }), {
+        status: 409,
+      }),
+    );
+    await Promise.resolve();
+  });
+  expect(await screen.findByRole("alert")).toHaveTextContent("请求记录已变化");
+});
 
 it("shows persisted upstream error codes, messages, request IDs and the response body", async () => {
   const update = setup("failed", "transcription", 0.4);

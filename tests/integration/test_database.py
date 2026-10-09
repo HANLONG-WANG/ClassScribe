@@ -13,6 +13,79 @@ from sqlalchemy import Engine, inspect
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+
+@pytest.mark.parametrize("unversioned", [False, True])
+def test_online_retry_migration_preserves_old_attempts(tmp_path: Path, unversioned: bool) -> None:
+    from datetime import UTC, datetime
+
+    from classscribe.db.models import OnlineRequestAttempt
+    from classscribe.db.session import create_sqlite_engine, upgrade_schema
+    from sqlalchemy import select, text
+
+    path = tmp_path / "previous-online.sqlite3"
+    config = Config("alembic.ini")
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
+    command.upgrade(config, "f2a6c8419d30")
+    engine = create_sqlite_engine(path)
+    factory = sessionmaker(engine)
+    with factory.begin() as session:
+        job = Job(
+            recording=Recording(
+                source_name="old.wav",
+                source_path="old.wav",
+                source_sha256="a" * 64,
+                duration_samples=16000,
+                sample_rate=16000,
+                channels=1,
+            ),
+            language_mode=LanguageMode.ENGLISH,
+            profile_id="balanced",
+        )
+        session.add(job)
+        session.flush()
+        job_id = job.id
+        session.execute(
+            text(
+                "INSERT INTO online_request_attempts "
+                "(id,job_id,request_fingerprint,audio_sha256,status,"
+                "service_request_id,error_code,created_at,updated_at) "
+                "VALUES (:id,:job,:fingerprint,:audio,'failed',"
+                "'original-request','MAI_HTTP_503',:now,:now)"
+            ),
+            {
+                "id": "original-attempt",
+                "job": job_id,
+                "fingerprint": "b" * 64,
+                "audio": "a" * 64,
+                "now": datetime.now(UTC).isoformat(" "),
+            },
+        )
+        if unversioned:
+            session.execute(text("DROP TABLE alembic_version"))
+    upgrade_schema(engine)
+    upgrade_schema(engine)
+    with factory.begin() as session:
+        attempt = session.get_one(OnlineRequestAttempt, "original-attempt")
+        assert attempt.attempt_number == 1 and attempt.status == "failed"
+        assert attempt.service_request_id == "original-request"
+        assert attempt.diagnostics_json == {}
+        session.add(
+            OnlineRequestAttempt(
+                job_id=job_id,
+                attempt_number=2,
+                status="prepared",
+                request_fingerprint="b" * 64,
+                audio_sha256="a" * 64,
+            )
+        )
+    command.check(config)
+    with pytest.raises(RuntimeError, match="manual retries"):
+        command.downgrade(config, "f2a6c8419d30")
+    with factory() as session:
+        assert len(list(session.scalars(select(OnlineRequestAttempt)))) == 2
+    engine.dispose()
+
+
 EXPECTED_TABLES = {
     "online_request_attempts",
     "app_settings",
@@ -420,7 +493,7 @@ def test_populated_recordings_migration_preserves_history(
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == ("f2a6c8419d30")
+        ).scalar_one() == ("c7b93a140e52")
         recordings_after = connection.exec_driver_sql("SELECT * FROM recordings").all()
         assert [row[: len(recordings_before[0])] for row in recordings_after] == recordings_before
         assert connection.exec_driver_sql("SELECT * FROM jobs").all() == jobs_before

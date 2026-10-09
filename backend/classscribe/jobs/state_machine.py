@@ -142,15 +142,19 @@ class JobStateMachine:
         job.status = JobStatus.CANCELLED
         job.completed_at = datetime.now(UTC)
 
-    def retry(self, job: Job) -> None:
+    def retry(self, job: Job, *, manual: bool = False) -> None:
         if job.status is not JobStatus.FAILED:
             raise self._state_error(job, "retry")
         checkpoint = self.first_incomplete(job)
-        if checkpoint is None or checkpoint.attempt_count >= checkpoint.max_attempts:
+        if checkpoint is None or (
+            not manual and checkpoint.attempt_count >= checkpoint.max_attempts
+        ):
             raise ClassScribeError(
                 ErrorCode.CHECKPOINT_RETRY_EXHAUSTED,
                 "the first incomplete checkpoint exhausted its parameter-specific retry limit",
             )
+        if manual:
+            checkpoint.max_attempts = max(checkpoint.max_attempts, checkpoint.attempt_count + 1)
         checkpoint.status = CheckpointStatus.RETRYABLE
         job.status = JobStatus.PENDING
         job.error_code = None

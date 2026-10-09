@@ -52,23 +52,33 @@ export function JobPage() {
     mutationFn: (action: "pause" | "resume" | "cancel" | "retry") =>
       api<Job>(`/jobs/${String(jobId)}/${action}`, {
         method: "POST",
-        body: "{}",
+        body: JSON.stringify(
+          action === "retry" && query.data?.online_retry
+            ? {
+                confirm_resend: query.data.online_retry.requires_confirmation,
+                expected_attempt_id: query.data.online_retry.attempt_id,
+              }
+            : {},
+        ),
       }),
     onSuccess: (job) => client.setQueryData(["job", job.job_id], job),
+    onError: () => {
+      void client.invalidateQueries({ queryKey: ["job", jobId] });
+    },
   });
 
   const terminal = ["completed", "cancelled", "failed"].includes(
     query.data?.status ?? "",
   );
   useEffect(() => {
-    if (terminal) return;
+    if (terminal && !query.data?.online_retry?.retry_at) return;
     const timer = setInterval(() => {
       setNow(Date.now());
     }, 1000);
     return () => {
       clearInterval(timer);
     };
-  }, [terminal]);
+  }, [terminal, query.data?.online_retry?.retry_at]);
 
   useEffect(() => {
     if (jobId === null || terminal) return;
@@ -135,6 +145,10 @@ export function JobPage() {
       .find((event) => event.kind === "job_paused")?.payload.reason ===
       "ibus_preempted_at_safe_segment_boundary";
   const activity = job.status === "running" ? job.activity : null;
+  const retry = job.online_retry;
+  const retryWait = retry?.retry_at
+    ? Math.max(0, Math.ceil((Date.parse(retry.retry_at) - now) / 1000))
+    : 0;
 
   return (
     <section className="page-stack" aria-labelledby="job-title">
@@ -213,13 +227,33 @@ export function JobPage() {
           取消
         </button>
         <button
-          disabled={!["failed", "pending"].includes(job.status)}
+          disabled={
+            !["failed", "pending"].includes(job.status) ||
+            control.isPending ||
+            retryWait > 0
+          }
           onClick={() => {
+            if (
+              retry?.requires_confirmation &&
+              !window.confirm(
+                (retry.result_uncertain
+                  ? "上次请求的结果无法确认，云端可能已经处理并计费。"
+                  : "将重新向 Azure MAI 发送请求，可能再次计费。") +
+                  "已完成的步骤会保留。确认重试？",
+              )
+            )
+              return;
             control.mutate("retry");
           }}
           type="button"
         >
-          重试失败点
+          {retryWait > 0
+            ? `等待 ${String(retryWait)} 秒后重试`
+            : retry?.recovers_saved_response
+              ? "恢复已保存结果"
+              : retry?.requires_confirmation
+                ? "重试 MAI 请求"
+                : "重试失败点"}
         </button>
         <button
           className="primary-button"
@@ -241,6 +275,18 @@ export function JobPage() {
           直接导出
         </button>
       </div>
+      {control.error && (
+        <p role="alert" className="error-callout">
+          {control.error.message}
+        </p>
+      )}
+      {retry?.requires_confirmation && (
+        <p className="notice">
+          {retry.result_uncertain
+            ? "上次请求结果未知，重试可能重复处理并计费。"
+            : "云端请求失败；不会自动重发，可确认后手动重试。"}
+        </p>
+      )}
       <CurrentActivity
         activity={activity ?? null}
         status={job.status}
@@ -335,6 +381,27 @@ export function JobPage() {
             <p>响应读取未完成：{job.online_error.response_read_error}</p>
           )}
           <pre>{job.online_error.response_body || "上游未返回响应内容。"}</pre>
+        </details>
+      )}
+      {(job.online_attempts?.length ?? 0) > 0 && (
+        <details className="panel job-technical">
+          <summary>云端请求记录</summary>
+          {job.online_attempts?.map((attempt) => (
+            <div key={attempt.attempt_id}>
+              <p>
+                第 {attempt.attempt_number} 次 ·{" "}
+                {onlineAttemptLabel(attempt.status)} ·{" "}
+                {new Date(attempt.created_at).toLocaleString()}
+              </p>
+              {attempt.diagnostics && (
+                <p>
+                  HTTP {attempt.diagnostics.http_status} ·{" "}
+                  {attempt.diagnostics.service_error_message}
+                </p>
+              )}
+              {attempt.request_id && <p>请求 ID：{attempt.request_id}</p>}
+            </div>
+          ))}
         </details>
       )}
       {(job.events?.length ?? 0) > 0 && (
@@ -627,6 +694,18 @@ function readableEvents(events: PipelineEvent[]) {
     )
     .slice(-6)
     .reverse();
+}
+
+function onlineAttemptLabel(status: string) {
+  const labels: Record<string, string> = {
+    prepared: "等待发送",
+    sending: "请求处理中",
+    uncertain: "结果未知",
+    failed: "请求失败",
+    responded: "响应已保存",
+    imported: "已导入",
+  };
+  return labels[status] ?? status;
 }
 
 function reasonLabel(reason: string) {

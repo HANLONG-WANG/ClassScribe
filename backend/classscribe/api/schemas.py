@@ -24,6 +24,11 @@ class MaiCredentialUpdate(APIModel):
     key: SecretStr
 
 
+class JobRetry(APIModel):
+    confirm_resend: bool = Field(default=False, strict=True)
+    expected_attempt_id: str | None = Field(default=None, max_length=36)
+
+
 class JobCreate(APIModel):
     provider: Literal["local", "azure_mai"] = "local"
     mai_options: MaiTranscriptionOptions | None = None

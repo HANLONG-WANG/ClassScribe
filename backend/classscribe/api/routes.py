@@ -22,6 +22,7 @@ from classscribe.api.schemas import (
     GlossaryTermsUpdate,
     HistoryAction,
     JobCreate,
+    JobRetry,
     LocalDataClearRequest,
     MaiCredentialUpdate,
     ModelInstallConfirmation,
@@ -273,8 +274,13 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         return service.cancel_job(job_id)
 
     @router.post("/jobs/{job_id}/retry")
-    async def retry_job(job_id: str) -> dict[str, object]:
-        return service.retry_job(job_id)
+    async def retry_job(job_id: str, body: JobRetry | None = None) -> dict[str, object]:
+        body = body or JobRetry()
+        return service.retry_job(
+            job_id,
+            confirm_resend=body.confirm_resend,
+            expected_attempt_id=body.expected_attempt_id,
+        )
 
     @router.post("/jobs/{job_id}/retry-segment/{segment_id}")
     async def retry_segment(job_id: str, segment_id: str) -> dict[str, object]:

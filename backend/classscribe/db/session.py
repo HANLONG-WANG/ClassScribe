@@ -52,8 +52,19 @@ def upgrade_schema(engine: Engine) -> None:
         # Older core releases created the latest schema without recording a revision.
         # Only stamp a schema that has every current table and column; never guess
         # the version of a partially upgraded database.
+        online_columns = (
+            {column["name"] for column in inspector.get_columns("online_request_attempts")}
+            if "online_request_attempts" in tables
+            else set()
+        )
+        legacy_online = (
+            "attempt_number" not in online_columns and "diagnostics_json" not in online_columns
+        )
         for table in Base.metadata.sorted_tables:
-            if table.name not in tables or {column.name for column in table.columns} != {
+            expected_columns = {column.name for column in table.columns}
+            if legacy_online and table.name == "online_request_attempts":
+                expected_columns -= {"attempt_number", "diagnostics_json"}
+            if table.name not in tables or expected_columns != {
                 column["name"] for column in inspector.get_columns(table.name)
             }:
                 raise RuntimeError(
@@ -61,7 +72,7 @@ def upgrade_schema(engine: Engine) -> None:
                     "and establish its Alembic revision before upgrading; "
                     "the database was not modified."
                 )
-        command.stamp(config, "head")
+        command.stamp(config, "f2a6c8419d30" if legacy_online else "head")
     command.upgrade(config, "head")
 
 

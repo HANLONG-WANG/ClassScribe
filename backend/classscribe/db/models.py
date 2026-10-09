@@ -202,6 +202,8 @@ class OnlineRequestAttempt(Base):
 
     __tablename__ = "online_request_attempts"
     __table_args__ = (
+        UniqueConstraint("job_id", "attempt_number", name="uq_online_request_attempt_number"),
+        CheckConstraint("attempt_number >= 1", name="online_attempt_number_positive"),
         CheckConstraint(
             "status IN ('prepared', 'sending', 'responded', 'imported', 'uncertain', 'failed')",
             name="online_attempt_status",
@@ -209,13 +211,15 @@ class OnlineRequestAttempt(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), unique=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"))
+    attempt_number: Mapped[int] = mapped_column(Integer, default=1)
     request_fingerprint: Mapped[str] = mapped_column(String(64))
     audio_sha256: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(16), default="prepared")
     service_request_id: Mapped[str | None] = mapped_column(String(256))
     response_path: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(String(128))
+    diagnostics_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now

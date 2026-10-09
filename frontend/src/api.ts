@@ -252,6 +252,23 @@ export interface Job {
     response_read_error: string | null;
     captured_at: string;
   };
+  online_retry?: {
+    attempt_id: string;
+    requires_confirmation: boolean;
+    result_uncertain: boolean;
+    retry_at: string | null;
+    retry_after_seconds: number;
+    recovers_saved_response: boolean;
+  };
+  online_attempts?: {
+    attempt_id: string;
+    attempt_number: number;
+    status: string;
+    error_code: string | null;
+    request_id: string | null;
+    created_at: string;
+    diagnostics: Job["online_error"] | null;
+  }[];
   activity?: JobActivity | null;
   events?: PipelineEvent[];
   stage_activity?: Record<string, JobActivity[]>;

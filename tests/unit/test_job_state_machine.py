@@ -159,6 +159,31 @@ def test_illegal_transition_and_retry_exhaustion_are_explicit(
         assert exhausted.value.code is ErrorCode.CHECKPOINT_RETRY_EXHAUSTED
 
 
+def test_manual_retry_grants_one_attempt_without_resetting_history(
+    database: tuple[Engine, sessionmaker[Session], Path],
+) -> None:
+    _, factory, _ = database
+    job_id, checkpoint_ids = make_job(factory)
+    machine = JobStateMachine()
+    with factory.begin() as session:
+        job = session.get_one(Job, job_id)
+        checkpoint = session.get_one(JobCheckpoint, checkpoint_ids[0])
+        checkpoint.max_attempts = 1
+        machine.start(job)
+        machine.begin_checkpoint(job, checkpoint)
+        machine.fail_checkpoint(job, checkpoint, code=ErrorCode.WORKER_CRASH, detail="failed")
+        machine.retry(job, manual=True)
+        assert checkpoint.attempt_count == 1
+        assert checkpoint.max_attempts == 2
+        assert job.status is JobStatus.PENDING
+        machine.start(job)
+        machine.begin_checkpoint(job, checkpoint)
+        machine.fail_checkpoint(job, checkpoint, code=ErrorCode.WORKER_CRASH, detail="failed again")
+        assert session.get_one(Job, job_id).status is JobStatus.FAILED
+        with pytest.raises(ClassScribeError):
+            machine.retry(job)
+
+
 def test_checkpoint_parameter_hash_is_stable_and_unique_per_key(
     database: tuple[Engine, sessionmaker[Session], Path],
 ) -> None:

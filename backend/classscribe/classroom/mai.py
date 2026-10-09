@@ -263,7 +263,7 @@ class MaiHttpError(ClassScribeError):
             detail += f" 服务建议等待 {self.retry_after} 秒。"
         if self.request_id:
             detail += f" 请求 ID：{self.request_id}。"
-        super().__init__(ErrorCode.JOB_STATE_CONFLICT, detail)
+        super().__init__(ErrorCode.MAI_HTTP_ERROR, detail)
 
 
 class MaiClient:

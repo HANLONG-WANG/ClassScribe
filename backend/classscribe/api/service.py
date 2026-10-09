@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
 import os
 import tempfile
@@ -49,6 +48,7 @@ from classscribe.benchmark import (
 from classscribe.benchmark.persistence import BenchmarkRepository
 from classscribe.classroom import ClassroomPipeline, ProductionStageRunner
 from classscribe.classroom import queue as queue_state
+from classscribe.classroom.online_attempts import attempt_diagnostics, authorize_retry, retry_policy
 from classscribe.contracts import LanguageMode
 from classscribe.db.models import (
     AppSetting,
@@ -65,6 +65,7 @@ from classscribe.db.models import (
     JobStatus,
     ModelHealth,
     ModelInstallation,
+    OnlineRequestAttempt,
     ProfileSetting,
     Recording,
     SpeakerDisplayName,
@@ -478,17 +479,36 @@ class ClassScribeService:
                 if job is None:
                     raise _not_found("job")
                 payload = _job_payload(job)
-        error_path = self.paths.data_path("jobs", identifier, "online", "error.json")
-        if not error_path.is_symlink():
-            try:
-                with error_path.open("rb") as source:
-                    content = source.read(512 * 1024 + 1)
-                if len(content) <= 512 * 1024:
-                    diagnostics = json.loads(content)
-                    if isinstance(diagnostics, dict):
-                        payload["online_error"] = diagnostics
-            except (OSError, ValueError):
-                pass
+        with self.sessions() as session:
+            attempts = list(
+                session.scalars(
+                    select(OnlineRequestAttempt)
+                    .where(OnlineRequestAttempt.job_id == identifier)
+                    .order_by(OnlineRequestAttempt.attempt_number)
+                )
+            )
+            if attempts:
+                latest = attempts[-1]
+                diagnostics = attempt_diagnostics(self.paths, latest)
+                if diagnostics:
+                    payload["online_error"] = diagnostics
+                payload["online_attempts"] = [
+                    {
+                        "attempt_id": attempt.id,
+                        "attempt_number": attempt.attempt_number,
+                        "status": attempt.status,
+                        "error_code": attempt.error_code,
+                        "request_id": attempt.service_request_id,
+                        "created_at": attempt.created_at.replace(tzinfo=UTC).isoformat(),
+                        "diagnostics": attempt_diagnostics(self.paths, attempt) or None,
+                    }
+                    for attempt in attempts
+                ]
+                if (
+                    payload["status"] == JobStatus.FAILED.value
+                    and payload.get("current_checkpoint") == "mai_request"
+                ):
+                    payload["online_retry"] = retry_policy(self.paths, latest)
         return payload
 
     def pause_job(self, job_id: str) -> dict[str, Any]:
@@ -508,7 +528,13 @@ class ClassScribeService:
         pipeline.cancel(_id(job_id, "job_id"))
         return self.job(job_id)
 
-    def retry_job(self, job_id: str) -> dict[str, Any]:
+    def retry_job(
+        self,
+        job_id: str,
+        *,
+        confirm_resend: bool = False,
+        expected_attempt_id: str | None = None,
+    ) -> dict[str, Any]:
         identifier = _id(job_id, "job_id")
         pipeline = self._pipeline()
         with self.sessions.begin() as session:
@@ -517,7 +543,20 @@ class ClassScribeService:
             if job is None:
                 raise _not_found("job")
             if job.status is JobStatus.FAILED:
-                pipeline.state.retry(job)
+                checkpoint = pipeline.state.first_incomplete(job)
+                if (
+                    job.options_json.get("provider") == "azure_mai"
+                    and checkpoint is not None
+                    and checkpoint.checkpoint_key == "mai_request"
+                ):
+                    authorize_retry(
+                        session,
+                        self.paths,
+                        identifier,
+                        confirm_resend=confirm_resend,
+                        expected_attempt_id=expected_attempt_id,
+                    )
+                pipeline.state.retry(job, manual=True)
                 queue_state.append(session, job)
             elif job.status is not JobStatus.PENDING:
                 raise ClassScribeError(

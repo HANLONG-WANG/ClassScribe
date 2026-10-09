@@ -28,6 +28,7 @@ from classscribe.classroom.mai import (
     parse_mai_response,
     request_definition,
 )
+from classscribe.classroom.online_attempts import latest_attempt, response_file
 from classscribe.config import AppConfig
 from classscribe.contracts import LanguageMode
 from classscribe.db.models import (
@@ -108,7 +109,8 @@ class ProviderStageRunner:
         with sessions.begin() as session:
             job = session.get_one(Job, job_id)
             checkpoint = session.get_one(JobCheckpoint, checkpoint_id)
-            checkpoint.max_attempts = 1
+            # Each dispatch gets one send; additional dispatches require an explicit retry.
+            checkpoint.max_attempts = checkpoint.attempt_count + 1
             state.begin_checkpoint(job, checkpoint)
         try:
             self._request(sessions, job_id)
@@ -129,13 +131,14 @@ class ProviderStageRunner:
             raise
 
     def _request(self, sessions: sessionmaker[Session], job_id: str) -> None:
-        response_path = self.paths.data_path("jobs", job_id, "online", "response.raw.json")
+        with sessions() as session:
+            current = latest_attempt(session, job_id)
+            number = current.attempt_number if current is not None else 1
+        response_path = response_file(self.paths, job_id, number)
         # Atomic response publication can precede the database commit during a crash.
         # Recover local evidence before consulting credentials or sending another request.
         with sessions.begin() as session:
-            attempt = session.scalar(
-                select(OnlineRequestAttempt).where(OnlineRequestAttempt.job_id == job_id)
-            )
+            attempt = latest_attempt(session, job_id)
             if (
                 attempt is not None
                 and attempt.status in {"sending", "uncertain", "responded", "imported"}
@@ -169,9 +172,7 @@ class ProviderStageRunner:
                 return status in {None, JobStatus.CANCELLING, JobStatus.CANCELLED}
 
         with sessions.begin() as session:
-            attempt = session.scalar(
-                select(OnlineRequestAttempt).where(OnlineRequestAttempt.job_id == job_id)
-            )
+            attempt = latest_attempt(session, job_id)
             if attempt is not None:
                 if attempt.request_fingerprint != fingerprint:
                     raise mai_error("MAI 请求参数或音频已变化；请创建新任务。")
@@ -180,7 +181,7 @@ class ProviderStageRunner:
                 if attempt.status != "prepared":
                     raise mai_error(
                         "此前 MAI 请求结果未知或失败，不会自动重发。"
-                        "确认可能重复计费后，请创建新任务。"
+                        "请在任务页面确认可能再次计费后，手动重试。"
                     )
             else:
                 attempt = OnlineRequestAttempt(
@@ -198,9 +199,7 @@ class ProviderStageRunner:
         upload_digest = file_sha256(upload_path)
         # Persist send intent before any socket can upload data.
         with sessions.begin() as session:
-            attempt = session.scalar(
-                select(OnlineRequestAttempt).where(OnlineRequestAttempt.job_id == job_id)
-            )
+            attempt = latest_attempt(session, job_id)
             assert attempt is not None
             attempt.status = "sending"
             attempt.audio_sha256 = upload_digest
@@ -234,31 +233,26 @@ class ProviderStageRunner:
             )
             atomic_write_bytes(response_path, payload)
             with sessions.begin() as session:
-                attempt = session.scalar(
-                    select(OnlineRequestAttempt).where(OnlineRequestAttempt.job_id == job_id)
-                )
+                attempt = latest_attempt(session, job_id)
                 assert attempt is not None
                 attempt.status = "responded"
                 attempt.response_path = str(response_path)
                 attempt.service_request_id = request_id
         except Exception as exc:
             if isinstance(exc, MaiHttpError):
+                diagnostics = {**exc.diagnostics, "captured_at": datetime.now(UTC).isoformat()}
                 try:
                     atomic_write_text(
                         response_path.with_name("error.json"),
-                        json.dumps(
-                            {**exc.diagnostics, "captured_at": datetime.now(UTC).isoformat()},
-                            ensure_ascii=False,
-                        ),
+                        json.dumps(diagnostics, ensure_ascii=False),
                     )
                 except OSError as write_error:
                     exc.detail += f" 诊断文件保存失败: {type(write_error).__name__}。"
             with sessions.begin() as session:
-                attempt = session.scalar(
-                    select(OnlineRequestAttempt).where(OnlineRequestAttempt.job_id == job_id)
-                )
+                attempt = latest_attempt(session, job_id)
                 assert attempt is not None
                 if isinstance(exc, MaiHttpError):
+                    attempt.diagnostics_json = diagnostics
                     attempt.status = "failed"
                     attempt.error_code = f"MAI_HTTP_{exc.status}"
                     attempt.service_request_id = exc.request_id or None
@@ -268,9 +262,7 @@ class ProviderStageRunner:
             raise
 
     def _import(self, session: Session, job: Job) -> None:
-        attempt = session.scalar(
-            select(OnlineRequestAttempt).where(OnlineRequestAttempt.job_id == job.id)
-        )
+        attempt = latest_attempt(session, job.id)
         if (
             attempt is None
             or attempt.status not in {"responded", "imported"}

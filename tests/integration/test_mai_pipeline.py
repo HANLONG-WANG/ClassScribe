@@ -4,6 +4,7 @@ import asyncio
 import json
 import threading
 import wave
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -27,7 +28,7 @@ from classscribe.db.models import (
     Recording,
     TranscriptSegment,
 )
-from classscribe.errors import ClassScribeError
+from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.models import ModelManager, SandboxedModelInvoker, load_registry
 from classscribe.paths import AppPaths
 from sqlalchemy import select
@@ -470,6 +471,271 @@ def test_mai_queue_overlaps_requests_caps_parallelism_and_resumes_after_pause(
             await pipeline.close()
 
     asyncio.run(scenario())
+
+
+def _retry_service(
+    runner: ProviderStageRunner, pipeline: ClassroomPipeline, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Any, list[str]]:
+    from classscribe.api.service import ClassScribeService
+
+    scheduled: list[str] = []
+    monkeypatch.setattr(pipeline, "schedule", scheduled.append)
+    service = ClassScribeService(
+        pipeline.sessions,
+        runner.paths,
+        load_registry(Path("config/model-registry.v1.yaml")),
+        pipeline=pipeline,
+    )
+    return service, scheduled
+
+
+def test_manual_mai_retry_preserves_steps_and_request_history(
+    database: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from classscribe.classroom.mai import MaiHttpError
+    from classscribe.classroom.online_attempts import latest_attempt
+
+    sessions, runner, pipeline, identifier = setup_online(database, tmp_path)
+    calls: list[int] = []
+
+    def transcribe(*args: Any, **kwargs: Any) -> tuple[bytes, str]:
+        calls.append(1)
+        if len(calls) == 1:
+            raise MaiHttpError(
+                503, "first-request", "0", body='{"error":{"code":"diarization_unavailable"}}'
+            )
+        return b'{"phrases":[{"text":"retried successfully"}]}', "second-request"
+
+    monkeypatch.setattr(runner.client, "transcribe", transcribe)
+    service, scheduled = _retry_service(runner, pipeline, monkeypatch)
+    pipeline.run_until_blocked(identifier)
+    failed = service.job(identifier)
+    assert failed["error_code"] == ErrorCode.MAI_HTTP_ERROR.value
+    assert len(calls) == 1
+    original_id = failed["online_retry"]["attempt_id"]
+    with sessions() as session:
+        completed = {
+            cp.id: (cp.attempt_count, cp.completed_at)
+            for cp in session.get_one(Job, identifier).checkpoints
+            if cp.status.value == "completed"
+        }
+    with pytest.raises(ClassScribeError, match="确认"):
+        service.retry_job(identifier)
+    assert not scheduled
+    pending = service.retry_job(identifier, confirm_resend=True, expected_attempt_id=original_id)
+    assert pending["status"] == "pending"
+    assert [a["status"] for a in pending["online_attempts"]] == ["failed", "prepared"]
+    # Duplicate clicks while queued grant no additional request.
+    service.retry_job(identifier, confirm_resend=True, expected_attempt_id=original_id)
+    pipeline.run_until_blocked(identifier)
+    result = service.job(identifier)
+    assert result["status"] == "completed"
+    assert "online_error" not in result
+    assert len(calls) == 2
+    assert [a["request_id"] for a in result["online_attempts"]] == [
+        "first-request",
+        "second-request",
+    ]
+    assert (
+        result["online_attempts"][0]["diagnostics"]["service_error_code"]
+        == "diarization_unavailable"
+    )
+    with sessions() as session:
+        job = session.get_one(Job, identifier)
+        assert {
+            cp.id: (cp.attempt_count, cp.completed_at)
+            for cp in job.checkpoints
+            if cp.id in completed
+        } == completed
+        checkpoint = next(cp for cp in job.checkpoints if cp.checkpoint_key == "mai_request")
+        assert checkpoint.attempt_count == checkpoint.max_attempts == 2
+        attempt = latest_attempt(session, identifier)
+        assert attempt is not None and attempt.response_path is not None
+        assert Path(attempt.response_path).is_file()
+        assert "/attempts/2/" in attempt.response_path
+        assert len(list(session.scalars(select(TranscriptSegment)))) == 1
+    runner._request(sessions, identifier)
+    assert len(calls) == 2
+
+
+def test_uncertain_manual_retry_requires_confirmation_for_current_attempt(
+    database: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sessions, runner, pipeline, identifier = setup_online(database, tmp_path)
+    calls: list[int] = []
+
+    def transcribe(*args: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        raise OSError("connection lost")
+
+    monkeypatch.setattr(runner.client, "transcribe", transcribe)
+    service, _ = _retry_service(runner, pipeline, monkeypatch)
+    pipeline.run_until_blocked(identifier)
+    first = service.job(identifier)["online_retry"]
+    assert first["result_uncertain"]
+    with pytest.raises(ClassScribeError, match="确认"):
+        service.retry_job(identifier, expected_attempt_id=first["attempt_id"])
+    with pytest.raises(ClassScribeError, match="刷新"):
+        service.retry_job(identifier, confirm_resend=True, expected_attempt_id=str(uuid4()))
+    assert len(calls) == 1
+    service.retry_job(identifier, confirm_resend=True, expected_attempt_id=first["attempt_id"])
+    pipeline.run_until_blocked(identifier)
+    assert len(calls) == 2
+    # An old confirmation cannot authorize a third request after a second failure.
+    with pytest.raises(ClassScribeError, match="刷新"):
+        service.retry_job(identifier, confirm_resend=True, expected_attempt_id=first["attempt_id"])
+    with sessions() as session:
+        assert [
+            a.status
+            for a in session.scalars(
+                select(OnlineRequestAttempt).order_by(OnlineRequestAttempt.attempt_number)
+            )
+        ] == ["uncertain", "uncertain"]
+
+
+def test_authorized_retry_survives_restart_and_is_sent_once(
+    database: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from classscribe.classroom.mai import MaiHttpError
+    from classscribe.classroom.online_attempts import latest_attempt
+
+    sessions, runner, pipeline, identifier = setup_online(database, tmp_path)
+    calls: list[int] = []
+
+    def first_send(*args: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        raise MaiHttpError(503, "failed-before-restart", "0")
+
+    monkeypatch.setattr(runner.client, "transcribe", first_send)
+    service, _ = _retry_service(runner, pipeline, monkeypatch)
+    pipeline.run_until_blocked(identifier)
+    policy = service.job(identifier)["online_retry"]
+    service.retry_job(identifier, confirm_resend=True, expected_attempt_id=policy["attempt_id"])
+    restarted = ProviderStageRunner(runner.local, runner.paths, runner.config)
+    recovered_pipeline = ClassroomPipeline(sessions, restarted)
+
+    def second_send(*args: Any, **kwargs: Any) -> tuple[bytes, str]:
+        calls.append(2)
+        return b'{"phrases":[{"text":"recovered retry"}]}', "after-restart"
+
+    monkeypatch.setattr(restarted.client, "transcribe", second_send)
+    assert recovered_pipeline.recover() == (identifier,)
+    recovered_pipeline.run_until_blocked(identifier)
+    assert recovered_pipeline.snapshot(identifier)["status"] == "completed"
+    restarted._request(sessions, identifier)
+    assert calls == [1, 2]
+    with sessions() as session:
+        latest = latest_attempt(session, identifier)
+        assert latest is not None and latest.attempt_number == 2 and latest.status == "imported"
+
+
+@pytest.mark.parametrize("retry_after, expected_wait", [("30", 30), (None, 5)])
+def test_manual_retry_obeys_upstream_cooldown(
+    database: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    retry_after: str | None,
+    expected_wait: int,
+) -> None:
+    from classscribe.classroom.mai import MaiHttpError
+
+    sessions, runner, pipeline, identifier = setup_online(database, tmp_path)
+
+    def transcribe(*args: Any, **kwargs: Any) -> Any:
+        raise MaiHttpError(503, "retry-later", retry_after)
+
+    monkeypatch.setattr(runner.client, "transcribe", transcribe)
+    service, scheduled = _retry_service(runner, pipeline, monkeypatch)
+    pipeline.run_until_blocked(identifier)
+    policy = service.job(identifier)["online_retry"]
+    assert 0 < policy["retry_after_seconds"] <= expected_wait
+    with pytest.raises(ClassScribeError, match="等待"):
+        service.retry_job(identifier, confirm_resend=True, expected_attempt_id=policy["attempt_id"])
+    assert not scheduled
+    with sessions.begin() as session:
+        attempt = session.get_one(OnlineRequestAttempt, policy["attempt_id"])
+        attempt.updated_at = datetime.now(UTC) - timedelta(seconds=expected_wait + 1)
+    assert (
+        service.retry_job(
+            identifier, confirm_resend=True, expected_attempt_id=policy["attempt_id"]
+        )["status"]
+        == "pending"
+    )
+
+
+def test_manual_retry_recovers_published_response_without_resending(
+    database: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from classscribe.recovery import atomic_write_bytes
+
+    sessions, runner, pipeline, identifier = setup_online(database, tmp_path)
+
+    def transcribe(*args: Any, **kwargs: Any) -> Any:
+        raise OSError("lost connection")
+
+    monkeypatch.setattr(runner.client, "transcribe", transcribe)
+    service, _ = _retry_service(runner, pipeline, monkeypatch)
+    pipeline.run_until_blocked(identifier)
+    response = runner.paths.data_path("jobs", identifier, "online", "response.raw.json")
+    atomic_write_bytes(response, b'{"phrases":[{"text":"already saved"}]}')
+    runner.credentials.clear()
+    policy = service.job(identifier)["online_retry"]
+    assert policy["recovers_saved_response"] and not policy["requires_confirmation"]
+    service.retry_job(identifier)
+    pipeline.run_until_blocked(identifier)
+    assert service.job(identifier)["status"] == "completed"
+    with sessions() as session:
+        assert len(list(session.scalars(select(OnlineRequestAttempt)))) == 1
+        assert session.scalar(select(TranscriptSegment)).faithful_text == "already saved"
+
+
+def test_retry_route_validates_explicit_confirmation(
+    database: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from classscribe.api.routes import create_api_router
+    from classscribe.classroom.mai import MaiHttpError
+    from fastapi import FastAPI
+
+    _, runner, pipeline, identifier = setup_online(database, tmp_path)
+
+    def transcribe(*args: Any, **kwargs: Any) -> Any:
+        raise MaiHttpError(503, "retry-route", "0")
+
+    monkeypatch.setattr(runner.client, "transcribe", transcribe)
+    service, _ = _retry_service(runner, pipeline, monkeypatch)
+    pipeline.run_until_blocked(identifier)
+    attempt_id = service.job(identifier)["online_retry"]["attempt_id"]
+    app = FastAPI()
+    app.include_router(create_api_router(service))
+
+    async def post(body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        messages: list[Any] = []
+
+        async def receive() -> Any:
+            return {"type": "http.request", "body": json.dumps(body).encode(), "more_body": False}
+
+        async def send(message: Any) -> None:
+            messages.append(message)
+
+        await app(
+            {
+                "type": "http",
+                "method": "POST",
+                "scheme": "http",
+                "path": f"/api/v1/jobs/{identifier}/retry",
+                "query_string": b"",
+                "headers": [(b"content-type", b"application/json")],
+                "server": ("127.0.0.1", 8765),
+                "client": ("127.0.0.1", 50000),
+            },
+            receive,
+            send,
+        )
+        return messages[0]["status"], json.loads(messages[1]["body"])
+
+    assert asyncio.run(post({"confirm_resend": "true"}))[0] == 422
+    status, payload = asyncio.run(post({"confirm_resend": True, "expected_attempt_id": attempt_id}))
+    assert status == 200 and payload["status"] == "pending"
 
 
 def test_failed_response_diagnostics_are_durable_and_available_after_restart(
