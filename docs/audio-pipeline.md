@@ -3,9 +3,30 @@
 ## Canonical master 与原件
 
 `FFmpegMediaPipeline` 接受 WAV、FLAC、MP3、M4A/AAC、OGG、Opus、MP4、MOV、MKV 和
-WebM。入口拒绝不存在、symlink、非普通文件、8 GiB 以上、90 分钟以上、超过 8 声道或
+WebM。普通转写入口拒绝不存在、symlink、非普通文件、8 GiB 以上、超过服务时长上限、超过 8 声道或
 无音轨的输入。`ffprobe` 只读取第一个音频流；解析失败返回稳定错误，不把任意 stderr 或
 用户文件内容写入日志。
+
+本地任务时长上限为 90 分钟；MAI 在线任务为 119 分钟，发送到 Azure 的 FLAC 最多
+240,000,000 字节（十进制 240 MB）。本项目使用 `2025-10-15` REST API，其
+[官方参考](https://learn.microsoft.com/en-us/rest/api/speechtotext/transcriptions/transcribe?view=rest-speechtotext-2025-10-15)
+要求音频小于 2 小时、250 MB。通用配额页写有小于 5 小时、500 MB，本项目按当前接口
+文档采用较严格的限制，预留 1 分钟、10 MB。大小校验针对转码后实际上传的音频；
+原始音视频文件仍可达 8 GiB。
+
+导入页勾选“试听和裁剪”时，上传使用 `for_clipping=true`，允许超长原件进入
+范围编辑器；文件大小、格式、声道和采样率限制仍生效。上传、裁剪、创建任务和
+标准化按所选服务及最终选段校验时长；FLAC 准备和发送前均校验实际上传大小。
+MAI 队列按顺序启动，最多并行运行 10 个任务；
+本地任务仍串行执行，且与 MAI 批次之间按队列顺序等待资源释放。
+
+MAI 非 200 响应保存到任务 `online/error.json`（权限 0600）：HTTP 状态、上游错误代码、
+错误消息、请求 ID、Retry-After、记录时间及脱敏后的响应正文。正文最多读取 64 KiB，
+读取超时或不完整响应保留状态和读取错误标记，超大正文标记截断。Azure 密钥及标明的
+凭据先脱敏再落盘。支持普通 JSON、带文字前缀的 JSON 和纯文本错误，不仅记录通用 503 提示。
+任务 API 的可选 `online_error` 字段及“上游错误详情”面板显示这些持久记录；历史上已经
+丢弃的响应无法补回。收到 HTTP 错误和网络结果未知仍分别记为 `failed` / `uncertain`，
+不会隐式重发收费请求。
 
 原件以 UUID 物理名复制到 job `source/`，流式计算 SHA-256、fsync、原子 rename，最终
 权限 0400；用户文件名只保留为显示元数据。原件从不被 master 覆盖。标准化命令固定：

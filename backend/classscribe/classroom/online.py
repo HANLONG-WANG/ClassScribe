@@ -7,6 +7,7 @@ import hashlib
 import json
 import shutil
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -14,13 +15,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from classscribe.activity import report_activity
-from classscribe.audio.media import file_sha256
+from classscribe.audio.limits import validate_transcription_duration
+from classscribe.audio.media import FFmpegMediaPipeline, file_sha256
 from classscribe.audio.online_upload import prepare_mai_upload
 from classscribe.classroom.mai import (
     API_VERSION,
     MODEL,
     MaiClient,
     MaiCredentials,
+    MaiHttpError,
     mai_error,
     parse_mai_response,
     request_definition,
@@ -150,6 +153,9 @@ class ProviderStageRunner:
             definition = request_definition(
                 job.options_json, self._terms(session, job.options_json)
             )
+        validate_transcription_duration(
+            FFmpegMediaPipeline._inspect_master(audio).duration_samples, "azure_mai"
+        )
         digest = file_sha256(audio)
         fingerprint = hashlib.sha256(
             json.dumps(
@@ -235,14 +241,30 @@ class ProviderStageRunner:
                 attempt.status = "responded"
                 attempt.response_path = str(response_path)
                 attempt.service_request_id = request_id
-        except Exception:
+        except Exception as exc:
+            if isinstance(exc, MaiHttpError):
+                try:
+                    atomic_write_text(
+                        response_path.with_name("error.json"),
+                        json.dumps(
+                            {**exc.diagnostics, "captured_at": datetime.now(UTC).isoformat()},
+                            ensure_ascii=False,
+                        ),
+                    )
+                except OSError as write_error:
+                    exc.detail += f" 诊断文件保存失败: {type(write_error).__name__}。"
             with sessions.begin() as session:
                 attempt = session.scalar(
                     select(OnlineRequestAttempt).where(OnlineRequestAttempt.job_id == job_id)
                 )
                 assert attempt is not None
-                attempt.status = "uncertain"
-                attempt.error_code = "MAI_REQUEST_UNCERTAIN"
+                if isinstance(exc, MaiHttpError):
+                    attempt.status = "failed"
+                    attempt.error_code = f"MAI_HTTP_{exc.status}"
+                    attempt.service_request_id = exc.request_id or None
+                else:
+                    attempt.status = "uncertain"
+                    attempt.error_code = "MAI_REQUEST_UNCERTAIN"
             raise
 
     def _import(self, session: Session, job: Job) -> None:

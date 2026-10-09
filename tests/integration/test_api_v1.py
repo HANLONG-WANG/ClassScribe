@@ -2161,3 +2161,131 @@ def test_stream_upload_route_accepts_binary_media_without_browser_metadata(tmp_p
     assert response.status == 200
     assert response.json()["id"] == identifier
     assert response.json()["duration_samples"] == 16000
+
+
+def test_long_upload_for_clipping_checks_final_duration_before_creating_job(tmp_path: Path) -> None:
+    from uuid import uuid4
+
+    from classscribe.api.schemas import JobCreate
+    from classscribe.audio.clips import create_recording_clip
+    from classscribe.db.models import Job, Recording
+
+    service, sessions = service_fixture(tmp_path)
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(1)
+        handle.setframerate(1000)
+        handle.writeframes(b"\x80" * (100 * 60 * 1000))
+    headers = {
+        **auth(token, csrf, write=True),
+        "X-ClassScribe-Filename": "long.wav",
+        "Content-Type": "application/octet-stream",
+    }
+    rejected = asyncio.run(
+        request(
+            app,
+            "PUT",
+            f"/api/v1/recordings/{uuid4()}/upload",
+            headers=headers,
+            body=buffer.getvalue(),
+        )
+    )
+    assert rejected.json()["error"]["code"] == "AUDIO_TOO_LONG"
+    identifier = str(uuid4())
+    accepted = asyncio.run(
+        request(
+            app,
+            "PUT",
+            f"/api/v1/recordings/{identifier}/upload",
+            headers=headers,
+            query={"for_clipping": "true"},
+            body=buffer.getvalue(),
+        )
+    )
+    assert accepted.status == 200
+    assert accepted.json()["duration_samples"] == 100 * 60 * 16000
+    with pytest.raises(ClassScribeError) as whole:
+        service.create_job(JobCreate(recording_id=identifier, language=LanguageMode.JAPANESE))
+    assert whole.value.code is ErrorCode.AUDIO_TOO_LONG
+    with pytest.raises(ClassScribeError) as overlong:
+        create_recording_clip(
+            sessions, service.paths, identifier, str(uuid4()), 0, 90 * 60 * 16000 + 1
+        )
+    assert overlong.value.code is ErrorCode.AUDIO_TOO_LONG
+    clip = create_recording_clip(
+        sessions, service.paths, identifier, str(uuid4()), 95 * 60 * 16000, 95 * 60 * 16000 + 16000
+    )
+    job = service.create_job(JobCreate(recording_id=clip, language=LanguageMode.JAPANESE))
+    with sessions() as session:
+        assert session.get_one(Recording, clip).duration_samples == 16000
+        assert session.get_one(Job, job["job_id"]).recording_id == clip
+
+
+@pytest.mark.parametrize(
+    "seconds,accepted", [(90 * 60 + 1, True), (119 * 60, True), (119 * 60 + 1, False)]
+)
+def test_online_upload_and_job_creation_follow_the_mai_safety_limit(
+    tmp_path: Path, seconds: int, accepted: bool
+) -> None:
+    from uuid import uuid4
+
+    from classscribe.api.schemas import JobCreate
+
+    service, _ = service_fixture(tmp_path)
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as output:
+        output.setparams((1, 1, 1000, 0, "NONE", "not compressed"))
+        output.writeframes(b"\x80" * (seconds * 1000))
+    headers = {
+        **auth(token, csrf, write=True),
+        "X-ClassScribe-Filename": "long.wav",
+        "Content-Type": "application/octet-stream",
+    }
+    identifier = str(uuid4())
+    response = asyncio.run(
+        request(
+            app,
+            "PUT",
+            f"/api/v1/recordings/{identifier}/upload",
+            headers=headers,
+            query={"provider": "azure_mai"},
+            body=buffer.getvalue(),
+        )
+    )
+    if accepted:
+        assert response.status == 200, response.content
+        job = service.create_job(
+            JobCreate(recording_id=identifier, provider="azure_mai", language=LanguageMode.JAPANESE)
+        )
+        assert job["options"]["provider"] == "azure_mai"
+        with pytest.raises(ClassScribeError) as local:
+            service.create_job(
+                JobCreate(recording_id=identifier, provider="local", language=LanguageMode.JAPANESE)
+            )
+        assert local.value.code is ErrorCode.AUDIO_TOO_LONG
+    else:
+        assert response.json()["error"]["code"] == "AUDIO_TOO_LONG"
+        assert "119-minute" in response.json()["error"]["detail"]
+        prepared_id = str(uuid4())
+        prepared = asyncio.run(
+            request(
+                app,
+                "PUT",
+                f"/api/v1/recordings/{prepared_id}/upload",
+                headers=headers,
+                query={"provider": "azure_mai", "for_clipping": "true"},
+                body=buffer.getvalue(),
+            )
+        )
+        assert prepared.status == 200
+        with pytest.raises(ClassScribeError, match="119"):
+            service.create_job(
+                JobCreate(
+                    recording_id=prepared_id, provider="azure_mai", language=LanguageMode.JAPANESE
+                )
+            )

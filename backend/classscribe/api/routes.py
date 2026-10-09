@@ -132,8 +132,16 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
         recording_id: str,
         request: Request,
         source_name: str = Depends(uploaded_filename),
+        for_clipping: bool = Query(default=False),
+        provider: Literal["local", "azure_mai"] = Query(default="local"),
     ) -> dict[str, object]:
-        return await service.upload_recording(recording_id, source_name, request.stream())
+        return await service.upload_recording(
+            recording_id,
+            source_name,
+            request.stream(),
+            for_clipping=for_clipping,
+            provider=provider,
+        )
 
     @router.get("/recordings/{recording_id}/media")
     def get_recording_media(recording_id: str) -> Response:
@@ -157,6 +165,7 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
                 value.start_sample,
                 value.end_sample,
                 cancelled=cancelled,
+                provider=value.provider,
             )
         )
         try:

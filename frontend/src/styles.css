@@ -1472,6 +1472,67 @@ details summary {
   display: grid;
   gap: 12px;
 }
+.history-selection-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  position: sticky;
+  top: 12px;
+  z-index: 3;
+  background: var(--panel, #f9fbf8);
+  box-shadow: 0 4px 16px #182c1f12;
+}
+.history-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.history-checkbox {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin: 0;
+  accent-color: #3f7658;
+}
+.history-date-group,
+.history-older {
+  display: grid;
+  gap: 16px;
+}
+.history-date-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.history-date-heading :is(h2, h3) {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.history-date-heading :is(h2, h3) span {
+  font-size: 0.8rem;
+  font-weight: 400;
+}
+.manuscript-selection-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+}
+.manuscript-selection-row > .history-checkbox {
+  margin-top: 26px;
+}
+.manuscript-entry-actions {
+  padding-left: 30px;
+}
+.manuscript-entry.is-selected .manuscript-card {
+  border-color: #3f7658;
+  background: #eef6ef;
+}
 .manuscript-entry {
   display: grid;
   gap: 0.5rem;

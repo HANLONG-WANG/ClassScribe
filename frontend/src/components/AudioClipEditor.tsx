@@ -6,9 +6,11 @@ import RegionsPlugin, {
 import TimelinePlugin from "wavesurfer.js/dist/plugins/timeline.esm.js";
 import { formatClipTime, parseClipTime } from "../audioClipTime";
 import { authHeaders, type Recording } from "../api";
+import { transcriptionMaxMinutes } from "../transcriptionLimits";
 
 export function AudioClipEditor(props: {
   recording: Recording;
+  provider?: "local" | "azure_mai";
   onSubmit: (clip?: { start_sample: number; end_sample: number }) => void;
 }) {
   return (
@@ -24,8 +26,10 @@ let activeClipPlayer: WaveSurfer | null = null;
 function AudioClipWorkbench({
   recording,
   onSubmit,
+  provider = "local",
 }: {
   recording: Recording;
+  provider?: "local" | "azure_mai";
   onSubmit: (clip?: { start_sample: number; end_sample: number }) => void;
 }) {
   const editor = useRef<HTMLDivElement>(null);
@@ -320,6 +324,18 @@ function AudioClipWorkbench({
   function submit(whole: boolean) {
     preview.current = null;
     player.current?.pause();
+    const samples = whole
+      ? recording.duration_samples
+      : valid
+        ? Math.round(end * 16000) - Math.round(start * 16000)
+        : 0;
+    const maximum = transcriptionMaxMinutes(provider);
+    if (samples > maximum * 60 * 16000) {
+      setError(
+        `转写时长不能超过 ${String(maximum)} 分钟，请缩短选段后再提交。`,
+      );
+      return;
+    }
     if (whole) onSubmit();
     else if (valid)
       onSubmit({

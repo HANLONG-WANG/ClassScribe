@@ -23,14 +23,16 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from classscribe.audio.limits import MAI_MAX_UPLOAD_BYTES
 from classscribe.classroom.mai_options import MaiTranscriptionOptions
-from classscribe.errors import ClassScribeError, ErrorCode
+from classscribe.errors import ClassScribeError, ErrorCode, public_error_detail
 from classscribe.readability import lexical_positions, sentence_spans
 from classscribe.security import RestrictedCredentialEnvironment
 
 API_VERSION = "2025-10-15"
 MODEL = "MAI-Transcribe-2"
-MAX_BYTES = 250_000_000
+MAX_BYTES = MAI_MAX_UPLOAD_BYTES
+MAX_ERROR_BODY_BYTES = 64 * 1024
 
 
 def mai_error(detail: str) -> ClassScribeError:
@@ -169,6 +171,101 @@ def request_definition(options: Mapping[str, Any], terms: list[str]) -> dict[str
     return definition
 
 
+def redact_mai_error(body: str, secrets: tuple[str, ...] = ()) -> str:
+    """Preserve diagnostic text while removing supplied and labelled credentials."""
+    for secret in secrets:
+        if secret:
+            body = body.replace(secret, "[REDACTED]")
+    body = re.sub(
+        r'(?i)("(?:api[_-]?key|subscription[_-]?key|ocp-apim-subscription-key|'
+        r'authorization|password|secret|token|credentials)"\s*:\s*)"(?:\\.|[^"\\])*"',
+        r'\1"[REDACTED]"',
+        body,
+    )
+    body = re.sub(
+        r"(?i)\b((?:api[_-]?key|subscription[_-]?key|ocp-apim-subscription-key|"
+        r"password|secret|token)\s*[:=]\s*)([^\s,;\"}\]]+)",
+        r"\1[REDACTED]",
+        body,
+    )
+    return public_error_detail(body)[:MAX_ERROR_BODY_BYTES]
+
+
+class MaiHttpError(ClassScribeError):
+    """A received HTTP failure with bounded, credential-redacted service diagnostics."""
+
+    def __init__(
+        self,
+        status: int,
+        request_id: str | None = None,
+        retry_after: str | None = None,
+        *,
+        body: str = "",
+        body_truncated: bool = False,
+        body_read_error: str | None = None,
+        secrets: tuple[str, ...] = (),
+    ) -> None:
+        self.status = status
+        self.request_id = (
+            request_id if request_id and re.fullmatch(r"[A-Za-z0-9._-]{1,256}", request_id) else ""
+        )
+        self.retry_after = (
+            int(retry_after) if retry_after and re.fullmatch(r"[0-9]{1,6}", retry_after) else None
+        )
+        self.response_body = redact_mai_error(body, secrets)
+        self.service_error_code: str | None = None
+        self.service_error_message = self.response_body.strip()[:8192] or None
+        # MAI sometimes wraps the Azure JSON error in a plain-text prefix.
+        attempts = 0
+        for position, character in enumerate(body[:MAX_ERROR_BODY_BYTES]):
+            if character != "{":
+                continue
+            attempts += 1
+            if attempts > 16:
+                break
+            try:
+                payload, _ = json.JSONDecoder().raw_decode(body[position:MAX_ERROR_BODY_BYTES])
+            except (ValueError, RecursionError):
+                continue
+            if isinstance(payload, dict):
+                error = payload.get("error", payload)
+                if isinstance(error, dict):
+                    code, message = error.get("code"), error.get("message")
+                    if isinstance(code, str):
+                        self.service_error_code = redact_mai_error(code, secrets)[:256]
+                    if isinstance(message, str):
+                        self.service_error_message = redact_mai_error(message, secrets)[:8192]
+            break
+        self.diagnostics: dict[str, Any] = {
+            "http_status": status,
+            "service_error_code": self.service_error_code,
+            "service_error_message": self.service_error_message,
+            "request_id": self.request_id or None,
+            "retry_after_seconds": self.retry_after,
+            "response_body": self.response_body,
+            "response_truncated": body_truncated,
+            "response_read_error": body_read_error,
+        }
+        if status >= 500:
+            reason = "Azure/MAI 上游服务暂时不可用或繁忙，请稍后重新提交。"
+        elif status == 429:
+            reason = "Azure 请求受到限流，请稍后重新提交或降低并行量。"
+        elif status in {401, 403}:
+            reason = "请检查 Azure 资源凭据及访问权限。"
+        else:
+            reason = "请检查 Azure 资源及请求参数。"
+        detail = f"Azure HTTP {status}；{reason}未自动重发。"
+        if self.service_error_code or self.service_error_message:
+            detail += (
+                f"上游错误 {self.service_error_code or '未知'}：{self.service_error_message or ''}"
+            )
+        if self.retry_after is not None:
+            detail += f" 服务建议等待 {self.retry_after} 秒。"
+        if self.request_id:
+            detail += f" 请求 ID：{self.request_id}。"
+        super().__init__(ErrorCode.JOB_STATE_CONFLICT, detail)
+
+
 class MaiClient:
     """Bounded streaming upload, verified TLS, no redirect and no implicit retry."""
 
@@ -184,8 +281,8 @@ class MaiClient:
         timeout: float = 900,
     ) -> tuple[bytes, str]:
         size = audio.stat().st_size
-        if not 0 < size < MAX_BYTES:
-            raise mai_error("上传音频必须非空且小于 250 MB，请缩短片段。")
+        if not 0 < size <= MAX_BYTES:
+            raise mai_error("MAI 上传音频必须非空且不超过 240 MB，请缩短片段。")
         parsed = urlsplit(endpoint)
         host = parsed.hostname or ""
         context = ssl.create_default_context()
@@ -256,10 +353,28 @@ class MaiClient:
             connection.send(tail)
             progress("mai_wait", 0, 0)
             response = connection.getresponse()
-            # Service bodies may echo user content or credentials. Never show error bodies.
             if response.status != 200:
-                raise mai_error(
-                    f"Azure HTTP {response.status}；请检查资源、权限或额度。未自动重发。"
+                # Bound diagnostic reads in size and time; retain the HTTP status even
+                # when the error body is incomplete or the connection breaks afterward.
+                body = b""
+                read_error = None
+                try:
+                    if connection.sock is not None:
+                        connection.sock.settimeout(min(timeout, 5))
+                    body = response.read(MAX_ERROR_BODY_BYTES + 1)
+                except http.client.IncompleteRead as exc:
+                    body = exc.partial
+                    read_error = type(exc).__name__
+                except (OSError, http.client.HTTPException) as exc:
+                    read_error = type(exc).__name__
+                raise MaiHttpError(
+                    response.status,
+                    response.getheader("apim-request-id") or response.getheader("x-ms-request-id"),
+                    response.getheader("Retry-After"),
+                    body=body[:MAX_ERROR_BODY_BYTES].decode("utf-8", errors="replace"),
+                    body_truncated=len(body) > MAX_ERROR_BODY_BYTES,
+                    body_read_error=read_error,
+                    secrets=(key,),
                 )
             chunks: list[bytes] = []
             count = 0

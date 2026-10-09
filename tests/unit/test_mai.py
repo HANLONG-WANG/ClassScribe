@@ -226,7 +226,17 @@ def test_transport_streams_once_and_hides_error_body(
             self.sent.append(value)
 
         def getresponse(self) -> Any:
-            return type("Response", (), {"status": 429})()
+            return type(
+                "Response",
+                (),
+                {
+                    "status": 429,
+                    "getheader": lambda *args: None,
+                    "read": lambda *args: (
+                        b'{"error":{"code":"TooManyRequests","message":"limit hit secret-marker"}}'
+                    ),
+                },
+            )()
 
         def close(self) -> None:
             pass
@@ -246,6 +256,10 @@ def test_transport_streams_once_and_hides_error_body(
     assert max(map(len, connections[0].sent)) <= 256 * 1024
     assert b"private-filename" not in b"".join(connections[0].sent)
     assert "secret-marker" not in str(error.value)
+    assert isinstance(error.value, mai.MaiHttpError)
+    assert error.value.service_error_code == "TooManyRequests"
+    assert error.value.service_error_message is not None
+    assert "limit hit" in error.value.service_error_message
 
 
 @pytest.mark.parametrize(
@@ -269,6 +283,7 @@ def test_real_multipart_transport_is_single_attempt(
             self.send_header("Content-Type", "application/json")
             self.send_header("Location", "/must-not-follow")
             self.send_header("apim-request-id", "test-request")
+            self.send_header("Retry-After", "30")
             self.end_headers()
             self.wfile.write(b'{"phrases":[]}' if status == 200 else b"secret-marker")
 
@@ -306,6 +321,11 @@ def test_real_multipart_transport_is_single_attempt(
             with pytest.raises(ClassScribeError) as error:
                 call()
             assert "secret-marker" not in str(error.value)
+            if status == 503:
+                assert isinstance(error.value, mai.MaiHttpError)
+                assert error.value.request_id == "test-request"
+                assert error.value.retry_after == 30
+                assert "上游服务" in error.value.detail
         assert len(bodies) == 1
         assert b'filename="clip.flac"' in bodies[0]
         assert b'"model": "MAI-Transcribe-2"' in bodies[0]
@@ -315,3 +335,130 @@ def test_real_multipart_transport_is_single_attempt(
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+@pytest.mark.parametrize("prefix", ["", "MAI service returned an error: ServiceUnavailable - "])
+def test_upstream_error_code_message_and_body_are_preserved_without_credentials(
+    prefix: str,
+) -> None:
+    from classscribe.classroom.mai import MaiHttpError
+
+    body = prefix + json.dumps(
+        {
+            "error": {
+                "code": "diarization_unavailable",
+                "message": "Speaker diarization service returned error code 400 private-key",
+                "innerError": {"code": "InvalidParameter", "message": "diagnostic details"},
+            },
+            "apiKey": "another-private-key",
+            "authorization": "Bearer third-private-key",
+        }
+    )
+    error = MaiHttpError(503, "trace-id", "30", body=body, secrets=("private-key",))
+    assert error.service_error_code == "diarization_unavailable"
+    assert error.service_error_message is not None
+    assert "error code 400" in error.service_error_message
+    assert "diagnostic details" in error.response_body
+    assert "private-key" not in json.dumps(error.diagnostics)
+    assert "private-key" not in error.detail
+    assert error.diagnostics["http_status"] == 503
+    assert error.diagnostics["request_id"] == "trace-id"
+    assert error.diagnostics["retry_after_seconds"] == 30
+
+
+@pytest.mark.parametrize("failure", ["truncated", "timeout", "incomplete"])
+def test_http_failure_keeps_status_and_marks_incomplete_diagnostic_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    from classscribe.classroom import mai
+
+    requested: list[int] = []
+
+    class Response:
+        status = 503
+
+        def getheader(self, name: str) -> str | None:
+            return "trace-id" if name == "apim-request-id" else None
+
+        def read(self, amount: int) -> bytes:
+            requested.append(amount)
+            if failure == "timeout":
+                raise TimeoutError("private-key")
+            if failure == "incomplete":
+                raise http.client.IncompleteRead(b"partial upstream error", 100)
+            return b"x" * amount
+
+    class Connection:
+        sock = None
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def connect(self) -> None:
+            pass
+
+        def putrequest(self, *args: Any) -> None:
+            pass
+
+        def putheader(self, *args: Any) -> None:
+            pass
+
+        def endheaders(self) -> None:
+            pass
+
+        def send(self, *args: Any) -> None:
+            pass
+
+        def getresponse(self) -> Response:
+            return Response()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(mai, "getproxies", lambda: {})
+    monkeypatch.setattr(http.client, "HTTPSConnection", Connection)
+    audio = tmp_path / "upload.flac"
+    audio.write_bytes(b"fLaC-example")
+    with pytest.raises(mai.MaiHttpError) as captured:
+        MaiClient().transcribe(
+            normalize_endpoint("https://eastus.api.cognitive.microsoft.com"),
+            "private-key",
+            audio,
+            {},
+            cancelled=lambda: False,
+            progress=lambda *args: None,
+        )
+    error = captured.value
+    assert requested == [mai.MAX_ERROR_BODY_BYTES + 1]
+    assert error.status == 503
+    assert error.request_id == "trace-id"
+    assert "private-key" not in json.dumps(error.diagnostics)
+    if failure == "truncated":
+        assert error.diagnostics["response_truncated"] is True
+        assert len(error.response_body) == mai.MAX_ERROR_BODY_BYTES
+    else:
+        assert error.diagnostics["response_read_error"] == (
+            "TimeoutError" if failure == "timeout" else "IncompleteRead"
+        )
+        if failure == "incomplete":
+            assert error.response_body == "partial upstream error"
+
+
+def test_mai_size_limit_rejects_before_opening_a_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from classscribe.classroom import mai
+
+    audio = tmp_path / "too-large.flac"
+    with audio.open("wb") as output:
+        output.truncate(mai.MAX_BYTES + 1)
+    monkeypatch.setattr(http.client, "HTTPSConnection", lambda *args, **kwargs: pytest.fail("sent"))
+    with pytest.raises(ClassScribeError, match="240 MB"):
+        MaiClient().transcribe(
+            normalize_endpoint("https://eastus.api.cognitive.microsoft.com"),
+            "key",
+            audio,
+            {},
+            cancelled=lambda: False,
+            progress=lambda *args: None,
+        )

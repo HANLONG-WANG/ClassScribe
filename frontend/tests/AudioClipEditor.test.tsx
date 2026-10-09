@@ -83,12 +83,16 @@ const recording = {
   audio_qc: {},
   media_url: "/audio",
 };
-function setup(duration_samples = recording.duration_samples) {
+function setup(
+  duration_samples = recording.duration_samples,
+  provider: "local" | "azure_mai" = "local",
+) {
   const submit = vi.fn();
   const view = render(
     <AudioClipEditor
       recording={{ ...recording, duration_samples }}
       onSubmit={submit}
+      provider={provider}
     />,
   );
   act(() => {
@@ -96,6 +100,51 @@ function setup(duration_samples = recording.duration_samples) {
   });
   return { submit, ...view };
 }
+
+it("accepts a 119-minute MAI selection and rejects one sample interval beyond it", () => {
+  const { submit } = setup(130 * 60 * 16000, "azure_mai");
+  fireEvent.click(screen.getByText("转写整段"));
+  expect(submit).not.toHaveBeenCalled();
+  expect(screen.getByRole("alert").textContent).toContain("119 分钟");
+  fireEvent.change(screen.getByLabelText("片段开始时间"), {
+    target: { value: "00:11:00.000" },
+  });
+  fireEvent.click(screen.getByText("转写选段"));
+  expect(submit).toHaveBeenCalledWith({
+    start_sample: 11 * 60 * 16000,
+    end_sample: 130 * 60 * 16000,
+  });
+  submit.mockClear();
+  fireEvent.change(screen.getByLabelText("片段开始时间"), {
+    target: { value: "00:10:59.999" },
+  });
+  fireEvent.click(screen.getByText("转写选段"));
+  expect(submit).not.toHaveBeenCalled();
+});
+
+it("allows long recordings to be edited and checks the submitted range at 90 minutes", () => {
+  const { submit } = setup(120 * 60 * 16000);
+  expect(screen.getByLabelText<HTMLInputElement>("片段结束时间").value).toBe(
+    "02:00:00.000",
+  );
+  fireEvent.click(screen.getByText("转写整段"));
+  expect(submit).not.toHaveBeenCalled();
+  expect(screen.getByRole("alert").textContent).toContain("90 分钟");
+  fireEvent.change(screen.getByLabelText("片段开始时间"), {
+    target: { value: "00:30:00.000" },
+  });
+  fireEvent.click(screen.getByText("转写选段"));
+  expect(submit).toHaveBeenCalledWith({
+    start_sample: 30 * 60 * 16000,
+    end_sample: 120 * 60 * 16000,
+  });
+  submit.mockClear();
+  fireEvent.change(screen.getByLabelText("片段开始时间"), {
+    target: { value: "00:29:59.999" },
+  });
+  fireEvent.click(screen.getByText("转写选段"));
+  expect(submit).not.toHaveBeenCalled();
+});
 afterEach(() => {
   cleanup();
   state.region.start = 0;

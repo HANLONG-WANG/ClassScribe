@@ -116,7 +116,13 @@ class FFmpegMediaPipeline:
             raise ClassScribeError(ErrorCode.UPLOAD_TOO_LARGE, "media exceeds 8 GiB")
         return canonical
 
-    def probe(self, path: Path) -> MediaMetadata:
+    def probe(
+        self,
+        path: Path,
+        *,
+        allow_long: bool = False,
+        max_duration_seconds: int = MAX_DURATION_SECONDS,
+    ) -> MediaMetadata:
         source = self.validate_source(path)
         command = (
             self.ffprobe,
@@ -151,8 +157,15 @@ class FFmpegMediaPipeline:
             raise ClassScribeError(
                 ErrorCode.MEDIA_PROBE_FAILED, f"invalid ffprobe audio metadata: {error}"
             ) from error
-        if duration < 0 or duration > MAX_DURATION_SECONDS:
-            raise ClassScribeError(ErrorCode.AUDIO_TOO_LONG, "media exceeds 90-minute limit")
+        if (
+            not duration.is_finite()
+            or duration < 0
+            or (not allow_long and duration > max_duration_seconds)
+        ):
+            raise ClassScribeError(
+                ErrorCode.AUDIO_TOO_LONG,
+                f"media exceeds {max_duration_seconds // 60}-minute limit",
+            )
         if sample_rate <= 0 or channels <= 0 or channels > 8:
             raise ClassScribeError(
                 ErrorCode.DECODE_LIMIT_EXCEEDED, "invalid audio stream dimensions"
@@ -201,9 +214,14 @@ class FFmpegMediaPipeline:
         *,
         mix_policy: ChannelMixPolicy = ChannelMixPolicy.EQUAL,
         best_channel: int | None = None,
+        max_duration_seconds: int = MAX_DURATION_SECONDS,
     ) -> AudioMaster:
         canonical = self.validate_source(source)
-        metadata = self.probe(canonical)
+        metadata = (
+            self.probe(canonical)
+            if max_duration_seconds == MAX_DURATION_SECONDS
+            else self.probe(canonical, max_duration_seconds=max_duration_seconds)
+        )
         if destination.name != "audio_master.wav":
             raise ValueError("canonical master must be named audio_master.wav")
         if destination.absolute() == canonical:

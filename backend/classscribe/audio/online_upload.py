@@ -9,6 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4
 
+from classscribe.audio.limits import MAI_MAX_UPLOAD_BYTES
 from classscribe.errors import ClassScribeError, ErrorCode
 
 
@@ -54,6 +55,10 @@ def prepare_mai_upload(source: Path, destination: Path, cancelled: Callable[[], 
                 raise ClassScribeError(
                     ErrorCode.MEDIA_DECODE_FAILED, "Could not prepare FLAC upload"
                 )
+        if temporary.stat().st_size > MAI_MAX_UPLOAD_BYTES:
+            raise ClassScribeError(
+                ErrorCode.UPLOAD_TOO_LARGE, "MAI upload exceeds 240 MB; select a shorter clip"
+            )
         os.chmod(temporary, 0o600)
         os.replace(temporary, destination)
     finally:

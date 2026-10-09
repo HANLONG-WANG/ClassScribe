@@ -313,6 +313,30 @@ export function JobPage() {
           {job.error_code}: {job.error_detail}
         </p>
       )}
+      {job.online_error && (
+        <details className="panel job-technical">
+          <summary>上游错误详情</summary>
+          <p>
+            HTTP {job.online_error.http_status} · 错误代码：
+            {job.online_error.service_error_code ?? "未提供"}
+          </p>
+          <p>{job.online_error.service_error_message}</p>
+          <p>请求 ID：{job.online_error.request_id ?? "未提供"}</p>
+          <p>
+            记录时间：{new Date(job.online_error.captured_at).toLocaleString()}
+          </p>
+          {job.online_error.retry_after_seconds !== null && (
+            <p>服务建议等待 {job.online_error.retry_after_seconds} 秒。</p>
+          )}
+          {job.online_error.response_truncated && (
+            <p>响应超过 64 KiB，已截断。</p>
+          )}
+          {job.online_error.response_read_error && (
+            <p>响应读取未完成：{job.online_error.response_read_error}</p>
+          )}
+          <pre>{job.online_error.response_body || "上游未返回响应内容。"}</pre>
+        </details>
+      )}
       {(job.events?.length ?? 0) > 0 && (
         <section className="panel job-recent" aria-label="最近活动">
           <h2>实时详情</h2>

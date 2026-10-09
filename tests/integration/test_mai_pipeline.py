@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 import wave
 from pathlib import Path
 from typing import Any, cast
@@ -53,6 +55,8 @@ def setup_online(
                 path = paths.data_path(
                     "recordings", job.recording_id, "derived", "audio_master.wav"
                 )
+                if path.is_file():
+                    return  # Production reuses the immutable master for this recording.
                 path.parent.mkdir(parents=True, exist_ok=True)
                 with wave.open(str(path), "wb") as output:
                     output.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
@@ -369,3 +373,246 @@ def test_course_glossary_and_import_options_reach_transport(
         assert segment.raw_text == "Clean transcript"
         assert segment.speaker_id is None
         assert segment.start_sample == segment.end_sample == 0
+
+
+def test_mai_queue_overlaps_requests_caps_parallelism_and_resumes_after_pause(
+    database: Any, tmp_path: Path
+) -> None:
+    from classscribe.classroom import queue
+    from classscribe.classroom.mai import MaiHttpError
+
+    sessions, runner, pipeline, first = setup_online(database, tmp_path)
+    released = threading.Event()
+    entered = threading.Event()
+    capacity = threading.Event()
+    guard = threading.Lock()
+    calls: list[str] = []
+    active, peak = 0, 0
+
+    def transcribe(endpoint: str, key: str, audio: Path, *args: Any, **kwargs: Any) -> Any:
+        nonlocal active, peak
+        identifier = audio.parent.parent.name
+        with guard:
+            calls.append(identifier)
+            active += 1
+            peak = max(peak, active)
+            entered.set()
+            if active == 10:
+                capacity.set()
+        try:
+            assert released.wait(10)
+            if identifier == first:
+                raise MaiHttpError(503, "service-failure-id", "30")
+            return b'{"phrases":[{"text":"parallel result"}]}', "request-id"
+        finally:
+            with guard:
+                active -= 1
+
+    runner.client.transcribe = transcribe  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        pipeline.schedule(first)
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            # A new submission must wake the dispatcher while its first request is waiting.
+            with sessions.begin() as session:
+                original = session.get_one(Job, first)
+                others = [
+                    Job(
+                        recording_id=original.recording_id,
+                        language_mode=original.language_mode,
+                        profile_id=original.profile_id,
+                        options_json=dict(original.options_json),
+                        queue_order=order,
+                    )
+                    for order in range(1, 12)
+                ]
+                session.add_all(others)
+                session.flush()
+                identifiers = [first, *(job.id for job in others)]
+            pipeline.schedule(identifiers[-1])
+            assert await asyncio.to_thread(capacity.wait, 5)
+            assert calls[0] == first
+            assert set(calls) == set(identifiers[:10])
+            assert all(
+                pipeline.snapshot(identifier)["status"] == "pending"
+                for identifier in identifiers[10:]
+            )
+            with sessions.begin() as session:
+                queue.set_paused(session, True)
+            released.set()
+            await asyncio.wait_for(asyncio.gather(*tuple(pipeline._tasks)), 5)
+            assert len(calls) == 10
+            with sessions() as session:
+                attempt = session.scalar(
+                    select(OnlineRequestAttempt).where(OnlineRequestAttempt.job_id == first)
+                )
+                assert attempt.status == "failed"
+                assert attempt.error_code == "MAI_HTTP_503"
+                assert attempt.service_request_id == "service-failure-id"
+                assert "30" in session.get_one(Job, first).error_detail
+            with sessions.begin() as session:
+                queue.set_paused(session, False)
+            pipeline.schedule(identifiers[-1])
+            await asyncio.wait_for(asyncio.gather(*tuple(pipeline._tasks)), 5)
+            assert len(calls) == len(set(calls)) == 12
+            assert peak == 10
+            assert pipeline.snapshot(first)["status"] == "failed"
+            assert all(
+                pipeline.snapshot(identifier)["status"] == "completed"
+                for identifier in identifiers[1:]
+            )
+            with pytest.raises(ClassScribeError, match="不会自动重发"):
+                runner._request(sessions, first)
+            assert len(calls) == 12
+        finally:
+            released.set()
+            await pipeline.close()
+
+    asyncio.run(scenario())
+
+
+def test_failed_response_diagnostics_are_durable_and_available_after_restart(
+    database: Any, tmp_path: Path
+) -> None:
+    from classscribe.api.service import ClassScribeService
+    from classscribe.classroom.mai import MaiHttpError
+
+    sessions, runner, pipeline, identifier = setup_online(database, tmp_path)
+    calls: list[int] = []
+
+    def transcribe(*args: Any, **kwargs: Any) -> Any:
+        calls.append(1)
+        raise MaiHttpError(
+            503,
+            "trace-id",
+            "45",
+            body=json.dumps(
+                {
+                    "error": {
+                        "code": "diarization_unavailable",
+                        "message": "Diarization service returned error code 400 secret-marker",
+                    }
+                }
+            ),
+            secrets=("secret-marker",),
+        )
+
+    runner.client.transcribe = transcribe  # type: ignore[method-assign]
+    pipeline.run_until_blocked(identifier)
+    path = runner.paths.data_path("jobs", identifier, "online", "error.json")
+    diagnostics = json.loads(path.read_text())
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert diagnostics["service_error_code"] == "diarization_unavailable"
+    assert diagnostics["http_status"] == 503
+    assert "error code 400" in diagnostics["service_error_message"]
+    assert "secret-marker" not in path.read_text()
+    service = ClassScribeService(
+        sessions, runner.paths, load_registry(Path("config/model-registry.v1.yaml"))
+    )
+    payload = service.job(identifier)
+    assert payload["online_error"] == diagnostics
+    assert "diarization_unavailable" in payload["error_detail"]
+    assert "secret-marker" not in json.dumps(payload)
+    with pytest.raises(ClassScribeError, match="不会自动重发"):
+        runner._request(sessions, identifier)
+    assert len(calls) == 1
+
+
+def test_mai_can_clip_and_normalize_more_than_ninety_minutes(database: Any, tmp_path: Path) -> None:
+    from classscribe.db.models import ExportArtifact
+
+    _, sessions, _ = database
+    paths = AppPaths.from_environment({}, home=tmp_path)
+    paths.ensure()
+    recording_id = str(uuid4())
+    source = paths.data_path("recordings", recording_id, "source", "long.wav")
+    source.parent.mkdir(parents=True)
+    with wave.open(str(source), "wb") as output:
+        output.setparams((1, 1, 1000, 0, "NONE", "not compressed"))
+        output.writeframes(b"\x80" * (100 * 60 * 1000))
+    with sessions.begin() as session:
+        session.add(
+            Recording(
+                id=recording_id,
+                source_name="long.wav",
+                source_path=str(source),
+                source_sha256=file_sha256(source),
+                duration_samples=100 * 60 * 16000,
+                sample_rate=1000,
+                channels=1,
+            )
+        )
+    clip_id = create_recording_clip(
+        sessions, paths, recording_id, str(uuid4()), 0, 91 * 60 * 16000, provider="azure_mai"
+    )
+    config = load_config(environment={})
+    local = ProductionStageRunner(
+        paths,
+        config,
+        load_registry(Path("config/model-registry.v1.yaml")),
+        ModelManager(paths.cache / "models"),
+        cast(SandboxedModelInvoker, object()),
+    )
+    runner = ProviderStageRunner(local, paths, config)
+    runner.credentials.configure("https://eastus.api.cognitive.microsoft.com", "key")
+    options = {"provider": "azure_mai", "language": "en", "outputs": ["json"]}
+    pipeline = ClassroomPipeline(sessions, runner)
+    with sessions.begin() as session:
+        job = Job(
+            recording_id=clip_id,
+            language_mode=LanguageMode.ENGLISH,
+            profile_id="balanced",
+            options_json=options,
+        )
+        session.add(job)
+        session.flush()
+        identifier = job.id
+
+    def transcribe(*args: Any, **kwargs: Any) -> Any:
+        audio = args[2]
+        assert audio.stat().st_size <= 240_000_000
+        return b'{"phrases":[{"text":"Long online transcript."}]}', "request-id"
+
+    runner.client.transcribe = transcribe  # type: ignore[method-assign]
+    pipeline.initialize(identifier, options)
+    pipeline.run_until_blocked(identifier)
+    with sessions() as session:
+        job = session.get_one(Job, identifier)
+        assert job.status == JobStatus.COMPLETED, job.error_detail
+        assert session.get_one(Recording, clip_id).duration_samples == 91 * 60 * 16000
+        assert session.scalar(select(ExportArtifact).where(ExportArtifact.job_id == identifier))
+
+
+def test_mai_queue_close_waits_for_requests_and_preserves_response(
+    database: Any, tmp_path: Path
+) -> None:
+    sessions, runner, pipeline, first = setup_online(database, tmp_path)
+    entered, released = threading.Event(), threading.Event()
+
+    def transcribe(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        assert released.wait(10)
+        return b'{"phrases":[{"text":"saved during shutdown"}]}', "request-id"
+
+    runner.client.transcribe = transcribe  # type: ignore[method-assign]
+
+    async def scenario() -> None:
+        pipeline.schedule(first)
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            closing = asyncio.create_task(pipeline.close())
+            await asyncio.sleep(0.05)
+            assert not closing.done()
+            released.set()
+            await asyncio.wait_for(closing, 5)
+            assert pipeline.snapshot(first)["status"] == "pending"
+            with sessions() as session:
+                attempt = session.scalar(select(OnlineRequestAttempt))
+                assert attempt.status == "responded"
+                assert Path(attempt.response_path).is_file()
+        finally:
+            released.set()
+            await pipeline.close()
+
+    asyncio.run(scenario())

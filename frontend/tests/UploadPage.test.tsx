@@ -50,7 +50,7 @@ it("accepts multiple files, reorders them, and freezes one shared settings snaps
   expect(batch).toHaveBeenCalledWith(
     [b, a],
     expect.objectContaining({
-      language: "auto_mixed",
+      language: "ja",
       accuracy_mode: "balanced",
     }),
   );

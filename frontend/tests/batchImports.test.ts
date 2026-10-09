@@ -20,6 +20,58 @@ afterEach(() => {
   useBatchImports.setState({ items: [] });
   localStorage.clear();
 });
+
+it.each([false, true])(
+  "requests long-upload support only for prepared clip imports (%s)",
+  async (prepare_only) => {
+    const urls: string[] = [];
+    class UploadRequest {
+      upload = {};
+      status = 200;
+      responseText = JSON.stringify({
+        id: "uploaded",
+        duration_samples: 16000,
+      });
+      onload?: () => void;
+      onloadend?: () => void;
+      open(_method: string, url: string) {
+        urls.push(url);
+      }
+      setRequestHeader() {}
+      send() {
+        this.onload?.();
+        this.onloadend?.();
+      }
+      abort() {}
+    }
+    vi.stubGlobal("XMLHttpRequest", UploadRequest);
+    remote.mockImplementation((path: string) =>
+      path.startsWith("/recordings/")
+        ? Promise.reject(new Error("not uploaded"))
+        : Promise.resolve({ job_id: "job" }),
+    );
+    try {
+      addImports([new File(["audio"], "lesson.wav")], {
+        prepare_only,
+        provider: "azure_mai",
+      });
+      await waitFor(() => {
+        expect(useBatchImports.getState().items[0]?.status).toBe(
+          prepare_only ? "prepared" : "done",
+        );
+      });
+      expect(urls).toHaveLength(1);
+      const params = new URL(urls[0] ?? "", "http://localhost").searchParams;
+      expect(params.get("provider")).toBe("azure_mai");
+      expect(params.has("for_clipping")).toBe(prepare_only);
+      expect(remote.mock.calls.some(([path]) => path === "/jobs")).toBe(
+        !prepare_only,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  },
+);
 it("submits files sequentially, continues after an error, and reuses the submission key", async () => {
   let release: (() => void) | undefined;
   let submissions = 0;

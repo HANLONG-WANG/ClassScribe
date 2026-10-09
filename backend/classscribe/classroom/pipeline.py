@@ -28,6 +28,8 @@ from classscribe.db.models import (
 from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.jobs.state_machine import CheckpointInterrupted, CheckpointSpec, JobStateMachine
 
+MAI_MAX_CONCURRENT_JOBS = 10
+
 
 @dataclass(frozen=True, slots=True)
 class PipelineEvent:
@@ -262,6 +264,7 @@ class ClassroomPipeline:
         self.preemption = preemption or SafeBoundaryPause()
         self._tasks: set[asyncio.Task[None]] = set()
         self._dispatcher: asyncio.Task[None] | None = None
+        self._queue_wakeup: asyncio.Event | None = None
         self._queue_file: IO[bytes] | None = None
         self._active_jobs: set[str] = set()
         self._rerun_jobs: set[str] = set()
@@ -584,44 +587,87 @@ class ClassroomPipeline:
         self._queue_file = handle
 
     def schedule(self, job_id: str) -> None:
-        """Wake one FIFO dispatcher; database state is the source of truth."""
+        """Dispatch FIFO jobs, allowing up to ten MAI jobs to overlap."""
         if self._shutting_down:
             return
         self._ensure_queue_owner()
         if self._dispatcher is not None and not self._dispatcher.done():
+            if self._queue_wakeup is not None:
+                self._queue_wakeup.set()
             return
         loop = asyncio.get_running_loop()
+        wakeup = asyncio.Event()
+        self._queue_wakeup = wakeup
+
+        def execute_job(identifier: str, options: dict[str, Any]) -> None:
+            try:
+                self.initialize(identifier, options)
+                with self.sessions.begin() as session:
+                    claimed = session.get_one(Job, identifier)
+                    if claimed.status is JobStatus.PENDING:
+                        self.state.start(claimed)
+                self.run_until_blocked(identifier)
+            except Exception as exc:
+                with self.sessions.begin() as session:
+                    failed = session.get_one(Job, identifier)
+                    failed.status = JobStatus.FAILED
+                    failed.error_code = "QUEUE_EXECUTION_FAILED"
+                    failed.error_detail = str(exc)
+                    queue_state.set_paused(session, True)
+                self.broker.publish(identifier, "job_failed", reason=str(exc))
 
         async def execute() -> None:
-            while not self._shutting_down:
-                with self.sessions() as session:
-                    if queue_state.paused(session) or self.preemption.blocks_new_dispatch:
-                        return
-                    next_job = session.scalar(
-                        select(Job)
-                        .where(
-                            Job.status.in_((JobStatus.PENDING, JobStatus.CANCELLING)),
+            running: dict[str, tuple[asyncio.Task[None], bool]] = {}
+            try:
+                while True:
+                    wakeup.clear()
+                    for identifier, (task, _) in tuple(running.items()):
+                        if task.done():
+                            task.result()
+                            del running[identifier]
+                    while (
+                        not self._shutting_down
+                        and len(running) < MAI_MAX_CONCURRENT_JOBS
+                        and all(online for _, online in running.values())
+                    ):
+                        with self.sessions() as session:
+                            if queue_state.paused(session) or self.preemption.blocks_new_dispatch:
+                                break
+                            next_job = session.scalar(
+                                select(Job)
+                                .where(
+                                    Job.status.in_((JobStatus.PENDING, JobStatus.CANCELLING)),
+                                    Job.id.notin_(tuple(running)),
+                                )
+                                .order_by(Job.queue_order, Job.created_at, Job.id)
+                            )
+                            if next_job is None:
+                                break
+                            identifier, options = next_job.id, dict(next_job.options_json)
+                        online = options.get("provider", "local") == "azure_mai"
+                        # Local model lifetimes stay exclusive, including cleanup.
+                        if running and not online:
+                            break
+                        task = loop.create_task(
+                            asyncio.to_thread(execute_job, identifier, options),
+                            name=f"classscribe-classroom-{identifier}",
                         )
-                        .order_by(Job.queue_order, Job.created_at, Job.id)
-                    )
-                    if next_job is None:
+                        running[identifier] = (task, online)
+                    if not running:
                         return
-                    identifier, options = next_job.id, dict(next_job.options_json)
-                try:
-                    self.initialize(identifier, options)
-                    with self.sessions.begin() as session:
-                        claimed = session.get_one(Job, identifier)
-                        if claimed.status is JobStatus.PENDING:
-                            self.state.start(claimed)
-                    await asyncio.to_thread(self.run_until_blocked, identifier)
-                except Exception as exc:
-                    with self.sessions.begin() as session:
-                        failed = session.get_one(Job, identifier)
-                        failed.status = JobStatus.FAILED
-                        failed.error_code = "QUEUE_EXECUTION_FAILED"
-                        failed.error_detail = str(exc)
-                        queue_state.set_paused(session, True)
-                    self.broker.publish(identifier, "job_failed", reason=str(exc))
+                    waiter = loop.create_task(wakeup.wait())
+                    try:
+                        await asyncio.wait(
+                            [waiter, *(task for task, _ in running.values())],
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    finally:
+                        waiter.cancel()
+                        await asyncio.gather(waiter, return_exceptions=True)
+            finally:
+                await asyncio.gather(
+                    *(task for task, _ in running.values()), return_exceptions=True
+                )
 
         task = loop.create_task(execute(), name="classscribe-classroom-queue")
         self._dispatcher = task

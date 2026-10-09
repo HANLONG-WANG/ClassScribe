@@ -60,6 +60,7 @@ class JobCreate(APIModel):
 
 
 class ClipCreate(APIModel):
+    provider: Literal["local", "azure_mai"] = "local"
     submission_key: str = Field(min_length=1, max_length=36)
     start_sample: int = Field(strict=True, ge=0)
     end_sample: int = Field(strict=True, gt=0)

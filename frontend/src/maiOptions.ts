@@ -74,11 +74,11 @@ export interface MaiOptions {
 }
 export type MaiDraft = Omit<MaiOptions, "phrases"> & { phraseText: string };
 export const defaultMaiDraft: MaiDraft = {
-  transcribe_style: "verbatim",
+  transcribe_style: "clean",
   timestamps: "word",
   diarization: true,
-  locale: null,
-  profanity_filter_mode: "Masked",
+  locale: "ja",
+  profanity_filter_mode: "None",
   phraseText: "",
   phrase_biasing_weight: null,
 };

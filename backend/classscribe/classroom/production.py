@@ -43,6 +43,7 @@ from classscribe.asr.models import (
     parse_asr_response,
 )
 from classscribe.audio.lid import ROUTABLE_LANGUAGES, LanguageRouter, LIDObservation
+from classscribe.audio.limits import transcription_max_seconds, validate_transcription_duration
 from classscribe.audio.media import AudioMaster, FFmpegMediaPipeline, ImportedMedia, file_sha256
 from classscribe.audio.qc import PCMQualityAnalyzer
 from classscribe.audio.segmentation import (
@@ -254,7 +255,11 @@ class ProductionStageRunner:
         source = self.media.validate_source(Path(recording.source_path))
         if file_sha256(source) != recording.source_sha256:
             raise ClassScribeError(ErrorCode.MODEL_INTEGRITY_FAILED, "recording hash changed")
-        metadata = self.media.probe(source)
+        metadata = (
+            self.media.probe(source, max_duration_seconds=transcription_max_seconds("azure_mai"))
+            if job.options_json.get("provider") == "azure_mai"
+            else self.media.probe(source)
+        )
         recording.audio_qc_json = {
             **recording.audio_qc_json,
             "source_probe": {
@@ -273,7 +278,18 @@ class ProductionStageRunner:
         if master_path.is_file() and not master_path.is_symlink():
             master = self.media._inspect_master(master_path)
         else:
-            master = self.media.normalize(Path(recording.source_path), master_path)
+            master = (
+                self.media.normalize(
+                    Path(recording.source_path),
+                    master_path,
+                    max_duration_seconds=transcription_max_seconds("azure_mai"),
+                )
+                if job.options_json.get("provider") == "azure_mai"
+                else self.media.normalize(Path(recording.source_path), master_path)
+            )
+        validate_transcription_duration(
+            master.duration_samples, str(job.options_json.get("provider", "local"))
+        )
         recording.duration_samples = master.duration_samples
         recording.sample_rate = SAMPLE_RATE
         recording.channels = 1

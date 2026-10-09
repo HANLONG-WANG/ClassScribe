@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { readStorage, writeStorage } from "./storage";
+import { transcriptionMaxMinutes } from "./transcriptionLimits";
 import {
   api,
   authHeaders,
@@ -74,7 +75,15 @@ function upload(item: ImportItem, signal: AbortSignal): Promise<Recording> {
       return;
     }
     const xhr = new XMLHttpRequest();
-    xhr.open("PUT", `/api/v1/recordings/${item.id}/upload`);
+    const provider =
+      item.options.provider === "azure_mai" ? "azure_mai" : "local";
+    const query = new URLSearchParams();
+    if (provider === "azure_mai") query.set("provider", provider);
+    if (item.options.prepare_only) query.set("for_clipping", "true");
+    xhr.open(
+      "PUT",
+      `/api/v1/recordings/${item.id}/upload${query.size ? `?${query.toString()}` : ""}`,
+    );
     xhr.timeout = 30 * 60_000;
     xhr.ontimeout = () => {
       reject(new Error("上传或媒体校验超时，可重试此文件"));
@@ -107,12 +116,19 @@ function upload(item: ImportItem, signal: AbortSignal): Promise<Recording> {
         } catch {
           reject(new Error("上传响应无效，请重试"));
         }
-      } else
-        reject(
-          new Error(
-            `上传或媒体校验失败（${String(xhr.status)}），请检查文件后重试`,
-          ),
-        );
+      } else {
+        let message = `上传或媒体校验失败（${String(xhr.status)}），请检查文件后重试`;
+        try {
+          const payload = JSON.parse(xhr.responseText) as {
+            error?: { code?: string };
+          };
+          if (payload.error?.code === "AUDIO_TOO_LONG")
+            message = `录音超过 ${String(transcriptionMaxMinutes(provider))} 分钟，请勾选试听和裁剪后重新导入，缩短选段再转写。`;
+        } catch {
+          /* Keep the status message when the server did not return JSON. */
+        }
+        reject(new Error(message));
+      }
     };
     xhr.onerror = () => {
       reject(new Error("上传连接中断，请重试"));
@@ -163,7 +179,12 @@ async function drain() {
         recording = await api<Recording>(`/recordings/${recording.id}/clips`, {
           signal,
           method: "POST",
-          body: JSON.stringify({ ...item.clip, submission_key: item.id }),
+          body: JSON.stringify({
+            ...item.clip,
+            submission_key: item.id,
+            provider:
+              jobOptions.provider === "azure_mai" ? "azure_mai" : "local",
+          }),
         });
       }
       update(item.id, { status: "submitting", progress: 100 });

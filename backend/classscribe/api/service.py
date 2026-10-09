@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import tempfile
 import threading
 import wave
 from collections.abc import AsyncIterable, Callable, Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from itertools import pairwise
@@ -36,6 +38,7 @@ from classscribe.api.schemas import (
     SegmentPatch,
     SegmentSplit,
 )
+from classscribe.audio.limits import MAI_MAX_DURATION_SECONDS
 from classscribe.audio.media import FFmpegMediaPipeline
 from classscribe.benchmark import (
     SCORE_CONTRACT_VERSION,
@@ -98,7 +101,7 @@ from classscribe.terminology import (
     TermSource,
     import_material,
 )
-from classscribe.timeline import AudioSpan
+from classscribe.timeline import INT64_MAX, AudioSpan
 
 _CONTENT_TYPES = {
     "txt": "text/plain; charset=utf-8",
@@ -155,6 +158,9 @@ class ClassScribeService:
         identifier: str,
         source_name: str,
         chunks: AsyncIterable[bytes],
+        *,
+        for_clipping: bool = False,
+        provider: str = "local",
     ) -> dict[str, Any]:
         identifier = _id(identifier, "recording_id")
         if Path(source_name).name != source_name or not source_name:
@@ -185,9 +191,23 @@ class ClassScribeService:
                     digest.update(chunk)
                 await asyncio.to_thread(handle.flush)
                 await asyncio.to_thread(os.fsync, handle.fileno())
-            metadata = await asyncio.to_thread(FFmpegMediaPipeline().probe, temporary)
+            probe = FFmpegMediaPipeline().probe
+            probe_options: dict[str, Any] = {}
+            if for_clipping:
+                probe_options["allow_long"] = True
+            elif provider == "azure_mai":
+                probe_options["max_duration_seconds"] = MAI_MAX_DURATION_SECONDS
+            metadata = await asyncio.to_thread(probe, temporary, **probe_options)
             duration = int(metadata.duration_seconds * 16000)
-            self.upload_limits.validate(
+            maximum = (
+                INT64_MAX
+                if for_clipping
+                else MAI_MAX_DURATION_SECONDS * 16000
+                if provider == "azure_mai"
+                else self.upload_limits.max_duration_samples
+            )
+            limits = replace(self.upload_limits, max_duration_samples=maximum)
+            limits.validate(
                 source_name=source_name,
                 size_bytes=size,
                 duration_samples=duration,
@@ -320,8 +340,19 @@ class ClassScribeService:
                     if self.pipeline is not None:
                         self.pipeline.schedule(existing.id)
                     return _job_payload(existing)
-            if session.get(Recording, recording_id) is None:
+            recording = session.get(Recording, recording_id)
+            if recording is None:
                 raise _not_found("recording")
+            maximum = (
+                MAI_MAX_DURATION_SECONDS * 16000
+                if value.provider == "azure_mai"
+                else self.upload_limits.max_duration_samples
+            )
+            if recording.duration_samples > maximum:
+                raise ClassScribeError(
+                    ErrorCode.AUDIO_TOO_LONG,
+                    f"转写时长不能超过 {maximum // 16000 // 60} 分钟; 请缩短选段后再提交。",
+                )
             if glossary_id is not None and session.get(Glossary, glossary_id) is None:
                 raise _not_found("glossary")
             if self.pipeline is not None:
@@ -436,16 +467,29 @@ class ClassScribeService:
                 if job is None:
                     raise _not_found("job")
                 recording_id = job.recording_id
-            return {
+            payload = {
                 **self.pipeline.snapshot(identifier),
                 "recording_id": recording_id,
                 "options": self._job_options(identifier),
             }
-        with self.sessions() as session:
-            job = session.get(Job, identifier)
-            if job is None:
-                raise _not_found("job")
-            return _job_payload(job)
+        else:
+            with self.sessions() as session:
+                job = session.get(Job, identifier)
+                if job is None:
+                    raise _not_found("job")
+                payload = _job_payload(job)
+        error_path = self.paths.data_path("jobs", identifier, "online", "error.json")
+        if not error_path.is_symlink():
+            try:
+                with error_path.open("rb") as source:
+                    content = source.read(512 * 1024 + 1)
+                if len(content) <= 512 * 1024:
+                    diagnostics = json.loads(content)
+                    if isinstance(diagnostics, dict):
+                        payload["online_error"] = diagnostics
+            except (OSError, ValueError):
+                pass
+        return payload
 
     def pause_job(self, job_id: str) -> dict[str, Any]:
         pipeline = self._pipeline()

@@ -56,7 +56,7 @@ const defaultDraft: UploadDraft = {
   speakerCount: "auto",
   glossaryId: "",
   primaryModel: "",
-  outputs: ["json", "md", "srt", "vtt"],
+  outputs: ["txt", "md"],
   includeFaithful: true,
   includeSmart: true,
   includeSpeakers: true,
@@ -216,6 +216,11 @@ export function UploadPage() {
             <option value="azure_mai">Azure MAI-Transcribe-2</option>
           </select>
         </label>
+        <p className="muted">
+          {provider === "azure_mai"
+            ? "MAI 最终转写时长最多 119 分钟，实际发送的音频最多 240 MB。超长原件可先试听和裁剪。"
+            : "本地任务最终转写时长最多 90 分钟。超长原件可先试听和裁剪。"}
+        </p>
         <label
           className={`drop-zone ${files.length ? "has-file" : ""}`}
           onDragOver={(event) => {
@@ -587,6 +592,11 @@ export function UploadPage() {
                 {item.status === "prepared" && item.recording && (
                   <AudioClipEditor
                     recording={item.recording}
+                    provider={
+                      item.options.provider === "azure_mai"
+                        ? "azure_mai"
+                        : "local"
+                    }
                     onSubmit={(clip) => {
                       submitPreparedImport(item.id, clip);
                     }}

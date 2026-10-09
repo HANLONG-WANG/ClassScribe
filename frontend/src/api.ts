@@ -241,6 +241,17 @@ export interface Job {
   current_segment_id?: string | null;
   error_code?: string | null;
   error_detail?: string | null;
+  online_error?: {
+    http_status: number;
+    service_error_code: string | null;
+    service_error_message: string | null;
+    request_id: string | null;
+    retry_after_seconds: number | null;
+    response_body: string;
+    response_truncated: boolean;
+    response_read_error: string | null;
+    captured_at: string;
+  };
   activity?: JobActivity | null;
   events?: PipelineEvent[];
   stage_activity?: Record<string, JobActivity[]>;

@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from classscribe.audio.limits import validate_transcription_duration
 from classscribe.audio.media import FFmpegMediaPipeline, file_sha256
 from classscribe.db.models import Recording
 from classscribe.errors import ClassScribeError, ErrorCode
@@ -101,9 +102,11 @@ def create_recording_clip(
     end_sample: int,
     *,
     cancelled: threading.Event | None = None,
+    provider: str = "local",
 ) -> str:
     parse_uuid(recording_id, field="recording_id")
     parse_uuid(submission_key, field="submission_key")
+    validate_transcription_duration(end_sample - start_sample, provider)
 
     def existing() -> str | None:
         with sessions() as session:

@@ -43,6 +43,37 @@ function setup(status: string, stage: string, progress: number) {
     await act(() => client.invalidateQueries({ queryKey: ["job", "job-1"] }));
   };
 }
+
+it("shows persisted upstream error codes, messages, request IDs and the response body", async () => {
+  const update = setup("failed", "transcription", 0.4);
+  await screen.findByText("主 ASR", { selector: "strong" });
+  await update({
+    online_error: {
+      http_status: 503,
+      service_error_code: "diarization_unavailable",
+      service_error_message: "Speaker diarization service is unavailable",
+      request_id: "azure-request-1",
+      retry_after_seconds: 30,
+      response_body: '{"error":{"code":"diarization_unavailable"}}',
+      response_truncated: false,
+      response_read_error: null,
+      captured_at: "2026-10-09T03:29:44Z",
+    },
+  });
+  const summary = await screen.findByText("上游错误详情");
+  const details = summary.closest("details");
+  if (!details) throw new Error("missing diagnostics");
+  details.open = true;
+  expect(within(details).getByText(/HTTP 503/)).toBeVisible();
+  expect(
+    within(details).getByText("Speaker diarization service is unavailable"),
+  ).toBeVisible();
+  expect(within(details).getByText(/azure-request-1/)).toBeVisible();
+  expect(within(details).getByText(/服务建议等待 30 秒/)).toBeVisible();
+  expect(details.querySelector("pre")?.textContent).toContain(
+    "diarization_unavailable",
+  );
+});
 it("shows completed status and marks every pipeline step complete when reopening a finished job", async () => {
   setup("completed", "completed", 1);
   expect(
