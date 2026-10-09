@@ -187,6 +187,33 @@ def service_fixture(
     )
 
 
+def test_delete_completed_job_with_superseded_candidates_returns_success(tmp_path: Path) -> None:
+    from classscribe.db.models import Job, JobStatus
+
+    from tests.integration.test_deletion import add_candidate_revisions, create_job_data
+
+    service, sessions = service_fixture(tmp_path)
+    identifier, _, _, export = create_job_data(service.paths, sessions)
+    add_candidate_revisions(sessions, identifier)
+    with sessions.begin() as session:
+        session.get_one(Job, identifier).status = JobStatus.COMPLETED
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+    response = asyncio.run(
+        request(
+            app,
+            "DELETE",
+            f"/api/v1/jobs/{identifier}/local-data",
+            headers=auth(token, csrf, write=True),
+        )
+    )
+    assert response.status == 200, response.content
+    assert response.json()["deleted"] is True
+    assert not export.exists()
+    with sessions() as session:
+        assert session.get(Job, identifier) is None
+
+
 class FixtureModelDownloader:
     def __init__(
         self,

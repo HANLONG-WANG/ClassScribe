@@ -8,10 +8,11 @@ from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
-from sqlalchemy import event, func, select
+from sqlalchemy import event, func, select, update
 from sqlalchemy.orm import Session
 
-from classscribe.db.models import Job, Recording
+from classscribe.db.models import ASRCandidate, Job, Recording, TranscriptSegment
+from classscribe.errors import ClassScribeError, ErrorCode
 from classscribe.paths import AppPaths, PathSecurityError, validate_restricted_directory
 from classscribe.security import parse_uuid
 
@@ -73,6 +74,33 @@ class DeletionService:
             return DeletionReport(DeletionLevel.JOB, (), ())
         recording = session.get(Recording, job.recording_id)
         job_root = self.paths.data_path("jobs", job_id)
+        segment_ids = select(TranscriptSegment.id).where(TranscriptSegment.job_id == job_id)
+        candidate_ids = select(ASRCandidate.id).where(ASRCandidate.segment_id.in_(segment_ids))
+        external_reference = session.scalar(
+            select(ASRCandidate.id)
+            .where(
+                ASRCandidate.supersedes_candidate_id.in_(candidate_ids),
+                ASRCandidate.segment_id.notin_(segment_ids),
+            )
+            .limit(1)
+        )
+        if external_reference is not None:
+            raise ClassScribeError(
+                ErrorCode.JOB_STATE_CONFLICT,
+                "该任务的转写候选仍被其他任务引用; 请先处理关联任务。",
+            )
+        # ORM candidate deletes are ordered by primary key, not revision history.
+        # Detach only links wholly inside the job being removed; rollback restores
+        # them if any database or filesystem step fails.
+        session.execute(
+            update(ASRCandidate)
+            .where(
+                ASRCandidate.segment_id.in_(segment_ids),
+                ASRCandidate.supersedes_candidate_id.in_(candidate_ids),
+            )
+            .values(supersedes_candidate_id=None)
+            .execution_options(synchronize_session="fetch")
+        )
         session.delete(job)
         session.flush()
         other_jobs = session.scalar(
