@@ -11,7 +11,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import Mock
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import quote, urlencode, urlsplit
 
 import pytest
 from classscribe.api.app import create_app
@@ -1227,7 +1227,8 @@ def test_recording_transcript_glossary_export_and_security_flow(tmp_path: Path) 
         upload_headers = {
             **auth(token, csrf),
             "Content-Type": "application/octet-stream",
-            "X-ClassScribe-Filename": "lecture.wav",
+            "X-ClassScribe-Filename": quote("课堂 lecture.2026.wav"),
+            "X-ClassScribe-Filename-Encoding": "utf-8-percent",
             "X-ClassScribe-Duration-Samples": "320000",
             "X-ClassScribe-Channels": "1",
             "X-ClassScribe-Sample-Rate": "16000",
@@ -1421,8 +1422,12 @@ def test_recording_transcript_glossary_export_and_security_flow(tmp_path: Path) 
         assert exported.status == 201
         export = exported.json()
         assert "path" not in export and export["sha256"]
+        assert export["file_name"] == "课堂 lecture.2026.json"
         downloaded = await request(app, "GET", export["download_url"], headers=auth(token, csrf))
         assert downloaded.status == 200
+        assert downloaded.headers["content-disposition"] == (
+            f"attachment; filename*=utf-8''{quote(export['file_name'])}"
+        )
         assert "人工知能について説明します" in downloaded.content.decode()
         assert "先生" in downloaded.content.decode()
 

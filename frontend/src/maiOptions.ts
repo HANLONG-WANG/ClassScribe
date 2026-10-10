@@ -76,7 +76,7 @@ export type MaiDraft = Omit<MaiOptions, "phrases"> & { phraseText: string };
 export const defaultMaiDraft: MaiDraft = {
   transcribe_style: "clean",
   timestamps: "word",
-  diarization: true,
+  diarization: false,
   locale: "ja",
   profanity_filter_mode: "None",
   phraseText: "",

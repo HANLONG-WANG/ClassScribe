@@ -104,7 +104,7 @@ it("sends all MAI controls with the chosen glossary and hides the local speaker 
         locale: "fr",
         transcribe_style: "clean",
         timestamps: "segment",
-        diarization: false,
+        diarization: true,
         profanity_filter_mode: "Tags",
         phrases: ["GPU", "manual term"],
         phrase_biasing_weight: 1.55,
@@ -154,17 +154,10 @@ it("defaults to the requested MAI options and TXT/MD exports", () => {
   expect(screen.getByLabelText("脏话处理")).toHaveValue("None");
   expect(screen.getByLabelText("额外术语提示")).toHaveValue("");
   expect(screen.getByLabelText("术语提示强度")).toHaveValue(null);
-  for (const name of [
-    "TXT",
-    "MD",
-    "忠实版",
-    "智能纠正版",
-    "说话人",
-    "区分说话人（自动识别）",
-  ]) {
+  for (const name of ["TXT", "MD", "忠实版", "智能纠正版", "说话人"]) {
     expect(screen.getByRole("checkbox", { name })).toBeChecked();
   }
-  for (const name of ["JSON", "SRT", "VTT", "CSV"]) {
+  for (const name of ["JSON", "SRT", "VTT", "CSV", "区分说话人（自动识别）"]) {
     expect(screen.getByRole("checkbox", { name })).not.toBeChecked();
   }
   fireEvent.click(screen.getByRole("button", { name: "加入转录队列" }));
@@ -174,7 +167,7 @@ it("defaults to the requested MAI options and TXT/MD exports", () => {
     mai_options: {
       transcribe_style: "clean",
       timestamps: "word",
-      diarization: true,
+      diarization: false,
       locale: "ja",
       profanity_filter_mode: "None",
       phrases: [],

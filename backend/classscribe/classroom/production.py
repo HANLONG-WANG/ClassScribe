@@ -1468,7 +1468,7 @@ class ProductionStageRunner:
                 )
                 artifact_id = str(uuid4())
                 suffix = "md" if output_format is ExportFormat.MARKDOWN else output_format.value
-                file_name = f"classscribe-{job.id}-{layer.value}.{suffix}"
+                file_name = f"{Path(job.recording.source_name).stem}.{suffix}"
                 relative = Path("jobs", job.id, "exports", f"{artifact_id}.{suffix}")
                 target = self.paths.data_path(*relative.parts)
                 atomic_write_text(target, content)

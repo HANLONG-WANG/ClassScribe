@@ -33,6 +33,15 @@ def test_paragraph_export_projects_long_source_without_fabricating_sentence_time
     )["records"]
     assert [record["text"] for record in records] == ["一。二。三。四。", "五。六。七。"]
     assert "".join(record["text"] for record in records) == text
+    assert (
+        render_export(
+            (_segment(text),),
+            output_format=ExportFormat.TXT,
+            layer=ExportLayer.FAITHFUL,
+            view=ExportView.READABLE_PARAGRAPHS,
+        )
+        == "一。二。三。四。\n\n五。六。七。\n"
+    )
     for record in records:
         assert record["segment_ids"] == ["source"]
         assert (record["start_sample"], record["end_sample"]) == (16_000, 176_000)

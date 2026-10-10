@@ -72,7 +72,8 @@ WAV，把局部秒转换回绝对 sample，原样回传输入文字。
 `classscribe.exports` 原子写出 TXT、Markdown、JSON、SRT、VTT、CSV，支持 faithful、smart、
 user 三个请求层和逐句/可读段落视图。JSON 明确记录绝对 16 kHz sample、实际回退层、四层
 文字、token 时间和 provenance。段落由长停顿、章节提示、说话人变化和语义边界形成，但不
-改变字幕 token 时间。
+改变字幕 token 时间。导出文件使用上传音频的名称，仅替换为对应格式的扩展名；TXT 只保留
+正文和段落分隔，不显示时间戳或粗时间提示。
 
 SRT/VTT 只用所选文字层对应的最终句/词时间。中文/日文按字符数和 CPS，英文按词数、CPS
 及自然句末分 cue；每条最多两行。具有相同 `protected_group` 的专名以及数字+单位先合成

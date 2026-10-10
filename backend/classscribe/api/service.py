@@ -1834,14 +1834,15 @@ class ClassScribeService:
         )
         artifact_id = str(uuid4())
         suffix = "md" if value.output_format.value == "md" else value.output_format.value
-        file_name = f"classscribe-{identifier}-{value.layer.value}.{suffix}"
         relative = Path("jobs", identifier, "exports", f"{artifact_id}.{suffix}")
         target = self.paths.data_path(*relative.parts)
         atomic_write_text(target, content)
         digest = hashlib.sha256(content.encode()).hexdigest()
         with self.sessions.begin() as session:
-            if session.get(Job, identifier) is None:
+            job = session.get(Job, identifier)
+            if job is None:
                 raise _not_found("job")
+            file_name = f"{Path(job.recording.source_name).stem}.{suffix}"
             session.add(
                 ExportArtifact(
                     id=artifact_id,

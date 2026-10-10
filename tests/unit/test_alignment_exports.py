@@ -246,10 +246,12 @@ def test_explicitly_empty_user_text_does_not_reappear_from_smart_layer(
 
 
 @pytest.mark.parametrize("output_format", tuple(ExportFormat))
-def test_coarse_timing_is_marked_in_every_export_format(output_format: ExportFormat) -> None:
+def test_coarse_timing_is_marked_except_in_plain_txt(output_format: ExportFormat) -> None:
     segment = replace(_export_segment(), timing_quality="structure")
     rendered = render_export((segment,), output_format=output_format, layer=ExportLayer.SMART)
-    if output_format is ExportFormat.JSON:
+    if output_format is ExportFormat.TXT:
+        assert rendered == "We used 20 mg ClassScribe.\n"
+    elif output_format is ExportFormat.JSON:
         record = json.loads(rendered)["records"][0]
         assert record["timing_quality"] == "structure"
         assert record["coarse_timing"] is True

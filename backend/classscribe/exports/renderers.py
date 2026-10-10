@@ -40,10 +40,7 @@ def render_export(
         return _render_vtt(ordered, layer, transform)
     records = _records(ordered, layer, view, transform)
     if output_format is ExportFormat.TXT:
-        return "\n\n".join(
-            ("[粗时间] " if record["coarse_timing"] else "") + str(record["text"])
-            for record in records
-        ) + ("\n" if records else "")
+        return "\n\n".join(str(record["text"]) for record in records) + ("\n" if records else "")
     if output_format is ExportFormat.MARKDOWN:
         return _render_markdown(records)
     if output_format is ExportFormat.CSV:
