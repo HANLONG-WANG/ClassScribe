@@ -3,6 +3,7 @@
   "embeddingDevice": "cuda",
   "embeddingBatchSize": 256,
   "embeddingSubBatchSize": 128,
-  "skipAgentsMd": false,
-  "skipSkills": false
+  "skipAgentsMd": true,
+  "skipSkills": false,
+  "maxFileSize": 1048576
 }
