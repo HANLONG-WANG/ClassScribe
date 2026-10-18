@@ -176,10 +176,6 @@ export function TranscriptsPage() {
         key={group.key}
       >
         <div className="history-date-heading">
-          <DateHeading id={headingId}>
-            {group.label}{" "}
-            <span className="muted">· 本页 {group.items.length} 份</span>
-          </DateHeading>
           <label className="history-select">
             <HistoryCheckbox
               label={`选择${group.label}的全部可删除任务`}
@@ -190,8 +186,11 @@ export function TranscriptsPage() {
                 toggleItems(group.items);
               }}
             />
-            选择本日
           </label>
+          <DateHeading id={headingId}>
+            {group.label}{" "}
+            <span className="muted">· 本页 {group.items.length} 份</span>
+          </DateHeading>
         </div>
         <div className="manuscript-list">
           {group.items.map((item) => (
@@ -277,25 +276,27 @@ export function TranscriptsPage() {
           导入新音频
         </button>
       </header>
-      <div className="panel toolbar">
-        <label htmlFor="history-status-filter">转录稿状态</label>
-        <select
-          id="history-status-filter"
-          value={statusFilter}
-          disabled={busy}
-          onChange={(event) => {
-            setStatusFilter(event.target.value);
-            setOffset(0);
-            setSelected({});
-          }}
-        >
-          <option value="">全部状态</option>
-          {Object.entries(statusFilters).map(([value, label]) => (
-            <option value={value} key={value}>
-              {label}
-            </option>
-          ))}
-        </select>
+      <div className="panel form-grid history-filters">
+        <label htmlFor="history-status-filter">
+          <span>转录稿状态</span>
+          <select
+            id="history-status-filter"
+            value={statusFilter}
+            disabled={busy}
+            onChange={(event) => {
+              setStatusFilter(event.target.value);
+              setOffset(0);
+              setSelected({});
+            }}
+          >
+            <option value="">全部状态</option>
+            {Object.entries(statusFilters).map(([value, label]) => (
+              <option value={value} key={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       <div className="panel history-selection-toolbar">
         <label className="history-select">

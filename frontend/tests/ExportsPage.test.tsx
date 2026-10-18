@@ -1,6 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { ExportsPage } from "../src/pages/ExportsPage";
 
@@ -108,4 +114,60 @@ it("keeps selection across pages and exports each manuscript independently despi
   expect(
     screen.getByRole("button", { name: "生成导出（0 份）" }),
   ).toBeDisabled();
+});
+
+it("groups manuscripts by local date with older dates under an earlier-history section", async () => {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const older = new Date(today);
+  older.setDate(today.getDate() - 8);
+  const items = [
+    { ...manuscript("older", "旧课堂"), created_at: older.toISOString() },
+    { ...manuscript("today", "今日课堂"), created_at: today.toISOString() },
+    {
+      ...manuscript("yesterday", "昨日课堂"),
+      created_at: yesterday.toISOString(),
+    },
+  ];
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ items, total: items.length })),
+      ),
+  );
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ExportsPage />
+    </QueryClientProvider>,
+  );
+  const todayGroup = await screen.findByRole("region", {
+    name: "今天 · 本页 1 份",
+  });
+  expect(
+    within(todayGroup).getByRole("checkbox", { name: /今日课堂/ }),
+  ).toBeEnabled();
+  const yesterdayGroup = screen.getByRole("region", {
+    name: "昨天 · 本页 1 份",
+  });
+  expect(
+    within(yesterdayGroup).getByRole("checkbox", { name: /昨日课堂/ }),
+  ).toBeEnabled();
+  expect(
+    within(screen.getByRole("region", { name: "更久以前" })).getByRole(
+      "checkbox",
+      { name: /旧课堂/ },
+    ),
+  ).toBeEnabled();
+  expect(
+    screen
+      .getAllByRole("heading", { level: 2 })
+      .map((heading) => heading.textContent),
+  ).toEqual(["今天 · 本页 1 份", "昨天 · 本页 1 份", "更久以前"]);
+  fireEvent.click(within(todayGroup).getByRole("checkbox"));
+  expect(
+    screen.getByRole("button", { name: "生成导出（1 份）" }),
+  ).toBeEnabled();
 });

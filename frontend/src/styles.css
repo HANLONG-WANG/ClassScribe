@@ -1472,6 +1472,9 @@ details summary {
   display: grid;
   gap: 12px;
 }
+.history-filters {
+  padding: 1.2rem;
+}
 .history-selection-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -1505,8 +1508,6 @@ details summary {
 .history-date-heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
   gap: 10px;
 }
 .history-date-heading :is(h2, h3) {

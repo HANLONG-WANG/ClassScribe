@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api, downloadFile, formatSamples, type ExportArtifact } from "../api";
 import { type Manuscript, statuses } from "../manuscripts";
+import { groupManuscripts, type ManuscriptGroup } from "../manuscriptGroups";
 
 export function ExportsPage() {
   const [offset, setOffset] = useState(0);
@@ -95,6 +96,63 @@ export function ExportsPage() {
       downloadController.current = null;
       setDownloading(false);
     }
+  }
+
+  const groups = groupManuscripts(query.data?.items ?? []);
+
+  function renderGroup(group: ManuscriptGroup) {
+    const headingId = `export-date-${group.key}`;
+    const DateHeading = group.older ? "h3" : "h2";
+    return (
+      <section
+        className="history-date-group"
+        aria-labelledby={headingId}
+        key={group.key}
+      >
+        <div className="history-date-heading">
+          <DateHeading id={headingId}>
+            {group.label}{" "}
+            <span className="muted">· 本页 {group.items.length} 份</span>
+          </DateHeading>
+        </div>
+        <div className="manuscript-list">
+          {group.items.map((item) => (
+            <label
+              className={`panel manuscript-card export-manuscript ${selected.has(item.job_id) ? "selected" : ""}`}
+              key={item.job_id}
+            >
+              <input
+                type="checkbox"
+                checked={selected.has(item.job_id)}
+                disabled={create.isPending || item.has_transcript === false}
+                onChange={(event) => {
+                  toggle(item, event.target.checked);
+                }}
+              />
+              <div>
+                <strong>{item.source_name}</strong>
+                <span>
+                  {new Date(item.created_at).toLocaleString()} ·{" "}
+                  {formatSamples(item.duration_samples)} ·{" "}
+                  {(
+                    {
+                      ja: "日语",
+                      zh: "中文",
+                      en: "英语",
+                      auto_mixed: "自动 / 混合",
+                    } as Record<string, string>
+                  )[item.language] ?? item.language}
+                </span>
+                <span>
+                  {statuses[item.status] ?? item.status}
+                  {item.has_transcript === false ? " · 暂无可导出的正文" : ""}
+                </span>
+              </div>
+            </label>
+          ))}
+        </div>
+      </section>
+    );
   }
 
   return (
@@ -277,49 +335,22 @@ export function ExportsPage() {
         {query.data && (
           <>
             <p className="muted">
-              共 {query.data.total} 份稿件 · 选择会跨页保留
+              共 {query.data.total} 份稿件 · 按创建时间从新到旧排列 ·
+              日期按本地时区显示 · 选择会跨页保留
             </p>
             {query.data.items.length === 0 && (
               <p className="empty-state">暂无稿件，请先导入音频。</p>
             )}
-            <div className="manuscript-list">
-              {query.data.items.map((item) => (
-                <label
-                  className={`panel manuscript-card export-manuscript ${selected.has(item.job_id) ? "selected" : ""}`}
-                  key={item.job_id}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.has(item.job_id)}
-                    disabled={create.isPending || item.has_transcript === false}
-                    onChange={(event) => {
-                      toggle(item, event.target.checked);
-                    }}
-                  />
-                  <div>
-                    <strong>{item.source_name}</strong>
-                    <span>
-                      {new Date(item.created_at).toLocaleString()} ·{" "}
-                      {formatSamples(item.duration_samples)} ·{" "}
-                      {(
-                        {
-                          ja: "日语",
-                          zh: "中文",
-                          en: "英语",
-                          auto_mixed: "自动 / 混合",
-                        } as Record<string, string>
-                      )[item.language] ?? item.language}
-                    </span>
-                    <span>
-                      {statuses[item.status] ?? item.status}
-                      {item.has_transcript === false
-                        ? " · 暂无可导出的正文"
-                        : ""}
-                    </span>
-                  </div>
-                </label>
-              ))}
-            </div>
+            {groups.filter((group) => !group.older).map(renderGroup)}
+            {groups.some((group) => group.older) && (
+              <section
+                className="history-older"
+                aria-labelledby="export-older-title"
+              >
+                <h2 id="export-older-title">更久以前</h2>
+                {groups.filter((group) => group.older).map(renderGroup)}
+              </section>
+            )}
             <div className="toolbar">
               <button
                 type="button"
