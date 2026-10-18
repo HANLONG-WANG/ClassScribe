@@ -1472,8 +1472,17 @@ details summary {
   display: grid;
   gap: 12px;
 }
-.history-filters {
-  padding: 1.2rem;
+.history-status-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.history-status-filter span {
+  white-space: nowrap;
+}
+.history-status-filter select {
+  width: auto;
 }
 .history-selection-toolbar {
   display: flex;

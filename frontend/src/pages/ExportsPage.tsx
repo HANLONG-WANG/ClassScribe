@@ -101,6 +101,10 @@ export function ExportsPage() {
   const groups = groupManuscripts(query.data?.items ?? []);
 
   function renderGroup(group: ManuscriptGroup) {
+    const available = group.items.filter(
+      (item) => item.has_transcript !== false,
+    );
+    const count = available.filter((item) => selected.has(item.job_id)).length;
     const headingId = `export-date-${group.key}`;
     const DateHeading = group.older ? "h3" : "h2";
     return (
@@ -110,6 +114,28 @@ export function ExportsPage() {
         key={group.key}
       >
         <div className="history-date-heading">
+          <input
+            type="checkbox"
+            className="history-checkbox"
+            aria-label={`选择${group.label}的全部可导出稿件`}
+            checked={available.length > 0 && count === available.length}
+            disabled={create.isPending || available.length === 0}
+            ref={(node) => {
+              if (node)
+                node.indeterminate = count > 0 && count < available.length;
+            }}
+            onChange={(event) => {
+              const checked = event.target.checked;
+              setSelected((current) => {
+                const next = new Map(current);
+                for (const item of available) {
+                  if (checked) next.set(item.job_id, item);
+                  else next.delete(item.job_id);
+                }
+                return next;
+              });
+            }}
+          />
           <DateHeading id={headingId}>
             {group.label}{" "}
             <span className="muted">· 本页 {group.items.length} 份</span>

@@ -276,28 +276,6 @@ export function TranscriptsPage() {
           导入新音频
         </button>
       </header>
-      <div className="panel form-grid history-filters">
-        <label htmlFor="history-status-filter">
-          <span>转录稿状态</span>
-          <select
-            id="history-status-filter"
-            value={statusFilter}
-            disabled={busy}
-            onChange={(event) => {
-              setStatusFilter(event.target.value);
-              setOffset(0);
-              setSelected({});
-            }}
-          >
-            <option value="">全部状态</option>
-            {Object.entries(statusFilters).map(([value, label]) => (
-              <option value={value} key={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
       <div className="panel history-selection-toolbar">
         <label className="history-select">
           <HistoryCheckbox
@@ -333,6 +311,29 @@ export function TranscriptsPage() {
             ? "删除中…"
             : `删除所选任务及录音（${String(selectedItems.length)}）`}
         </button>
+        <label
+          className="history-status-filter"
+          htmlFor="history-status-filter"
+        >
+          <span>转录稿状态</span>
+          <select
+            id="history-status-filter"
+            value={statusFilter}
+            disabled={busy}
+            onChange={(event) => {
+              setStatusFilter(event.target.value);
+              setOffset(0);
+              setSelected({});
+            }}
+          >
+            <option value="">全部状态</option>
+            {Object.entries(statusFilters).map(([value, label]) => (
+              <option value={value} key={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
       <p className="muted">
         仅可删除已完成、失败或已取消的任务。录音被其他任务或裁剪片段引用时会保留。

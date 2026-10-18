@@ -166,8 +166,51 @@ it("groups manuscripts by local date with older dates under an earlier-history s
       .getAllByRole("heading", { level: 2 })
       .map((heading) => heading.textContent),
   ).toEqual(["今天 · 本页 1 份", "昨天 · 本页 1 份", "更久以前"]);
-  fireEvent.click(within(todayGroup).getByRole("checkbox"));
+  fireEvent.click(
+    within(todayGroup).getByRole("checkbox", { name: /今日课堂/ }),
+  );
   expect(
     screen.getByRole("button", { name: "生成导出（1 份）" }),
   ).toBeEnabled();
+});
+
+it("selects only exportable manuscripts for a date and reflects partial selection", async () => {
+  const created_at = new Date().toISOString();
+  const items = [
+    manuscript("first", "课堂一"),
+    manuscript("second", "课堂二"),
+    manuscript("empty", "空课堂", false),
+  ].map((item) => ({ ...item, created_at }));
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ items, total: items.length })),
+      ),
+  );
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <ExportsPage />
+    </QueryClientProvider>,
+  );
+  const group = await screen.findByRole("checkbox", {
+    name: "选择今天的全部可导出稿件",
+  });
+  const first = screen.getByRole("checkbox", { name: /课堂一/ });
+  const second = screen.getByRole("checkbox", { name: /课堂二/ });
+  fireEvent.click(first);
+  expect(group).toBePartiallyChecked();
+  fireEvent.click(group);
+  expect(group).toBeChecked();
+  expect(first).toBeChecked();
+  expect(second).toBeChecked();
+  expect(screen.getByRole("checkbox", { name: /空课堂/ })).not.toBeChecked();
+  expect(
+    screen.getByRole("button", { name: "生成导出（2 份）" }),
+  ).toBeEnabled();
+  fireEvent.click(group);
+  expect(first).not.toBeChecked();
+  expect(second).not.toBeChecked();
+  expect(group).not.toBePartiallyChecked();
 });
