@@ -1,44 +1,95 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **ClassScribe** (8844 symbols, 17792 relationships, 486 execution flows).
+This project is indexed by GitNexus as **ClassScribe**.
 
-> Index stale? Run `node .gitnexus/run.cjs analyze --index-only` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? Bootstrap with `npx`, `bunx`, or `pnpm dlx` — e.g. `bunx gitnexus@latest analyze` (npm 11 npx crash; #1939).
+GitNexus provides graph-based code intelligence for exploring architecture, dependencies, execution flows, and potential change impact.
 
-## Always Do
+GitNexus is an optional resource. Codex independently decides whether, when, and how to use its tools based on the task and available context. Direct source inspection, text search, language servers, Serena, and other development tools are equally valid alternatives.
 
-- **MUST run impact before editing.** Use `impact({target: "symbolName", direction: "upstream"})` or `node .gitnexus/run.cjs impact "symbolName" --direction upstream --repo .`; report callers, processes, and risk. Never substitute grep for graph analysis.
-- **MUST analyze graph changes before committing.** Use `detect_changes({scope: "all"})` (MCP) or `node .gitnexus/run.cjs detect-changes --scope all --repo .` (CLI fallback). `partial: true` or `truncated: true` is not a clean check — a zero means unseen, not unaffected; re-run it. For regression review: `detect_changes({scope: "compare", base_ref: "master"})` or `node .gitnexus/run.cjs detect-changes --scope compare --base-ref "master" --repo .`.
-- MUST warn on HIGH/CRITICAL `risk` pre-edit; never use `riskSharedAxes` to waive a HIGH/CRITICAL `risk` warning. Compare File/symbol: MCP File omits axes; Graph-RAG expands File.
-- **MUST treat `risk: UNKNOWN` as unresolved, not as low.** An empty caller set is not evidence the symbol is unused — it can also mean the callers are not resolvable by the index (plain-object property access, dynamic dispatch, cross-language calls). `impact` pairs `UNKNOWN` with a `riskNote` saying so. Confirm with a text search before treating the symbol as safe to change or delete; do not proceed on the strength of a zero.
-- **MUST use `query({search_query: "concept"})` for concepts/flows, `context({name: "symbolName"})` for a named symbol, or `impact` for blast radius, on read-only callers, dependencies, imports, or execution flow.** Graph first; text search only for empty/`UNKNOWN`/literals.
-- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
+## Available Capabilities
 
-## Never Do
+- `query({search_query: "concept"})`: Explore concepts, related components, and execution flows.
+- `context({name: "symbolName"})`: Inspect a symbol, its relationships, and surrounding context.
+- `impact({target: "symbolName", direction: "upstream"})`: Estimate callers, affected processes, and potential change impact.
+- `detect_changes({scope: "all"})`: Examine graph-level changes and affected symbols or flows.
+- `trace`: Follow execution paths across components.
+- `rename`: Perform graph-aware symbol renaming.
+- `explain({target: "fileOrSymbol"})`: Explore security and taint findings when PDG analysis is available.
 
-- NEVER edit a function, class, or method before MCP/CLI impact analysis.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis, and never read `UNKNOWN` as an all-clear — it means the walk could not answer, which is the one verdict that requires confirming by other means.
-- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
-- NEVER commit before MCP/CLI graph change analysis.
+These capabilities can be used individually or combined with other development tools.
+
+## Interpretation and Limitations
+
+GitNexus provides useful but potentially incomplete static analysis.
+
+- HIGH or CRITICAL risk indicates potentially significant change impact.
+- UNKNOWN risk indicates that the analysis could not establish a reliable impact assessment.
+- Missing callers or relationships do not establish that a symbol is unused.
+- Low reported impact does not guarantee that a change is safe.
+- Dynamic dispatch, reflection, dependency injection, framework registration, generated code, configuration, and cross-language behavior may not be fully represented.
+
+Source inspection, text search, other code intelligence tools, and project validation commands can provide complementary evidence.
+
+Discrepancies between tools, source code, and diagnostics may reveal incomplete analysis or underlying issues worth investigating.
+
+## Index Maintenance
+
+GitNexus maintains a repository knowledge graph and optional embeddings.
+
+Index status can be inspected through GitNexus tools or CLI commands. Whether and when to refresh the index is entirely at Codex's discretion.
+
+### Sandbox and CUDA Requirements
+
+**If Codex chooses to perform GitNexus indexing or re-indexing, the indexing command MUST execute outside the sandbox.**
+
+This requirement applies to any operation that creates, refreshes, or rebuilds the GitNexus repository index, including operations that generate embeddings.
+
+- Request sandbox escalation or elevated execution permission before running an indexing command.
+- Execute indexing in the host environment, outside the Codex sandbox, so GitNexus can access the local GPU and CUDA runtime.
+- Do not silently fall back to sandboxed indexing if escalation is denied or unavailable. Report the limitation instead.
+- This restriction applies to indexing operations, not ordinary read-only GitNexus queries or analysis tools.
+
+The host supports NVIDIA CUDA, which is the intended backend for local embedding generation.
+
+When generating local embeddings, the following command illustrates the preferred configuration:
+
+    gitnexus analyze --index-only --embeddings --embedding-device cuda
+
+If the repository-local runner is available, it can also be used:
+
+    node .gitnexus/run.cjs analyze --index-only --embeddings --embedding-device cuda
+
+The `--index-only` option prevents GitNexus from rewriting agent instruction files or installing skills during indexing.
+
+The `--embeddings` option enables embedding generation, and `--embedding-device cuda` selects the CUDA backend.
+
+CUDA availability depends on the host runtime and installed dependencies; running outside the sandbox enables access but does not itself guarantee successful GPU initialization.
+
+Indexing remains optional. The sandbox escalation requirement applies only when Codex has independently decided to perform indexing.
 
 ## Resources
 
-| Resource | Use for |
-| --- | --- |
-| `gitnexus://repo/ClassScribe/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/ClassScribe/clusters` | All functional areas |
-| `gitnexus://repo/ClassScribe/processes` | All execution flows |
-| `gitnexus://repo/ClassScribe/process/{name}` | Step-by-step execution trace |
+| Resource                                     | Description                             |
+| -------------------------------------------- | --------------------------------------- |
+| `gitnexus://repo/ClassScribe/context`        | Repository overview and index freshness |
+| `gitnexus://repo/ClassScribe/clusters`       | Functional areas                        |
+| `gitnexus://repo/ClassScribe/processes`      | Execution flows                         |
+| `gitnexus://repo/ClassScribe/process/{name}` | Detailed execution traces               |
 
-## CLI
+## Reference Skills
 
-| Task | Read this skill file |
-| --- | --- |
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus-cli/SKILL.md` |
+Additional documentation is available for specialized tasks:
+
+| Topic                    | Skill                                              |
+| ------------------------ | -------------------------------------------------- |
+| Architecture exploration | `.claude/skills/gitnexus-exploring/SKILL.md`       |
+| Impact analysis          | `.claude/skills/gitnexus-impact-analysis/SKILL.md` |
+| Debugging                | `.claude/skills/gitnexus-debugging/SKILL.md`       |
+| Refactoring              | `.claude/skills/gitnexus-refactoring/SKILL.md`     |
+| Tool reference           | `.claude/skills/gitnexus-guide/SKILL.md`           |
+| CLI operations           | `.claude/skills/gitnexus-cli/SKILL.md`             |
+
+These references are available when their additional details are useful.
 
 <!-- gitnexus:end -->
