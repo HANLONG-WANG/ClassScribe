@@ -26,3 +26,7 @@ test-results/
 # Private Azure MAI credentials, including atomic-write temporary files
 azure-mai.env
 .azure-mai.env.*.tmp
+
+# Local agent/tool logs
+.playwright-cli/
+.serena/logs/
