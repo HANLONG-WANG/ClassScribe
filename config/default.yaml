@@ -30,7 +30,6 @@ classroom:
   prior_typical: 2
   max_speakers: 12
   allow_overlap: true
-  auto_export: [json, markdown, srt, vtt]
 
 quality:
   second_model_threshold: 0.82

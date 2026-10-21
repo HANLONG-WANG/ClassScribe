@@ -21,7 +21,6 @@ const stages = [
   ["quality", "自动复核"],
   ["postprocess", "术语 / 标点"],
   ["alignment", "对齐"],
-  ["export", "导出"],
 ] as const;
 
 export function JobPage() {
@@ -501,8 +500,6 @@ const operationLabels: Record<string, string> = {
   punctuation: "正在处理标点",
   forced_alignment: "正在对齐片段",
   final_validation: "正在验证片段",
-  automatic_exports: "准备导出",
-  export: "正在导出文件",
 };
 function operationLabel(operation: string) {
   return operationLabels[operation] ?? operation;

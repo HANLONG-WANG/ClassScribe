@@ -33,8 +33,12 @@ import { ClassroomModelGuide } from "./ClassroomModelGuide";
 import { ModelPicker } from "./ModelPicker";
 
 type Language = "zh" | "ja" | "en" | "auto_mixed";
-type Accuracy = "fast" | "balanced" | "highest" | "strict_single";
+type Accuracy = "balanced" | "strict_single";
 const draftKey = "classscribe-upload-draft-v1";
+const accuracyLabels: Record<Accuracy, string> = {
+  balanced: "默认（含复核）",
+  strict_single: "严格单模型",
+};
 interface UploadDraft {
   provider: "local" | "azure_mai";
   mai: MaiDraft;
@@ -43,10 +47,6 @@ interface UploadDraft {
   speakerCount: string;
   glossaryId: string;
   primaryModel: string;
-  outputs: string[];
-  includeFaithful: boolean;
-  includeSmart: boolean;
-  includeSpeakers: boolean;
 }
 const defaultDraft: UploadDraft = {
   provider: "azure_mai",
@@ -56,10 +56,6 @@ const defaultDraft: UploadDraft = {
   speakerCount: "auto",
   glossaryId: "",
   primaryModel: "",
-  outputs: ["txt", "md"],
-  includeFaithful: true,
-  includeSmart: true,
-  includeSpeakers: true,
 };
 function loadDraft(): UploadDraft {
   try {
@@ -69,6 +65,9 @@ function loadDraft(): UploadDraft {
     return {
       ...defaultDraft,
       ...saved,
+      // Earlier drafts may hold the removed fast/highest modes.
+      accuracy:
+        saved.accuracy === "strict_single" ? "strict_single" : "balanced",
       mai: { ...defaultMaiDraft, ...saved.mai },
     };
   } catch {
@@ -92,10 +91,6 @@ export function UploadPage() {
   const [speakerCount, setSpeakerCount] = useState(draft.speakerCount);
   const [glossaryId, setGlossaryId] = useState(draft.glossaryId);
   const [primaryModel, setPrimaryModel] = useState(draft.primaryModel);
-  const [outputs, setOutputs] = useState(draft.outputs);
-  const [includeFaithful, setIncludeFaithful] = useState(draft.includeFaithful);
-  const [includeSmart, setIncludeSmart] = useState(draft.includeSmart);
-  const [includeSpeakers, setIncludeSpeakers] = useState(draft.includeSpeakers);
 
   useEffect(() => {
     writeStorage(
@@ -108,10 +103,6 @@ export function UploadPage() {
         speakerCount,
         glossaryId,
         primaryModel,
-        outputs,
-        includeFaithful,
-        includeSmart,
-        includeSpeakers,
       } satisfies UploadDraft),
     );
   }, [
@@ -122,10 +113,6 @@ export function UploadPage() {
     speakerCount,
     glossaryId,
     primaryModel,
-    outputs,
-    includeFaithful,
-    includeSmart,
-    includeSpeakers,
   ]);
 
   const glossaries = useQuery({
@@ -142,17 +129,9 @@ export function UploadPage() {
     event.target.value = "";
   }
 
-  function toggleOutput(format: string) {
-    setOutputs((current) =>
-      current.includes(format)
-        ? current.filter((item) => item !== format)
-        : [...current, format],
-    );
-  }
-
   function submit(event: SyntheticEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!files.length || !selectedOutputs.length || invalidMaiPhrases) return;
+    if (!files.length || invalidMaiPhrases) return;
     addImports(files, {
       provider,
       prepare_only: chooseRange,
@@ -166,22 +145,11 @@ export function UploadPage() {
         provider === "local" && primaryModel ? "manual_primary" : "auto_best",
       primary_model_id: provider === "local" ? primaryModel || null : null,
       accuracy_mode: provider === "local" ? accuracy : "balanced",
-      outputs: selectedOutputs,
-      include_faithful: includeFaithful,
-      include_smart: includeSmart,
-      include_speakers: includeSpeakers,
-      include_subtitles:
-        selectedOutputs.includes("srt") || selectedOutputs.includes("vtt"),
     });
     setFiles([]);
   }
 
   const maiOptions = maiRequestOptions(maiDraft);
-  const noMaiTiming =
-    provider === "azure_mai" && maiDraft.timestamps === "none";
-  const selectedOutputs = noMaiTiming
-    ? outputs.filter((format) => format !== "srt" && format !== "vtt")
-    : outputs;
   const invalidMaiPhrases =
     provider === "azure_mai" &&
     (maiOptions.phrases.length > 500 ||
@@ -193,7 +161,10 @@ export function UploadPage() {
         <div>
           <p className="eyebrow">Classroom workspace</p>
           <h1 id="upload-title">批量导入课堂</h1>
-          <p>任务会自动完成到导出。可选择本地处理或 Azure MAI 在线转写。</p>
+          <p>
+            可选择本地处理或 Azure MAI
+            在线转写；完成后在转录稿或导出页生成文件。
+          </p>
         </div>
         <span className="privacy-badge">
           {provider === "local" ? "离线推理" : "Azure 在线转写"}
@@ -370,53 +341,30 @@ export function UploadPage() {
             字符；课程词典的合并数量将在提交时检查。
           </p>
         )}
-        {noMaiTiming && (
-          <p role="status" className="muted">
-            未返回时间戳时无法按词定位或生成 SRT/VTT 字幕；请选择文本输出格式。
-          </p>
-        )}
 
         {provider === "local" && (
           <fieldset>
             <legend>处理模式</legend>
             <div className="choice-row">
-              {(["fast", "balanced", "highest", "strict_single"] as const).map(
-                (mode) => (
-                  <label className="choice-card" key={mode}>
-                    <input
-                      aria-label={
-                        {
-                          fast: "快速",
-                          balanced: "平衡",
-                          highest: "最高精度",
-                          strict_single: "严格单模型",
-                        }[mode]
-                      }
-                      checked={accuracy === mode}
-                      name="accuracy"
-                      onChange={() => {
-                        setAccuracy(mode);
-                      }}
-                      type="radio"
-                    />
-                    <span>
-                      {
-                        {
-                          fast: "快速",
-                          balanced: "平衡",
-                          highest: "最高精度",
-                          strict_single: "严格单模型",
-                        }[mode]
-                      }
-                    </span>
-                    <small>
-                      {mode === "strict_single"
-                        ? "指定正文模型，不调用备用 ASR；辅助模型仍使用。"
-                        : "按语言选择主模型，质量异常时调用备用模型复核。"}
-                    </small>
-                  </label>
-                ),
-              )}
+              {(["balanced", "strict_single"] as const).map((mode) => (
+                <label className="choice-card" key={mode}>
+                  <input
+                    aria-label={accuracyLabels[mode]}
+                    checked={accuracy === mode}
+                    name="accuracy"
+                    onChange={() => {
+                      setAccuracy(mode);
+                    }}
+                    type="radio"
+                  />
+                  <span>{accuracyLabels[mode]}</span>
+                  <small>
+                    {mode === "strict_single"
+                      ? "指定正文模型，不调用备用 ASR；辅助模型仍使用。"
+                      : "按语言选择主模型，质量异常时调用备用模型复核。"}
+                  </small>
+                </label>
+              ))}
             </div>
           </fieldset>
         )}
@@ -429,59 +377,6 @@ export function UploadPage() {
             strict={accuracy === "strict_single"}
           />
         )}
-
-        <fieldset>
-          <legend>自动输出</legend>
-          <div className="choice-row compact">
-            {["txt", "md", "json", "srt", "vtt", "csv"].map((format) => (
-              <label key={format}>
-                <input
-                  checked={selectedOutputs.includes(format)}
-                  disabled={
-                    noMaiTiming && (format === "srt" || format === "vtt")
-                  }
-                  onChange={() => {
-                    toggleOutput(format);
-                  }}
-                  type="checkbox"
-                />{" "}
-                {format.toUpperCase()}
-              </label>
-            ))}
-          </div>
-          <div className="choice-row compact">
-            <label>
-              <input
-                checked={includeFaithful}
-                onChange={(event) => {
-                  setIncludeFaithful(event.target.checked);
-                }}
-                type="checkbox"
-              />{" "}
-              忠实版
-            </label>
-            <label>
-              <input
-                checked={includeSmart}
-                onChange={(event) => {
-                  setIncludeSmart(event.target.checked);
-                }}
-                type="checkbox"
-              />{" "}
-              智能纠正版
-            </label>
-            <label>
-              <input
-                checked={includeSpeakers}
-                onChange={(event) => {
-                  setIncludeSpeakers(event.target.checked);
-                }}
-                type="checkbox"
-              />{" "}
-              说话人
-            </label>
-          </div>
-        </fieldset>
 
         {provider === "local" &&
           accuracy === "strict_single" &&
@@ -502,7 +397,6 @@ export function UploadPage() {
           className="primary-button"
           disabled={
             !files.length ||
-            selectedOutputs.length === 0 ||
             invalidMaiPhrases ||
             (provider === "local" &&
               accuracy === "strict_single" &&

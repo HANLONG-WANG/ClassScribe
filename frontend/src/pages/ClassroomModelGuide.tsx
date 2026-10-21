@@ -38,7 +38,7 @@ export function ClassroomModelGuide({
     <section className="mode-model-guide" aria-label="本次处理使用的模型">
       <h2>本次处理使用的模型</h2>
       <p>
-        当前版本的快速、平衡、最高精度使用相同的主模型与质量门控复核策略，尚未按这三个档位切换模型。严格单模型只关闭正文的第二、第三模型复核。
+        默认模式在质量异常时调用第二、第三模型复核；严格单模型只使用指定的正文模型，关闭这两级复核。
       </p>
       {language === "auto_mixed" && (
         <p>

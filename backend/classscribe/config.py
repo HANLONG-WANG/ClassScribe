@@ -66,12 +66,6 @@ class ClassroomConfig(StrictModel):
     prior_typical: int = Field(default=2, ge=1)
     max_speakers: int = Field(default=12, ge=1, le=12)
     allow_overlap: bool = True
-    auto_export: tuple[Literal["json", "markdown", "srt", "vtt"], ...] = (
-        "json",
-        "markdown",
-        "srt",
-        "vtt",
-    )
 
     @model_validator(mode="after")
     def validate_windows_and_speakers(self) -> ClassroomConfig:
@@ -216,6 +210,10 @@ def migrate_config(raw: Mapping[str, Any]) -> dict[str, Any]:
         # Provider selection controls online transcription; discard obsolete switches.
         privacy.pop("runtime_offline", None)
         privacy.pop("offline", None)
+    classroom = migrated.get("classroom")
+    if isinstance(classroom, dict):
+        # Automatic exports were removed; exports are created on demand.
+        classroom.pop("auto_export", None)
     return migrated
 
 

@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import os
 import re
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import replace
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
@@ -69,7 +67,6 @@ from classscribe.db.models import (
     BenchmarkStatus,
     CheckpointStatus,
     DecisionEvent,
-    ExportArtifact,
     GlossaryTerm,
     Job,
     JobCheckpoint,
@@ -86,14 +83,6 @@ from classscribe.db.models import (
     TranscriptSegment,
 )
 from classscribe.errors import ClassScribeError, ErrorCode
-from classscribe.exports import (
-    ExportFormat,
-    ExportLayer,
-    ExportSegment,
-    ExportView,
-    load_export_segments,
-    render_export,
-)
 from classscribe.jobs.state_machine import CheckpointSpec, JobStateMachine
 from classscribe.models import ModelEntry, ModelManager, ModelRegistry, SandboxedModelInvoker
 from classscribe.paths import AppPaths
@@ -116,7 +105,6 @@ from classscribe.quality import (
     merge_retry_pieces,
 )
 from classscribe.quality.text import surface_tokens
-from classscribe.recovery import atomic_write_text
 from classscribe.structure.models import task_speaker_config
 from classscribe.structure.pipeline import StructurePipeline
 from classscribe.terminology import (
@@ -132,15 +120,6 @@ from classscribe.terminology import (
 )
 from classscribe.timeline import SAMPLE_RATE, AudioSpan
 from classscribe.worker_sandbox import WorkerSandbox
-
-_CONTENT_TYPES = {
-    "txt": "text/plain; charset=utf-8",
-    "md": "text/markdown; charset=utf-8",
-    "json": "application/json",
-    "srt": "application/x-subrip; charset=utf-8",
-    "vtt": "text/vtt; charset=utf-8",
-    "csv": "text/csv; charset=utf-8",
-}
 
 
 class ProductionStageRunner:
@@ -177,7 +156,6 @@ class ProductionStageRunner:
             "punctuation": self._punctuation,
             "forced_alignment": self._forced_alignment,
             "final_validation": self._final_validation,
-            "automatic_exports": self._automatic_exports,
         }
 
     def open_job(self, job_id: str) -> None:
@@ -1433,62 +1411,6 @@ class ProductionStageRunner:
             )
         )
 
-    def _automatic_exports(self, session: Session, job: Job, _checkpoint: JobCheckpoint) -> None:
-        segments = self._export_segments(session, job.id)
-        raw_outputs = job.options_json.get("outputs", self.config.classroom.auto_export)
-        outputs = tuple(
-            ExportFormat("md" if str(item) == "markdown" else str(item)) for item in raw_outputs
-        )
-        if not job.options_json.get("include_speakers", True):
-            segments = tuple(replace(segment, speaker=None) for segment in segments)
-        layers = tuple(
-            layer
-            for layer, enabled in (
-                (ExportLayer.FAITHFUL, job.options_json.get("include_faithful", True)),
-                (ExportLayer.SMART, job.options_json.get("include_smart", True)),
-            )
-            if enabled
-        )
-        exported = 0
-        for layer in layers:
-            for output_format in outputs:
-                report_activity(
-                    "export",
-                    completed=exported,
-                    total=len(layers) * len(outputs),
-                    unit="files",
-                    object=f"{layer.value}.{output_format.value}",
-                    force=True,
-                )
-                content = render_export(
-                    segments,
-                    output_format=output_format,
-                    layer=layer,
-                    view=ExportView.SENTENCES,
-                )
-                artifact_id = str(uuid4())
-                suffix = "md" if output_format is ExportFormat.MARKDOWN else output_format.value
-                file_name = f"{Path(job.recording.source_name).stem}.{suffix}"
-                relative = Path("jobs", job.id, "exports", f"{artifact_id}.{suffix}")
-                target = self.paths.data_path(*relative.parts)
-                atomic_write_text(target, content)
-                exported += 1
-                report_activity(completed=exported, force=True)
-                session.add(
-                    ExportArtifact(
-                        id=artifact_id,
-                        job_id=job.id,
-                        output_format=output_format.value,
-                        text_layer=layer.value,
-                        view=ExportView.SENTENCES.value,
-                        file_name=file_name,
-                        relative_path=relative.as_posix(),
-                        content_type=_CONTENT_TYPES[output_format.value],
-                        sha256=hashlib.sha256(content.encode()).hexdigest(),
-                        size_bytes=len(content.encode()),
-                    )
-                )
-
     def _transcribe(
         self,
         session: Session,
@@ -2126,10 +2048,6 @@ class ProductionStageRunner:
     def needs_audio_normalization(self, job: Job) -> bool:
         path = self._master_path(job.recording_id)
         return not path.is_file() or path.is_symlink()
-
-    @staticmethod
-    def _export_segments(session: Session, job_id: str) -> tuple[ExportSegment, ...]:
-        return load_export_segments(session, job_id)
 
 
 def _speech_region(value: Mapping[str, Any]) -> SpeechRegionResult:

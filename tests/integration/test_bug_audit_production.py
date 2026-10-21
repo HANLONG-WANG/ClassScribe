@@ -236,49 +236,6 @@ def test_forced_alignment_keeps_provenance_local_to_each_token(
         ] == [[0], [1]]
 
 
-@pytest.mark.parametrize("faithful,smart", [(True, False), (False, True), (True, True)])
-def test_automatic_export_honors_layers_and_speakers(
-    database: tuple[Engine, sessionmaker[Session], Path],
-    tmp_path: Path,
-    faithful: bool,
-    smart: bool,
-) -> None:
-    from classscribe.db.models import ExportArtifact
-
-    runner = make_runner(tmp_path, None)
-    with database[1].begin() as session:
-        job, segment, checkpoint = setup_segment(session)
-        segment.speaker_id = "speaker-private"
-        segment.smart_corrected_text = "Corrected text"
-        job.recording.source_name = "课堂.2026.wav"
-        job.options_json = {
-            "outputs": ["txt", "md", "json", "srt", "vtt", "csv"],
-            "include_faithful": faithful,
-            "include_smart": smart,
-            "include_speakers": False,
-        }
-        session.flush()
-        runner._automatic_exports(session, job, checkpoint)
-        session.flush()
-        artifacts = tuple(session.scalars(select(ExportArtifact)))
-        assert {item.text_layer for item in artifacts} == ({"faithful"} if faithful else set()) | (
-            {"smart"} if smart else set()
-        )
-        assert len(artifacts) == 6 * (int(faithful) + int(smart))
-        assert len({item.relative_path for item in artifacts}) == len(artifacts)
-        for artifact in artifacts:
-            content = runner.paths.data_path(artifact.relative_path).read_text()
-            assert "speaker-private" not in content
-            assert (
-                "Hello world" if artifact.text_layer == "faithful" else "Corrected text"
-            ) in content
-            assert artifact.file_name == f"课堂.2026.{artifact.output_format}"
-            if artifact.output_format == "txt":
-                assert content == (
-                    "Hello world\n" if artifact.text_layer == "faithful" else "Corrected text\n"
-                )
-
-
 def test_qwen_native_punctuation_survives_production_postprocessing(
     database: tuple[Engine, sessionmaker[Session], Path],
     tmp_path: Path,

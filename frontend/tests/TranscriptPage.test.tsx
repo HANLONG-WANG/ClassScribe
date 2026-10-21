@@ -107,7 +107,11 @@ it("keeps the player on text-layer changes and seeks on the full recording timel
                       ]
                     : url.endsWith("/segments/s")
                       ? segment
-                      : { job_id: "job", recording_id: "recording" },
+                      : {
+                          job_id: "job",
+                          recording_id: "recording",
+                          options: {},
+                        },
           ),
           { status: url.endsWith("/undo") ? 409 : 200 },
         ),
@@ -228,7 +232,7 @@ it("opens a long transcript before loading its recording waveform", async () => 
                     },
                   ],
                 }
-              : { job_id: "long-job", recording_id: "recording" },
+              : { job_id: "long-job", recording_id: "recording", options: {} },
           ),
           { status: 200 },
         ),

@@ -74,7 +74,6 @@ response = asyncio.run(
                 "language": "zh",
                 "accuracy_mode": "balanced",
                 "model_selection": "auto_best",
-                "outputs": ["md"],
             }
         ).encode(),
     )

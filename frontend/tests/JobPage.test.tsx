@@ -183,16 +183,16 @@ it("shows completed status and marks every pipeline step complete when reopening
   expect(progress).toHaveAttribute("aria-valuenow", "100");
   expect(progress).toHaveAttribute("aria-valuetext", "已完成");
   const steps = within(screen.getByRole("list")).getAllByRole("listitem");
-  expect(steps).toHaveLength(10);
+  expect(steps).toHaveLength(9);
   for (const step of steps) {
     expect(step).toHaveClass("done");
     expect(step).not.toHaveClass("active");
     expect(step).not.toHaveAttribute("aria-current");
   }
 });
-it("updates the current phase when an exporting job becomes complete", async () => {
-  const update = setup("running", "export", 0.95);
-  expect(await screen.findByText("导出", { selector: "strong" })).toBeVisible();
+it("updates the current phase when an aligning job becomes complete", async () => {
+  const update = setup("running", "alignment", 0.95);
+  expect(await screen.findByText("对齐", { selector: "strong" })).toBeVisible();
   expect(screen.getByRole("progressbar")).toHaveAttribute(
     "aria-valuenow",
     "95",

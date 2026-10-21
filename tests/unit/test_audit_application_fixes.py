@@ -76,12 +76,12 @@ def test_checkpoint_creation_is_idempotent_including_null_segment(tmp_path: Path
             )
 
 
-def test_segment_rerun_invalidates_auto_export_and_preserves_historical_files(
+def test_segment_rerun_repeats_segment_work_and_preserves_historical_files(
     tmp_path: Path,
 ) -> None:
     service, sessions = service_fixture(tmp_path)
     identifier = make_job(sessions)
-    exported: list[str] = []
+    transcribed: list[str] = []
 
     def handle(session: Any, job: Any, checkpoint: Any) -> None:
         if checkpoint.checkpoint_key == "moss_structure":
@@ -93,8 +93,8 @@ def test_segment_rerun_invalidates_auto_export_and_preserves_historical_files(
                     language=LanguageMode.ENGLISH,
                 )
             )
-        if checkpoint.checkpoint_key == "automatic_exports":
-            exported.append(job.id)
+        if checkpoint.checkpoint_key == "primary_asr":
+            transcribed.append(checkpoint.segment_id)
 
     pipeline = ClassroomPipeline(
         sessions,
@@ -130,7 +130,8 @@ def test_segment_rerun_invalidates_auto_export_and_preserves_historical_files(
     pipeline.retry_segment(identifier, segment_id)
     assert pipeline.snapshot(identifier)["progress"] < 1
     pipeline.run_until_blocked(identifier)
-    assert len(exported) == 2
+    assert transcribed == [segment_id, segment_id]
+    assert pipeline.snapshot(identifier)["status"] == "completed"
     assert historical.read_text() == "previous snapshot"
 
 

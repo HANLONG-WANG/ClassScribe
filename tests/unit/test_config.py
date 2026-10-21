@@ -15,7 +15,7 @@ def test_default_and_full_example_parse() -> None:
     assert default.classroom.default_language is LanguageMode.JAPANESE
     assert "runtime_offline" not in default.privacy.model_dump()
     assert default.hardware.one_heavy_worker is True
-    assert default.classroom.auto_export == ("json", "markdown", "srt", "vtt")
+    assert "auto_export" not in default.classroom.model_dump()
     assert default.classroom.expected_speakers == "auto"
     assert default.classroom.prior_min == 1
     assert default.classroom.prior_typical == 2
@@ -105,3 +105,9 @@ def test_legacy_offline_settings_are_ignored(tmp_path: Path, value: str) -> None
     user.write_text(f"config_version: 1\nprivacy:\n  runtime_offline: {value}\n")
     assert load_config(user, environment={}) == default
     assert load_config(environment={"CLASSSCRIBE__PRIVACY__RUNTIME_OFFLINE": value}) == default
+
+
+def test_removed_automatic_export_setting_is_ignored(tmp_path: Path) -> None:
+    user = tmp_path / "config.yaml"
+    user.write_text("config_version: 1\nclassroom:\n  auto_export: [json, srt]\n")
+    assert load_config(user, environment={}) == load_config(environment={})

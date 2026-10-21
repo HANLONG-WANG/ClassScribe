@@ -17,7 +17,7 @@ from classscribe.db.models import (
     ASRCandidate,
     BenchmarkRun,
     BenchmarkStatus,
-    ExportArtifact,
+    CheckpointStatus,
     Job,
     JobStatus,
     ProfileSetting,
@@ -140,7 +140,7 @@ def _write_wav(path: Path, duration_samples: int) -> None:
     path.chmod(0o400)
 
 
-def test_production_runner_completes_real_media_to_automatic_export(
+def test_production_runner_completes_real_media(
     database: tuple[Engine, sessionmaker[Session], Path], tmp_path: Path
 ) -> None:
     _, sessions, _ = database
@@ -155,7 +155,6 @@ def test_production_runner_completes_real_media_to_automatic_export(
         "language": "ja",
         "model_selection": "auto_best",
         "accuracy_mode": "balanced",
-        "outputs": ["json"],
     }
     granite = registry.model("granite_speech_4_1_2b")
     manifest_sha256 = "f" * 64
@@ -255,11 +254,11 @@ def test_production_runner_completes_real_media_to_automatic_export(
                 .order_by(TranscriptSegment.start_sample)
             )
         )
-        artifact = session.scalar(select(ExportArtifact).where(ExportArtifact.job_id == job_id))
         candidate = session.scalar(
             select(ASRCandidate).where(ASRCandidate.segment_id == segments[0].id)
         )
         assert job.status is JobStatus.COMPLETED, (job.error_code, job.error_detail)
+        assert all(item.status is CheckpointStatus.COMPLETED for item in job.checkpoints)
         assert len(segments) == 1
         assert segments[0].faithful_text == "これは生産経路の試験です。"
         assert segments[0].smart_corrected_text == "これは生産経路の試験です。"
@@ -270,9 +269,6 @@ def test_production_runner_completes_real_media_to_automatic_export(
             and token.provenance_json.get("reliability_locally_calibrated") is True
             for token in segments[0].token_spans
         )
-        assert artifact is not None
-        export_path = paths.data_path(*Path(artifact.relative_path).parts)
-        assert export_path.is_file() and file_sha256(export_path) == artifact.sha256
     assert invoker.calls.count(("granite_speech_4_1_2b", "transcribe_batch")) == 1
     assert ("firered_vad", "vad") in invoker.calls
     assert ("moss_td_0_9b", "transcribe_batch") in invoker.calls
@@ -446,7 +442,6 @@ def test_batched_reviews_match_inline_consensus_and_group_model_calls(
     batched_id, batched_segments = prepare()
     # Simulate a task created by the earlier version: only monolithic quality
     # checkpoints exist. Starting it must upgrade the pending review schedule.
-    from classscribe.db.models import CheckpointStatus
 
     with sessions.begin() as session:
         session.add(

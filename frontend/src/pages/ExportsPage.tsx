@@ -39,6 +39,11 @@ export function ExportsPage() {
   const [format, setFormat] = useState("md");
   const [layer, setLayer] = useState("smart");
   const [view, setView] = useState("sentences");
+  // MAI writes one text into every layer; only user edits can differ.
+  const onlyMai =
+    selected.size > 0 &&
+    [...selected.values()].every((item) => item.provider === "azure_mai");
+  const exportLayer = onlyMai ? "user" : layer;
   const [artifacts, setArtifacts] = useState<
     (ExportArtifact & { source_name: string })[]
   >([]);
@@ -61,7 +66,7 @@ export function ExportsPage() {
               method: "POST",
               body: JSON.stringify({
                 output_format: format,
-                layer,
+                layer: exportLayer,
                 view,
                 traditional_chinese: false,
               }),
@@ -208,20 +213,22 @@ export function ExportsPage() {
               ))}
             </select>
           </label>
-          <label>
-            <span>文本版本</span>
-            <select
-              disabled={create.isPending}
-              value={layer}
-              onChange={(event) => {
-                setLayer(event.target.value);
-              }}
-            >
-              <option value="faithful">忠实版</option>
-              <option value="smart">智能纠正版</option>
-              <option value="user">用户版</option>
-            </select>
-          </label>
+          {!onlyMai && (
+            <label>
+              <span>文本版本</span>
+              <select
+                disabled={create.isPending}
+                value={layer}
+                onChange={(event) => {
+                  setLayer(event.target.value);
+                }}
+              >
+                <option value="faithful">忠实版</option>
+                <option value="smart">智能纠正版</option>
+                <option value="user">用户版</option>
+              </select>
+            </label>
+          )}
           <label>
             <span>组织方式</span>
             <select

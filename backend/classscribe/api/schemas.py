@@ -39,17 +39,7 @@ class JobCreate(APIModel):
     speaker_count: Literal["auto", "1", "2", "3-4", "5+"] = "auto"
     model_selection: ModelSelectionMode = ModelSelectionMode.AUTO_BEST
     primary_model_id: str | None = None
-    accuracy_mode: Literal["fast", "balanced", "highest", "strict_single"] = "balanced"
-    outputs: tuple[ExportFormat, ...] = (
-        ExportFormat.JSON,
-        ExportFormat.MARKDOWN,
-        ExportFormat.SRT,
-        ExportFormat.VTT,
-    )
-    include_faithful: bool = True
-    include_smart: bool = True
-    include_speakers: bool = True
-    include_subtitles: bool = True
+    accuracy_mode: Literal["balanced", "strict_single"] = "balanced"
 
     @model_validator(mode="after")
     def validate_model_choice(self) -> JobCreate:
@@ -59,8 +49,6 @@ class JobCreate(APIModel):
             raise ValueError("manual primary selection requires primary_model_id")
         if self.accuracy_mode == "strict_single" and not self.primary_model_id:
             raise ValueError("strict single mode requires primary_model_id")
-        if not self.outputs:
-            raise ValueError("at least one output format is required")
         return self
 
 

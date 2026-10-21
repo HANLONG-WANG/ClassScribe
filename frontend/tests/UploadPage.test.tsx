@@ -103,7 +103,7 @@ it("restores import settings after leaving and returning to the page", () => {
   fireEvent.change(screen.getByRole("combobox", { name: "语言" }), {
     target: { value: "en" },
   });
-  fireEvent.click(screen.getByRole("radio", { name: "最高精度" }));
+  fireEvent.click(screen.getByRole("radio", { name: "严格单模型" }));
   first.unmount();
   render(
     <QueryClientProvider client={client}>
@@ -112,7 +112,27 @@ it("restores import settings after leaving and returning to the page", () => {
   );
   expect(screen.getByLabelText("转写服务")).toHaveValue("local");
   expect(screen.getByRole("combobox", { name: "语言" })).toHaveValue("en");
-  expect(screen.getByRole("radio", { name: "最高精度" })).toBeChecked();
+  expect(screen.getByRole("radio", { name: "严格单模型" })).toBeChecked();
+});
+
+it("maps a saved fast or highest mode to the default local mode", () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(new Response("[]"))),
+  );
+  sessionStorage.setItem(
+    "classscribe-upload-draft-v1",
+    JSON.stringify({ provider: "local", accuracy: "highest" }),
+  );
+  render(
+    <QueryClientProvider client={new QueryClient()}>
+      <UploadPage />
+    </QueryClientProvider>,
+  );
+  expect(
+    screen.getAllByRole("radio").map((item) => item.getAttribute("aria-label")),
+  ).toEqual(["默认（含复核）", "严格单模型"]);
+  expect(screen.getByRole("radio", { name: "默认（含复核）" })).toBeChecked();
 });
 
 it("offers deletion for every import state and links only records with a created task", () => {

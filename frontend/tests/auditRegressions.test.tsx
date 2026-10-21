@@ -389,7 +389,7 @@ it("bounds DOM size for thousands of segments and scrolls to a restored selectio
                 : segments[3000]
               : url.includes("/recordings/")
                 ? { duration_samples: 4000 * 16000 }
-                : { job_id: "job-a", recording_id: "rec" },
+                : { job_id: "job-a", recording_id: "rec", options: {} },
         ),
       ),
     ),

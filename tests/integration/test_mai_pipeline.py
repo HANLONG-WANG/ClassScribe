@@ -51,7 +51,6 @@ def setup_online(
             assert checkpoint.checkpoint_key in {
                 "upload_validate",
                 "normalize_audio_master",
-                "automatic_exports",
             }
             if checkpoint.checkpoint_key == "normalize_audio_master":
                 path = paths.data_path(
@@ -125,7 +124,6 @@ def test_online_network_has_no_write_transaction_and_import_is_idempotent(
             "normalize_audio_master",
             "mai_request",
             "mai_import",
-            "automatic_exports",
         }
         attempt = session.scalar(select(OnlineRequestAttempt))
         assert attempt.status == "imported"
@@ -258,7 +256,8 @@ def test_recovers_published_response_without_credentials_or_network(
 
 
 def test_real_clip_normalization_online_import_and_exports(database: Any, tmp_path: Path) -> None:
-    from classscribe.db.models import ExportArtifact, TokenSpan
+    from classscribe.db.models import TokenSpan
+    from classscribe.exports import ExportFormat, ExportLayer, load_export_segments, render_export
 
     _, sessions, _ = database
     paths = AppPaths.from_environment({}, home=tmp_path)
@@ -292,7 +291,7 @@ def test_real_clip_normalization_online_import_and_exports(database: Any, tmp_pa
     )
     runner = ProviderStageRunner(local, paths, config)
     runner.credentials.configure("https://eastus.api.cognitive.microsoft.com", "secret-marker")
-    options = {"provider": "azure_mai", "language": "en", "outputs": ["json", "md", "srt", "vtt"]}
+    options = {"provider": "azure_mai", "language": "en"}
     runner.preflight(options)
     pipeline = ClassroomPipeline(sessions, runner)
     with sessions.begin() as session:
@@ -345,18 +344,17 @@ def test_real_clip_normalization_online_import_and_exports(database: Any, tmp_pa
         assert job.status == JobStatus.COMPLETED, job.error_detail
         assert not any(checkpoint.segment_id for checkpoint in job.checkpoints)
         assert len(list(session.scalars(select(TokenSpan)))) == 2
-        artifacts = list(session.scalars(select(ExportArtifact)))
-        assert len(artifacts) == 8
-        for artifact in artifacts:
-            content = paths.data_path(artifact.relative_path).read_text()
+        segments = load_export_segments(session, job_id)
+        for output_format in (ExportFormat.JSON, ExportFormat.SRT, ExportFormat.VTT):
+            content = render_export(segments, output_format=output_format, layer=ExportLayer.SMART)
             assert "secret-marker" not in content
-            if artifact.output_format == "json":
+            if output_format is ExportFormat.JSON:
                 records = json.loads(content)["records"]
                 timed = next(item for item in records if item["text"] == "Hello world.")
                 assert timed["start_sample"] == 1600
                 assert timed["source"]["start_sample"] == 1234 + 1600
                 assert any(item["text"] == "Untimed text." for item in records)
-            if artifact.output_format in {"srt", "vtt"}:
+            else:
                 assert "00:00:00.100" in content or "00:00:00,100" in content
                 assert "Untimed text." not in content
         segment_id = session.scalar(
@@ -846,8 +844,6 @@ def test_failed_response_diagnostics_are_durable_and_available_after_restart(
 
 
 def test_mai_can_clip_and_normalize_more_than_ninety_minutes(database: Any, tmp_path: Path) -> None:
-    from classscribe.db.models import ExportArtifact
-
     _, sessions, _ = database
     paths = AppPaths.from_environment({}, home=tmp_path)
     paths.ensure()
@@ -882,7 +878,7 @@ def test_mai_can_clip_and_normalize_more_than_ninety_minutes(database: Any, tmp_
     )
     runner = ProviderStageRunner(local, paths, config)
     runner.credentials.configure("https://eastus.api.cognitive.microsoft.com", "key")
-    options = {"provider": "azure_mai", "language": "en", "outputs": ["json"]}
+    options = {"provider": "azure_mai", "language": "en"}
     pipeline = ClassroomPipeline(sessions, runner)
     with sessions.begin() as session:
         job = Job(
@@ -907,7 +903,9 @@ def test_mai_can_clip_and_normalize_more_than_ninety_minutes(database: Any, tmp_
         job = session.get_one(Job, identifier)
         assert job.status == JobStatus.COMPLETED, job.error_detail
         assert session.get_one(Recording, clip_id).duration_samples == 91 * 60 * 16000
-        assert session.scalar(select(ExportArtifact).where(ExportArtifact.job_id == identifier))
+        assert session.scalar(
+            select(TranscriptSegment.id).where(TranscriptSegment.job_id == identifier)
+        )
 
 
 def test_mai_queue_close_waits_for_requests_and_preserves_response(

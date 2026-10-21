@@ -493,7 +493,7 @@ def test_populated_recordings_migration_preserves_history(
     with engine.connect() as connection:
         assert connection.exec_driver_sql(
             "SELECT version_num FROM alembic_version"
-        ).scalar_one() == ("c7b93a140e52")
+        ).scalar_one() == ("d4a91c2e7b6f")
         recordings_after = connection.exec_driver_sql("SELECT * FROM recordings").all()
         assert [row[: len(recordings_before[0])] for row in recordings_after] == recordings_before
         assert connection.exec_driver_sql("SELECT * FROM jobs").all() == jobs_before

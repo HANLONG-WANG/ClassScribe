@@ -483,14 +483,14 @@ def test_production_moss_subtitles_coarse_metadata_and_explicit_empty_edit(
             layer=ExportLayer.FAITHFUL,
         )
         segment.timing_quality = TimingQuality.STRUCTURE
-        assert value._export_segments(session, job.id)[0].coarse_timing
+        assert load_export_segments(session, job.id)[0].coarse_timing
         segment.user_text = ""
         value._forced_alignment(session, job, JobCheckpoint(segment_id=segment.id))
         session.flush()
         value._final_validation(session, job, JobCheckpoint(segment_id=segment.id))
         assert (
             render_export(
-                value._export_segments(session, job.id),
+                load_export_segments(session, job.id),
                 output_format=ExportFormat.SRT,
                 layer=ExportLayer.USER,
             )

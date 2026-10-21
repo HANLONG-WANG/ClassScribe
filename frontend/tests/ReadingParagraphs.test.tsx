@@ -83,7 +83,12 @@ function mount(sources: Segment[]) {
                   ? sources.find((item) => url.endsWith("/" + item.id))
                   : url.includes("/recordings/")
                     ? { id: "recording", duration_samples: 600 * 16000 }
-                    : { id: "job", job_id: "job", recording_id: "recording" },
+                    : {
+                        id: "job",
+                        job_id: "job",
+                        recording_id: "recording",
+                        options: {},
+                      },
           ),
           { status: 200 },
         ),

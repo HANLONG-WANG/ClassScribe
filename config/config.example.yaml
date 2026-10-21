@@ -38,7 +38,6 @@ classroom:
   prior_typical: 2
   max_speakers: 12
   allow_overlap: true
-  auto_export: [json, markdown, srt, vtt]
 
 quality:
   # Bootstrap values only; local benchmark calibration supersedes them.

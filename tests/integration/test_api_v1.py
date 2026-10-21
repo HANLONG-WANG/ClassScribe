@@ -1262,7 +1262,6 @@ def test_recording_transcript_glossary_export_and_security_flow(tmp_path: Path) 
                     "speaker_count": "2",
                     "model_selection": "auto_best",
                     "accuracy_mode": "balanced",
-                    "outputs": ["json", "md", "srt", "vtt"],
                 }
             ).encode(),
         )
@@ -1931,6 +1930,7 @@ def test_job_history_lists_all_recordings_in_stable_pages(tmp_path: Path) -> Non
                     recording=recording,
                     language_mode=LanguageMode.JAPANESE,
                     profile_id="balanced",
+                    options_json={"provider": "azure_mai"} if index == 0 else {},
                     created_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index),
                 )
             )
@@ -1940,6 +1940,8 @@ def test_job_history_lists_all_recordings_in_stable_pages(tmp_path: Path) -> Non
     assert [item["source_name"] for item in first["items"]] == ["lecture-2.mp4", "lecture-1.mp4"]
     assert second["items"][0]["source_name"] == "lecture-0.mp4"
     assert first["items"][0]["created_at"].endswith("+00:00")
+    assert [item["provider"] for item in first["items"]] == ["local", "local"]
+    assert second["items"][0]["provider"] == "azure_mai"
 
 
 def test_job_history_route_validates_pagination_and_requires_auth(tmp_path: Path) -> None:

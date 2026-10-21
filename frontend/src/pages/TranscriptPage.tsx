@@ -219,6 +219,8 @@ function Waveform({
   );
 }
 
+const finishedStatuses = new Set(["completed", "failed", "cancelled"]);
+
 export function TranscriptPage() {
   const jobId = useWorkbench((state) => state.currentJobId);
   const setPage = useWorkbench((state) => state.setPage);
@@ -241,6 +243,10 @@ export function TranscriptPage() {
   const [readingView, setReadingView] = useState<"sentences" | "paragraphs">(
     "sentences",
   );
+  const [rerunRequest, setRerunRequest] = useState<{
+    segmentId: string;
+    queued: boolean;
+  } | null>(null);
   const onWaveReady = useCallback((instance: WaveSurfer | null) => {
     wave.current = instance;
     if (instance)
@@ -252,6 +258,12 @@ export function TranscriptPage() {
     queryKey: ["job", jobId],
     queryFn: ({ signal }) => api<Job>(`/jobs/${String(jobId)}`, { signal }),
     enabled: jobId !== null,
+    // Follow a queued segment rerun until the job settles.
+    refetchInterval: (query) =>
+      rerunRequest?.queued &&
+      !finishedStatuses.has(query.state.data?.status ?? "")
+        ? 1500
+        : false,
   });
   const transcript = useQuery({
     queryKey: ["transcript", jobId, "summary"],
@@ -330,7 +342,26 @@ export function TranscriptPage() {
         method: "POST",
         body: "{}",
       }),
+    onMutate: (id) => {
+      setRerunRequest({ segmentId: id, queued: false });
+    },
+    onSuccess: async (_result, id) => {
+      // Read the queued status before following it, so a stale "completed" is not shown.
+      await client.invalidateQueries({ queryKey: ["job", jobId] });
+      setRerunRequest({ segmentId: id, queued: true });
+    },
   });
+  const rerunFinished =
+    rerunRequest?.queued === true && job.data?.status === "completed";
+  const rerunSegmentId = rerunRequest?.segmentId;
+  useEffect(() => {
+    if (!rerunFinished || !rerunSegmentId) return;
+    void Promise.all([
+      client.invalidateQueries({ queryKey: ["transcript", jobId] }),
+      client.invalidateQueries({ queryKey: ["segment", rerunSegmentId] }),
+      client.invalidateQueries({ queryKey: ["candidates", rerunSegmentId] }),
+    ]);
+  }, [rerunFinished, rerunSegmentId, client, jobId]);
   const adopt = useMutation({
     mutationFn: ({
       id,
@@ -359,6 +390,25 @@ export function TranscriptPage() {
   if (!job.data || !transcript.data)
     return <p className="loading">正在加载可追溯转录稿…</p>;
   const fullSegments = transcript.data.segments;
+  // MAI writes one text into every layer, so its transcripts show only the editable one.
+  const online = job.data.options.provider === "azure_mai";
+  const shownLayer = online ? "user" : layer;
+  const rerunStatus = !rerunRequest
+    ? undefined
+    : rerun.isPending
+      ? { busy: true, text: "正在提交重跑…" }
+      : rerun.error
+        ? { error: true, text: `重跑提交失败：${rerun.error.message}` }
+        : !rerunRequest.queued
+          ? undefined
+          : job.data.status === "completed"
+            ? { text: "重跑完成，已更新这一句的识别结果。" }
+            : finishedStatuses.has(job.data.status)
+              ? {
+                  error: true,
+                  text: `重跑未完成：${job.data.error_detail ?? "任务已停止"}`,
+                }
+              : { busy: true, text: "已加入处理队列，正在重新识别这一句…" };
   const segments = lowOnly
     ? fullSegments.filter((segment) => segment.low_confidence)
     : fullSegments;
@@ -429,7 +479,8 @@ export function TranscriptPage() {
           key={jobId}
           jobId={jobId}
           sourceName={recording.data?.source_name ?? "课堂转录稿"}
-          initialLayer={layer === "raw" ? "faithful" : layer}
+          initialLayer={shownLayer === "raw" ? "faithful" : shownLayer}
+          showLayer={!online}
           initialView={
             readingView === "paragraphs" ? "readable_paragraphs" : "sentences"
           }
@@ -490,29 +541,31 @@ export function TranscriptPage() {
           value={(item) => item.language.toUpperCase()}
         />
       </div>
-      <div className="layer-tabs" role="tablist" aria-label="文本层">
-        {(["raw", "faithful", "smart", "user"] as const).map((value) => (
-          <button
-            aria-selected={layer === value}
-            className={layer === value ? "active" : ""}
-            key={value}
-            onClick={() => {
-              setLayer(value);
-            }}
-            role="tab"
-            type="button"
-          >
-            {
+      {!online && (
+        <div className="layer-tabs" role="tablist" aria-label="文本层">
+          {(["raw", "faithful", "smart", "user"] as const).map((value) => (
+            <button
+              aria-selected={layer === value}
+              className={layer === value ? "active" : ""}
+              key={value}
+              onClick={() => {
+                setLayer(value);
+              }}
+              role="tab"
+              type="button"
+            >
               {
-                raw: "原始",
-                faithful: "忠实",
-                smart: "智能纠正",
-                user: "用户版",
-              }[value]
-            }
-          </button>
-        ))}
-      </div>
+                {
+                  raw: "原始",
+                  faithful: "忠实",
+                  smart: "智能纠正",
+                  user: "用户版",
+                }[value]
+              }
+            </button>
+          ))}
+        </div>
+      )}
       <div className="reading-view" role="group" aria-label="转录稿视图">
         <button
           type="button"
@@ -539,9 +592,9 @@ export function TranscriptPage() {
       <div className="transcript-layout">
         {readingView === "paragraphs" ? (
           <ParagraphList
-            key={`${jobId}:${layer}:${String(lowOnly)}`}
+            key={`${jobId}:${shownLayer}:${String(lowOnly)}`}
             segments={fullSegments}
-            layer={layer}
+            layer={shownLayer}
             lowOnly={lowOnly}
             selectedId={selectedId}
             onSelect={seek}
@@ -582,7 +635,7 @@ export function TranscriptPage() {
                     {segment.speaker_name ?? segment.speaker_id ?? "Speaker ?"}
                   </span>
                   <span className="segment-copy">
-                    {segmentText(segment, layer) || <em>空句段</em>}
+                    {segmentText(segment, shownLayer) || <em>空句段</em>}
                     {segment.repetition_warning && (
                       <span className="anomaly-tag">
                         {segment.repetition_warning.all_candidates
@@ -627,9 +680,18 @@ export function TranscriptPage() {
               ? `${history.variables.action === "redo" ? "重做" : "撤销"}失败：${history.error.message}`
               : undefined
           }
-          onRerun={() => {
-            if (detail.data) rerun.mutate(detail.data.id);
-          }}
+          onRerun={
+            online
+              ? undefined
+              : () => {
+                  if (detail.data) rerun.mutate(detail.data.id);
+                }
+          }
+          rerunStatus={
+            rerunRequest?.segmentId === detail.data?.id
+              ? rerunStatus
+              : undefined
+          }
           savePending={patch.isPending}
           segment={detail.data?.job_id === jobId ? detail.data : undefined}
         />
@@ -913,6 +975,7 @@ function SegmentInspector({
   onPatch,
   history,
   onRerun,
+  rerunStatus,
   adopt,
   savePending,
   saveError,
@@ -926,7 +989,8 @@ function SegmentInspector({
     speaker_name?: string;
   }) => void;
   history: (action: "undo" | "redo", version: number) => void;
-  onRerun: () => void;
+  onRerun: (() => void) | undefined;
+  rerunStatus: { busy?: boolean; error?: boolean; text: string } | undefined;
   adopt: (id: string) => void;
   savePending: boolean;
   saveError: string | undefined;
@@ -1062,10 +1126,20 @@ function SegmentInspector({
         >
           重做
         </button>
-        <button onClick={onRerun} type="button">
-          重跑当前音频范围
-        </button>
+        {onRerun && (
+          <button disabled={rerunStatus?.busy} onClick={onRerun} type="button">
+            {rerunStatus?.busy ? "重跑中…" : "重跑当前音频范围"}
+          </button>
+        )}
       </div>
+      {rerunStatus && (
+        <p
+          className={rerunStatus.error ? "error-callout" : "muted"}
+          role={rerunStatus.error ? "alert" : "status"}
+        >
+          {rerunStatus.text}
+        </p>
+      )}
       <details open>
         <summary>模型候选 · {candidates.length}</summary>
         {candidates.map((candidate) => (

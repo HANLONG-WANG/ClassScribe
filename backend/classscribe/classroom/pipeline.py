@@ -229,14 +229,12 @@ GLOBAL_CHECKPOINTS = (
     (JobStage.VAD, "vad", 0),
     (JobStage.LID, "lid", 0),
     (JobStage.STRUCTURE, "moss_structure", 0),
-    (JobStage.EXPORT, "automatic_exports", 0),
 )
 ONLINE_CHECKPOINTS = (
     (JobStage.AUDIO_IMPORT, "upload_validate", 0),
     (JobStage.AUDIO_IMPORT, "normalize_audio_master", 1),
     (JobStage.TRANSCRIPTION, "mai_request", 0),
     (JobStage.TRANSCRIPTION, "mai_import", 1),
-    (JobStage.EXPORT, "automatic_exports", 0),
 )
 SEGMENT_CHECKPOINTS = (
     (JobStage.TRANSCRIPTION, "primary_asr", 0),
@@ -510,7 +508,11 @@ class ClassroomPipeline:
                                 language=segment.language.value,
                             )
                             break
-                self.runner.run(session, session.get_one(Job, job_id), checkpoint)
+                job = session.get_one(Job, job_id)
+                self.runner.run(session, job, checkpoint)
+                if key == "moss_structure":
+                    # Create segment work before completion so the job cannot finish early.
+                    self._create_segment_checkpoints(session, job)
 
         try:
             if key == "mai_request":
@@ -543,8 +545,6 @@ class ClassroomPipeline:
                 error=type(exc).__name__,
             )
             return False
-        if key == "moss_structure":
-            self._ensure_segment_checkpoints(job_id)
         snapshot = self.snapshot(job_id)
         if snapshot["stage"] != stage:
             hook = getattr(self.runner, "release_cpu", None)
@@ -750,7 +750,7 @@ class ClassroomPipeline:
                 checkpoint.error_detail = None
             for checkpoint in job.checkpoints:
                 rebuild_master = getattr(self.runner, "needs_audio_normalization", None)
-                if checkpoint.checkpoint_key == "automatic_exports" or (
+                if (
                     checkpoint.checkpoint_key == "normalize_audio_master"
                     and rebuild_master is not None
                     and rebuild_master(job)
@@ -888,36 +888,42 @@ class ClassroomPipeline:
     def _ensure_segment_checkpoints(self, job_id: str) -> None:
         with self.sessions.begin() as session:
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
-            job = session.get_one(Job, job_id)
-            if job.options_json.get("provider", "local") == "azure_mai":
-                return
-            existing = {
-                (checkpoint.segment_id, checkpoint.checkpoint_key) for checkpoint in job.checkpoints
-            }
-            segments = tuple(
-                session.scalars(
-                    select(TranscriptSegment)
-                    .where(
-                        TranscriptSegment.job_id == job_id,
-                        TranscriptSegment.is_active.is_(True),
-                    )
-                    .order_by(TranscriptSegment.start_sample, TranscriptSegment.id)
-                ).all()
-            )
-            specs: list[CheckpointSpec] = []
-            for ordinal, segment in enumerate(segments):
-                for stage, key, offset in SEGMENT_CHECKPOINTS:
-                    if (segment.id, key) not in existing:
-                        specs.append(
-                            CheckpointSpec(
-                                stage,
-                                key,
-                                ordinal * 10 + offset,
-                                {"segment_id": segment.id, "pipeline_version": 1},
-                                segment_id=segment.id,
-                            )
+            self._create_segment_checkpoints(session, session.get_one(Job, job_id))
+
+    def _create_segment_checkpoints(self, session: Session, job: Job) -> None:
+        if job.options_json.get("provider", "local") == "azure_mai":
+            return
+        session.flush()
+        existing = {
+            (checkpoint.segment_id, checkpoint.checkpoint_key) for checkpoint in job.checkpoints
+        }
+        segments = tuple(
+            session.scalars(
+                select(TranscriptSegment)
+                .where(
+                    TranscriptSegment.job_id == job.id,
+                    TranscriptSegment.is_active.is_(True),
+                )
+                .order_by(TranscriptSegment.start_sample, TranscriptSegment.id)
+            ).all()
+        )
+        specs: list[CheckpointSpec] = []
+        for ordinal, segment in enumerate(segments):
+            for stage, key, offset in SEGMENT_CHECKPOINTS:
+                if (segment.id, key) not in existing:
+                    specs.append(
+                        CheckpointSpec(
+                            stage,
+                            key,
+                            ordinal * 10 + offset,
+                            {"segment_id": segment.id, "pipeline_version": 1},
+                            segment_id=segment.id,
                         )
-            self.state.create_checkpoints(session, job, specs)
-            hook = getattr(self.runner, "prepare_review_checkpoints", None)
-            if hook is not None:
-                hook(session, job, segments)
+                    )
+        self.state.create_checkpoints(session, job, specs)
+        hook = getattr(self.runner, "prepare_review_checkpoints", None)
+        if hook is not None:
+            hook(session, job, segments)
+        session.flush()
+        # Completion is decided from job.checkpoints, which must include the new work.
+        session.expire(job, ["checkpoints"])

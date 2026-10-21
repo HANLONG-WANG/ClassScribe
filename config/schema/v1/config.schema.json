@@ -50,7 +50,7 @@
     "classroom": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["default_language", "default_profile", "structure_model", "structure_window_seconds", "structure_overlap_seconds", "text_segment_target_seconds", "text_segment_max_seconds", "text_overlap_seconds", "speaker_context", "expected_speakers", "prior_min", "prior_typical", "max_speakers", "allow_overlap", "auto_export"],
+      "required": ["default_language", "default_profile", "structure_model", "structure_window_seconds", "structure_overlap_seconds", "text_segment_target_seconds", "text_segment_max_seconds", "text_overlap_seconds", "speaker_context", "expected_speakers", "prior_min", "prior_typical", "max_speakers", "allow_overlap"],
       "properties": {
         "default_language": { "$ref": "#/$defs/language" },
         "default_profile": { "type": "string", "minLength": 1 },
@@ -65,12 +65,7 @@
         "prior_min": { "type": "integer", "minimum": 1, "maximum": 12 },
         "prior_typical": { "type": "integer", "minimum": 1, "maximum": 12 },
         "max_speakers": { "type": "integer", "minimum": 1, "maximum": 12 },
-        "allow_overlap": { "type": "boolean" },
-        "auto_export": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": { "enum": ["json", "markdown", "srt", "vtt"] }
-        }
+        "allow_overlap": { "type": "boolean" }
       }
     },
     "quality": {

@@ -9,12 +9,14 @@ export function TranscriptExportDialog({
   jobId,
   sourceName,
   initialLayer,
+  showLayer,
   initialView,
   onClose,
 }: {
   jobId: string;
   sourceName: string;
   initialLayer: Exclude<TextLayer, "raw">;
+  showLayer: boolean;
   initialView: "sentences" | "readable_paragraphs";
   onClose: () => void;
 }) {
@@ -121,20 +123,22 @@ export function TranscriptExportDialog({
               ))}
             </select>
           </label>
-          <label>
-            <span>文本版本</span>
-            <select
-              value={layer}
-              disabled={busy}
-              onChange={(event) => {
-                setLayer(event.target.value);
-              }}
-            >
-              <option value="faithful">忠实版</option>
-              <option value="smart">智能纠正版</option>
-              <option value="user">用户版</option>
-            </select>
-          </label>
+          {showLayer && (
+            <label>
+              <span>文本版本</span>
+              <select
+                value={layer}
+                disabled={busy}
+                onChange={(event) => {
+                  setLayer(event.target.value);
+                }}
+              >
+                <option value="faithful">忠实版</option>
+                <option value="smart">智能纠正版</option>
+                <option value="user">用户版</option>
+              </select>
+            </label>
+          )}
           <label>
             <span>组织方式</span>
             <select

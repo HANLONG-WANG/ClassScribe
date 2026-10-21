@@ -114,24 +114,12 @@ it("sends all MAI controls with the chosen glossary and hides the local speaker 
   expect(batch.mock.calls[0]?.[1]).not.toHaveProperty("speaker_count");
 });
 
-it("disables subtitle output without timestamps and restores it for local processing", () => {
+it("submits without timestamps and switches to local controls", () => {
   renderUpload();
-  fireEvent.click(screen.getByRole("checkbox", { name: "SRT" }));
-  fireEvent.click(screen.getByRole("checkbox", { name: "VTT" }));
   fireEvent.change(screen.getByLabelText("时间戳粒度"), {
     target: { value: "none" },
   });
-  expect(screen.getByRole("checkbox", { name: "SRT" })).toBeDisabled();
-  expect(screen.getByRole("checkbox", { name: "SRT" })).not.toBeChecked();
-  expect(screen.getByRole("checkbox", { name: "VTT" })).toBeDisabled();
   fireEvent.click(screen.getByRole("button", { name: "加入转录队列" }));
-  expect(batch).toHaveBeenCalledWith(
-    expect.anything(),
-    expect.objectContaining({
-      outputs: ["txt", "md"],
-      include_subtitles: false,
-    }),
-  );
   expect(batch.mock.calls[0]?.[1]).toMatchObject({
     mai_options: { timestamps: "none" },
   });
@@ -140,11 +128,9 @@ it("disables subtitle output without timestamps and restores it for local proces
   });
   expect(screen.getByLabelText("说话人数")).toBeInTheDocument();
   expect(screen.queryByLabelText("转写风格")).not.toBeInTheDocument();
-  expect(screen.getByRole("checkbox", { name: "SRT" })).toBeEnabled();
-  expect(screen.getByRole("checkbox", { name: "SRT" })).toBeChecked();
 });
 
-it("defaults to the requested MAI options and TXT/MD exports", () => {
+it("defaults to the requested MAI options without automatic exports", () => {
   renderUpload();
   expect(screen.getByLabelText("转写服务")).toHaveValue("azure_mai");
   expect(screen.getByLabelText("课程词典")).toHaveValue("");
@@ -154,16 +140,13 @@ it("defaults to the requested MAI options and TXT/MD exports", () => {
   expect(screen.getByLabelText("脏话处理")).toHaveValue("None");
   expect(screen.getByLabelText("额外术语提示")).toHaveValue("");
   expect(screen.getByLabelText("术语提示强度")).toHaveValue(null);
-  for (const name of ["TXT", "MD", "忠实版", "智能纠正版", "说话人"]) {
-    expect(screen.getByRole("checkbox", { name })).toBeChecked();
-  }
-  for (const name of ["JSON", "SRT", "VTT", "CSV", "区分说话人（自动识别）"]) {
-    expect(screen.getByRole("checkbox", { name })).not.toBeChecked();
-  }
+  expect(
+    screen.getByRole("checkbox", { name: "区分说话人（自动识别）" }),
+  ).not.toBeChecked();
+  expect(screen.queryByText("自动输出")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "加入转录队列" }));
   expect(batch.mock.calls[0]?.[1]).toMatchObject({
     language: "ja",
-    outputs: ["txt", "md"],
     mai_options: {
       transcribe_style: "clean",
       timestamps: "word",
@@ -174,6 +157,7 @@ it("defaults to the requested MAI options and TXT/MD exports", () => {
       phrase_biasing_weight: null,
     },
   });
+  expect(batch.mock.calls[0]?.[1]).not.toHaveProperty("outputs");
 });
 
 it("restores MAI settings and keeps them out of local submissions", () => {

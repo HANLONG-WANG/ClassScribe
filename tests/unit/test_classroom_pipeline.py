@@ -38,7 +38,7 @@ def make_job(factory: sessionmaker[Session]) -> str:
         return job.id
 
 
-def test_full_pipeline_is_dynamic_reentrant_and_auto_exports(
+def test_full_pipeline_is_dynamic_and_reentrant(
     database: tuple[Engine, sessionmaker[Session], Path],
 ) -> None:
     _, factory, _ = database
@@ -87,7 +87,7 @@ def test_full_pipeline_is_dynamic_reentrant_and_auto_exports(
             }
         ),
     )
-    pipeline.initialize(job_id, {"outputs": ["json", "md", "srt", "vtt"]})
+    pipeline.initialize(job_id, {})
     pipeline.run_until_blocked(job_id)
 
     with factory() as session:
@@ -97,15 +97,15 @@ def test_full_pipeline_is_dynamic_reentrant_and_auto_exports(
         )
         assert job.status is JobStatus.COMPLETED
         assert job.progress == 1.0
-        assert len(checkpoints) == 19
+        assert len(checkpoints) == 18
         assert all(item.status is CheckpointStatus.COMPLETED for item in checkpoints)
-    assert calls[-1] == ("automatic_exports", None)
+    assert calls[-1][0] == "final_validation"
     assert sum(key == "primary_asr" for key, _ in calls) == 2
     assert pipeline.snapshot(job_id)["status"] == "completed"
     assert any(item.kind == "job_completed" for item in pipeline.broker.after(job_id))
 
     pipeline.run_until_blocked(job_id)
-    assert len(calls) == 19
+    assert len(calls) == 18
 
 
 def test_pause_preemption_recovery_and_segment_retry(

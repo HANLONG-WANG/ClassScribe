@@ -4,6 +4,7 @@ export interface Manuscript {
   source_name: string;
   duration_samples: number;
   language: string;
+  provider?: string;
   status: string;
   created_at: string;
 }

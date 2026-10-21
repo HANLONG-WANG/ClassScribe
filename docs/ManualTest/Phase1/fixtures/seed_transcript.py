@@ -59,7 +59,6 @@ with sessions.begin() as s:
             options_json={
                 "manual_qa_fixture": True,
                 "language": "auto",
-                "outputs": ["txt", "md", "json", "srt", "vtt", "csv"],
             },
         )
     )

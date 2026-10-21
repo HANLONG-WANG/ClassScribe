@@ -57,7 +57,6 @@ def test_production_runner_binds_every_persistent_checkpoint(tmp_path: Path) -> 
         "punctuation",
         "forced_alignment",
         "final_validation",
-        "automatic_exports",
     }
 
 

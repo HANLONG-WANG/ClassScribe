@@ -455,6 +455,7 @@ class ClassScribeService:
                         "has_transcript": has_transcript,
                         "duration_samples": recording.duration_samples,
                         "language": job.language_mode.value,
+                        "provider": job.options_json.get("provider", "local"),
                         "status": job.status.value,
                         "created_at": job.created_at.isoformat()
                         + ("+00:00" if job.created_at.tzinfo is None else ""),

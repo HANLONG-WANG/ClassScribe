@@ -25,6 +25,22 @@ export interface ImportItem {
   jobId?: string;
 }
 const storageKey = "classscribe-batch-imports-v1";
+// Imports queued before automatic exports and the fast/highest modes were removed.
+const removedJobOptions = new Set([
+  "outputs",
+  "include_faithful",
+  "include_smart",
+  "include_speakers",
+  "include_subtitles",
+]);
+function currentJobOptions(options: ApiObject): ApiObject {
+  const result = Object.fromEntries(
+    Object.entries(options).filter(([key]) => !removedJobOptions.has(key)),
+  );
+  if ("accuracy_mode" in result && result.accuracy_mode !== "strict_single")
+    result.accuracy_mode = "balanced";
+  return result;
+}
 function restored(): ImportItem[] {
   try {
     const saved = JSON.parse(
@@ -192,7 +208,7 @@ async function drain() {
         signal,
         method: "POST",
         body: JSON.stringify({
-          ...jobOptions,
+          ...currentJobOptions(jobOptions),
           recording_id: recording.id,
           submission_key: item.id,
         }),
