@@ -102,8 +102,7 @@ def _records(
         bool(
             index
             and (
-                segment.pause_before_ms >= PARAGRAPH_PAUSE_MS
-                or segment.chapter_marker is not None
+                segment.chapter_marker is not None
                 or segment.semantic_boundary_before
                 or segment.speaker != segments[index - 1].speaker
                 or segment.language != segments[index - 1].language
@@ -111,9 +110,13 @@ def _records(
         )
         for index, segment in enumerate(segments)
     ]
+    pauses = [
+        bool(index and segment.pause_before_ms >= PARAGRAPH_PAUSE_MS)
+        for index, segment in enumerate(segments)
+    ]
     texts = [str(record["text"]) for record in sentence_records]
     paragraphs: list[dict[str, Any]] = []
-    for group in paragraph_slices(texts, boundaries):
+    for group in paragraph_slices(texts, boundaries, pauses):
         records: list[dict[str, Any]] = []
         for piece in group:
             record = dict(sentence_records[piece.source_index])

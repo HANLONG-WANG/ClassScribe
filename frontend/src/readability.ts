@@ -2,6 +2,8 @@
 export const paragraphCharacters = 300;
 export const paragraphSentences = 6;
 export const paragraphPauseMs = 1200;
+// A pause only ends a paragraph that already holds this much text; fillers stay attached.
+export const paragraphMinCharacters = 60;
 
 const terminators = new Set("。！？.!?");
 const closingMarks = new Set("\"'”’」』】）》〉]}");
@@ -117,7 +119,8 @@ export function buildReadableParagraphs<T extends ParagraphSource>(
         (timed &&
           previousTimed &&
           (source.start_sample - previous.end_sample) / 16 >=
-            paragraphPauseMs));
+            paragraphPauseMs &&
+          characters >= paragraphMinCharacters));
     for (const [start, end] of sentenceSpans(text)) {
       const piece = text.slice(start, end);
       const length = Array.from(piece.trim()).length;

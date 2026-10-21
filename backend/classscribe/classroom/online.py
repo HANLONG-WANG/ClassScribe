@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from classscribe.activity import report_activity
@@ -33,12 +33,14 @@ from classscribe.config import AppConfig
 from classscribe.contracts import LanguageMode
 from classscribe.db.models import (
     ASRCandidate,
+    DecisionEvent,
     GlossaryTerm,
     Job,
     JobCheckpoint,
     JobStatus,
     OnlineRequestAttempt,
     Recording,
+    ReviewStatus,
     TimingQuality,
     TokenSpan,
     TranscriptSegment,
@@ -271,56 +273,99 @@ class ProviderStageRunner:
             raise mai_error("MAI 原始响应尚未保存。")
         if attempt.status == "imported":
             return
-        recording = session.get_one(Recording, job.recording_id)
-        phrases = parse_mai_response(
-            Path(attempt.response_path).read_bytes(),
-            recording.duration_samples,
-            job.language_mode.value,
-        )
-        for phrase in phrases:
-            segment = TranscriptSegment(
-                job_id=job.id,
-                start_sample=phrase.start,
-                end_sample=phrase.end,
-                speaker_id=phrase.speaker,
-                language=LanguageMode(phrase.language),
-                raw_text=phrase.text,
-                faithful_text=phrase.text,
-                smart_corrected_text=phrase.text,
-                auto_final_source="azure_mai",
-                timing_quality=TimingQuality.NATIVE if phrase.timed else TimingQuality.INVALID,
-            )
-            session.add(segment)
-            session.flush()
-            session.add(
-                ASRCandidate(
-                    segment_id=segment.id,
-                    model_id=MODEL,
-                    model_revision="service-unreported",
-                    raw_text=phrase.text,
-                    normalized_text=phrase.text,
-                    is_adopted=True,
-                    decode_config_json={
-                        "provider": "azure_mai",
-                        "api_version": API_VERSION,
-                        "requested_model": MODEL,
-                    },
-                    inference_metrics_json={"service_request_id": attempt.service_request_id},
-                    warnings_json=[] if phrase.timed else [{"code": "MISSING_TIMING"}],
-                )
-            )
-            for token, start, end in phrase.words:
-                session.add(
-                    TokenSpan(
-                        segment_id=segment.id,
-                        token=token,
-                        normalized_token=token,
-                        start_sample=start,
-                        end_sample=end,
-                        provenance_json={
-                            "provider": "azure_mai",
-                            "request_id": attempt.service_request_id,
-                        },
-                    )
-                )
+        store_mai_segments(session, job, attempt)
         attempt.status = "imported"
+
+
+def store_mai_segments(session: Session, job: Job, attempt: OnlineRequestAttempt) -> int:
+    """Create a job's transcript segments from its saved MAI response."""
+    assert attempt.response_path is not None
+    recording = session.get_one(Recording, job.recording_id)
+    phrases = parse_mai_response(
+        Path(attempt.response_path).read_bytes(),
+        recording.duration_samples,
+        job.language_mode.value,
+    )
+    for phrase in phrases:
+        segment = TranscriptSegment(
+            job_id=job.id,
+            start_sample=phrase.start,
+            end_sample=phrase.end,
+            speaker_id=phrase.speaker,
+            language=LanguageMode(phrase.language),
+            raw_text=phrase.text,
+            faithful_text=phrase.text,
+            smart_corrected_text=phrase.text,
+            auto_final_source="azure_mai",
+            timing_quality=TimingQuality.NATIVE if phrase.timed else TimingQuality.INVALID,
+        )
+        session.add(segment)
+        session.flush()
+        session.add(
+            ASRCandidate(
+                segment_id=segment.id,
+                model_id=MODEL,
+                model_revision="service-unreported",
+                raw_text=phrase.text,
+                normalized_text=phrase.text,
+                is_adopted=True,
+                decode_config_json={
+                    "provider": "azure_mai",
+                    "api_version": API_VERSION,
+                    "requested_model": MODEL,
+                },
+                inference_metrics_json={"service_request_id": attempt.service_request_id},
+                warnings_json=[] if phrase.timed else [{"code": "MISSING_TIMING"}],
+            )
+        )
+        for token, start, end in phrase.words:
+            session.add(
+                TokenSpan(
+                    segment_id=segment.id,
+                    token=token,
+                    normalized_token=token,
+                    start_sample=start,
+                    end_sample=end,
+                    provenance_json={
+                        "provider": "azure_mai",
+                        "request_id": attempt.service_request_id,
+                    },
+                )
+            )
+    return len(phrases)
+
+
+def reimport_mai_job(session: Session, job_id: str) -> int:
+    """Rebuild a finished MAI job's segments from the saved response without a new request."""
+    job = session.get_one(Job, job_id)
+    attempt = latest_attempt(session, job.id)
+    if (
+        job.options_json.get("provider") != "azure_mai"
+        or job.status is not JobStatus.COMPLETED
+        or attempt is None
+        or attempt.status != "imported"
+        or not attempt.response_path
+    ):
+        raise mai_error("只能重新导入已完成且保存了 MAI 原始响应的任务。")
+    segment_ids = select(TranscriptSegment.id).where(TranscriptSegment.job_id == job.id)
+    edited = session.scalar(
+        select(TranscriptSegment.id)
+        .where(
+            TranscriptSegment.job_id == job.id,
+            or_(
+                TranscriptSegment.user_text.is_not(None),
+                TranscriptSegment.version > 1,
+                TranscriptSegment.is_active.is_(False),
+                TranscriptSegment.review_status != ReviewStatus.AUTO,
+            ),
+        )
+        .limit(1)
+    ) or session.scalar(
+        select(DecisionEvent.id).where(DecisionEvent.segment_id.in_(segment_ids)).limit(1)
+    )
+    if edited is not None:
+        raise mai_error("该任务含人工修改，重新导入会丢失这些修改，已跳过。")
+    for model in (TokenSpan, ASRCandidate):
+        session.execute(delete(model).where(model.segment_id.in_(segment_ids)))
+    session.execute(delete(TranscriptSegment).where(TranscriptSegment.job_id == job.id))
+    return store_mai_segments(session, job, attempt)

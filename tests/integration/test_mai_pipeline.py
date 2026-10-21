@@ -12,7 +12,7 @@ from uuid import uuid4
 import pytest
 from classscribe.audio.clips import create_recording_clip
 from classscribe.audio.media import file_sha256
-from classscribe.classroom.online import ProviderStageRunner
+from classscribe.classroom.online import ProviderStageRunner, reimport_mai_job
 from classscribe.classroom.pipeline import ClassroomPipeline
 from classscribe.classroom.production import ProductionStageRunner
 from classscribe.config import load_config
@@ -26,6 +26,7 @@ from classscribe.db.models import (
     JobStatus,
     OnlineRequestAttempt,
     Recording,
+    TokenSpan,
     TranscriptSegment,
 )
 from classscribe.errors import ClassScribeError, ErrorCode
@@ -138,6 +139,65 @@ def test_online_network_has_no_write_transaction_and_import_is_idempotent(
         assert "secret-marker" not in json.dumps(job.options_json)
     runner._request(sessions, identifier)
     assert len(calls) == 1
+
+
+def test_reimport_rebuilds_segments_from_the_saved_response_only(
+    database: Any, tmp_path: Path
+) -> None:
+    sessions, runner, pipeline, identifier = setup_online(database, tmp_path)
+    calls: list[int] = []
+
+    def transcribe(*args: Any, **kwargs: Any) -> tuple[bytes, str]:
+        calls.append(1)
+        return json.dumps(
+            {
+                "phrases": [
+                    {"text": "一。二。", "offsetMilliseconds": 0, "durationMilliseconds": 900}
+                ]
+            }
+        ).encode(), "request-id"
+
+    runner.client.transcribe = transcribe  # type: ignore[method-assign]
+    pipeline.run_until_blocked(identifier)
+    with sessions() as session:
+        response = Path(session.scalars(select(OnlineRequestAttempt.response_path)).one())
+    # The saved response gains word timings that an earlier parser could not split.
+    words = [("一", 0, 300), ("。", 250, 80), ("二", 400, 300), ("。", 700, 250)]
+    response.write_text(
+        json.dumps(
+            {
+                "phrases": [
+                    {
+                        "text": "一。二。",
+                        "offsetMilliseconds": 0,
+                        "durationMilliseconds": 900,
+                        "words": [
+                            {"text": text, "offsetMilliseconds": start, "durationMilliseconds": d}
+                            for text, start, d in words
+                        ],
+                    }
+                ]
+            }
+        )
+    )
+    for _ in range(2):
+        with sessions.begin() as session:
+            assert reimport_mai_job(session, identifier) == 2
+    with sessions() as session:
+        segments = session.scalars(
+            select(TranscriptSegment).order_by(TranscriptSegment.start_sample)
+        ).all()
+        assert [segment.faithful_text for segment in segments] == ["一。", "二。"]
+        assert len(session.scalars(select(TokenSpan)).all()) == 4
+    assert len(calls) == 1
+
+    with sessions.begin() as session:
+        segments[0] = session.get_one(TranscriptSegment, segments[0].id)
+        segments[0].user_text = "校对后"
+    with pytest.raises(ClassScribeError), sessions.begin() as session:
+        reimport_mai_job(session, identifier)
+    with sessions() as session:
+        assert session.get_one(TranscriptSegment, segments[0].id).user_text == "校对后"
 
 
 def test_uncertain_send_is_never_repeated(database: Any, tmp_path: Path) -> None:

@@ -8,6 +8,8 @@ from dataclasses import dataclass
 PARAGRAPH_CHARACTERS = 300
 PARAGRAPH_SENTENCES = 6
 PARAGRAPH_PAUSE_MS = 1200
+# A pause only ends a paragraph that already holds this much text; fillers stay attached.
+PARAGRAPH_MIN_CHARACTERS = 60
 
 _TERMINATORS = frozenset("。！？.!?")
 _CLOSING_MARKS = frozenset("\"'”’」』】）》〉]}")
@@ -116,15 +118,19 @@ class TextSlice:
 
 
 def paragraph_slices(
-    texts: Sequence[str], boundaries: Sequence[bool]
+    texts: Sequence[str], boundaries: Sequence[bool], pauses: Sequence[bool] | None = None
 ) -> tuple[tuple[TextSlice, ...], ...]:
     """Group sentence slices with soft size limits and explicit source boundaries."""
+    pauses = pauses if pauses is not None else [False] * len(texts)
     paragraphs: list[tuple[TextSlice, ...]] = []
     continuations: set[int] = set()
     current: list[TextSlice] = []
     characters = 0
     previous_text = ""
-    for source_index, (text, source_boundary) in enumerate(zip(texts, boundaries, strict=True)):
+    for source_index, (text, explicit_boundary, pause) in enumerate(
+        zip(texts, boundaries, pauses, strict=True)
+    ):
+        source_boundary = explicit_boundary or (pause and characters >= PARAGRAPH_MIN_CHARACTERS)
         for start, end in sentence_spans(text):
             piece = text[start:end]
             length = len(piece.strip())

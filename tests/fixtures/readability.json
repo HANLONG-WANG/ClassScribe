@@ -48,7 +48,15 @@
         { "text": "Two.", "language": "en", "speaker_id": "a", "start_sample": 35184, "end_sample": 51184 },
         { "text": "Three.", "language": "en", "speaker_id": "a", "start_sample": 70384, "end_sample": 86384 }
       ],
-      "groups": [["One.", "Two."], ["Three."]]
+      "groups": [["One.", "Two.", "Three."]]
+    },
+    {
+      "sources": [
+        { "text": "This opening sentence is long enough to stand as a paragraph.", "language": "en", "speaker_id": "a", "start_sample": 0, "end_sample": 16000 },
+        { "text": "Okay.", "language": "en", "speaker_id": "a", "start_sample": 35200, "end_sample": 51200 },
+        { "text": "Next.", "language": "en", "speaker_id": "a", "start_sample": 70400, "end_sample": 86400 }
+      ],
+      "groups": [["This opening sentence is long enough to stand as a paragraph."], ["Okay.", "Next."]]
     },
     {
       "sources": [

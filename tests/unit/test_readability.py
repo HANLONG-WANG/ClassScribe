@@ -24,13 +24,18 @@ def test_paragraph_boundaries_match_the_shared_frontend_examples() -> None:
                 and (
                     source["speaker_id"] != sources[index - 1]["speaker_id"]
                     or source["language"] != sources[index - 1]["language"]
-                    or (source["start_sample"] - sources[index - 1]["end_sample"]) // 16 >= 1200
                 )
             )
             for index, source in enumerate(sources)
         ]
+        pauses = [
+            bool(
+                index and (source["start_sample"] - sources[index - 1]["end_sample"]) // 16 >= 1200
+            )
+            for index, source in enumerate(sources)
+        ]
         texts = [source["text"] for source in sources]
-        groups = paragraph_slices(texts, boundaries)
+        groups = paragraph_slices(texts, boundaries, pauses)
         assert [
             [texts[piece.source_index][piece.start : piece.end] for piece in group]
             for group in groups

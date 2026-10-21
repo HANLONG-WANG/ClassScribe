@@ -12,9 +12,9 @@ import re
 import socket
 import ssl
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
@@ -408,6 +408,65 @@ class MaiPhrase:
     words: tuple[tuple[str, int, int], ...]
 
 
+def repair_word_times(phrase: MaiPhrase) -> list[tuple[str, int, int]]:
+    """Make MAI word times monotonic so timing jitter does not discard a phrase's split."""
+    words: list[tuple[str, int, int]] = []
+    for token, start, end in phrase.words:
+        if phrase.timed:
+            start = min(max(start, phrase.start), phrase.end)
+            end = min(max(end, phrase.start), phrase.end)
+        if words and start < words[-1][2]:
+            previous_token, previous_start, previous_end = words[-1]
+            if start > previous_start:
+                # Overlap: the earlier word ends where the next one starts.
+                words[-1] = (previous_token, previous_start, start)
+            else:
+                # Reported before its predecessor (MAI chunk seams can jump back seconds):
+                # keep the text order and collapse the word onto the predecessor's end.
+                start = previous_end
+        words.append((token, start, max(start, end)))
+    return words
+
+
+BOUNDARY_RESYNC_CHARACTERS = 8
+
+
+def reassign_boundary_words(phrases: list[MaiPhrase]) -> list[MaiPhrase]:
+    """Return words that MAI attached to the previous phrase to the phrase whose text has them."""
+
+    def content(text: str) -> str:
+        return "".join(character for character, _ in lexical_positions(text))
+
+    def joined(words: Sequence[tuple[str, int, int]]) -> str:
+        return content("".join(word[0] for word in words))
+
+    result = list(phrases)
+    for index in range(len(result) - 1):
+        current, following = result[index], result[index + 1]
+        text = content(current.text)
+        words = list(current.words)
+        moved: list[tuple[str, int, int]] = []
+        while words and len(joined(words)) > len(text):
+            moved.insert(0, words.pop())
+        missing = len(text) - len(joined(words))
+        if moved and 0 < missing < len(positions := lexical_positions(moved[0][0])):
+            # One token can straddle the boundary, e.g. "、0.003。0.997".
+            token, start, end = moved[0]
+            split = positions[missing][1]
+            words.append((token[:split], start, end))
+            moved[0] = (token[split:], start, end)
+        prefix, rest, resumed = joined(moved), content(following.text), joined(following.words)
+        if (
+            moved
+            and joined(words) == text
+            and rest.startswith(prefix)
+            and rest[len(prefix) :].startswith(resumed[:BOUNDARY_RESYNC_CHARACTERS])
+        ):
+            result[index] = replace(current, words=tuple(words))
+            result[index + 1] = replace(following, words=(*moved, *following.words))
+    return result
+
+
 def split_timed_phrase(phrase: MaiPhrase) -> tuple[MaiPhrase, ...]:
     """Split original text only at boundaries supported by complete word evidence."""
     positions = lexical_positions(phrase.text)
@@ -429,11 +488,11 @@ def split_timed_phrase(phrase: MaiPhrase) -> tuple[MaiPhrase, ...]:
             ),
         )
 
-    for token, start, end in phrase.words:
+    for token, start, end in repair_word_times(phrase):
         if (
             not token.strip()
             or start < previous_end
-            or start >= end
+            or start > end
             or (phrase.timed and (start < phrase.start or end > phrase.end))
         ):
             return fallback()
@@ -498,6 +557,33 @@ def split_timed_phrase(phrase: MaiPhrase) -> tuple[MaiPhrase, ...]:
     return tuple(groups) if text_start == len(phrase.text) else fallback()
 
 
+SHORT_LOCALE_CHARACTERS = 12
+_KANA = re.compile(r"[぀-ヿ]")
+_CJK = frozenset({"zh", "ja"})
+
+
+def smooth_locales(phrases: list[MaiPhrase]) -> list[MaiPhrase]:
+    """Correct MAI locale guesses that short phrases get wrong inside a monolingual lecture."""
+    kana = [phrase.language in _CJK and bool(_KANA.search(phrase.text)) for phrase in phrases]
+    detected = [
+        "ja" if has_kana else phrase.language
+        for phrase, has_kana in zip(phrases, kana, strict=True)
+    ]
+    result: list[MaiPhrase] = []
+    for index, phrase in enumerate(phrases):
+        locale = detected[index]
+        if (
+            locale in _CJK
+            and not kana[index]
+            and len(lexical_positions(phrase.text)) <= SHORT_LOCALE_CHARACTERS
+        ):
+            neighbours = set(detected[max(0, index - 1) : index] + detected[index + 1 : index + 2])
+            if len(neighbours) == 1 and neighbours <= _CJK:
+                locale = neighbours.pop()
+        result.append(replace(phrase, language=locale))
+    return result
+
+
 def parse_mai_response(payload: bytes, duration: int, language: str) -> tuple[MaiPhrase, ...]:
     try:
         raw = json.loads(payload)
@@ -520,6 +606,7 @@ def parse_mai_response(payload: bytes, duration: int, language: str) -> tuple[Ma
     phrases = raw.get("phrases", [])
     if not isinstance(phrases, list):
         raise mai_error("MAI phrases 格式无效；原始响应已保留。")
+    parsed: list[MaiPhrase] = []
     result: list[MaiPhrase] = []
     for phrase in phrases:
         if not isinstance(phrase, dict) or not isinstance(phrase.get("text"), str):
@@ -542,18 +629,18 @@ def parse_mai_response(payload: bytes, duration: int, language: str) -> tuple[Ma
         if locale not in {"ja", "zh", "en"}:
             locale = language if language in {"ja", "zh", "en"} else "auto_mixed"
         speaker = phrase.get("speaker")
-        result.extend(
-            split_timed_phrase(
-                MaiPhrase(
-                    text,
-                    *(span or (0, 0)),
-                    locale,
-                    str(speaker) if isinstance(speaker, (str, int)) else None,
-                    span is not None,
-                    tuple(tokens),
-                )
+        parsed.append(
+            MaiPhrase(
+                text,
+                *(span or (0, 0)),
+                locale,
+                str(speaker) if isinstance(speaker, (str, int)) else None,
+                span is not None,
+                tuple(tokens),
             )
         )
+    for phrase in smooth_locales(reassign_boundary_words(parsed)):
+        result.extend(split_timed_phrase(phrase))
     if not result:
         combined = raw.get("combinedPhrases", [])
         text = (
