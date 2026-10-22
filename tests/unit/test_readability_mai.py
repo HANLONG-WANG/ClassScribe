@@ -131,7 +131,7 @@ def test_mai_clips_trailing_punctuation_to_the_phrase_end() -> None:
     assert result[-1].end == 8000
 
 
-def test_mai_collapses_words_reported_before_their_predecessor() -> None:
+def test_mai_shares_the_predecessor_span_with_words_reported_before_it() -> None:
     # Chunk seams can report the next sentence seconds before the previous one ends.
     words = [
         ("一", 3000, 100),
@@ -142,8 +142,10 @@ def test_mai_collapses_words_reported_before_their_predecessor() -> None:
     ]
     result = parse_mai_response(_timed("一。二三。", words), 160_000, "ja")
     assert [phrase.text for phrase in result] == ["一。", "二三。"]
-    assert result[1].words[0][1:] == (3180 * 16, 3180 * 16)
-    assert result[1].start == 3180 * 16
+    # Export rejects zero-length tokens, so "二" splits the span of "。" instead.
+    assert result[0].words[-1][1:] == (3100 * 16, 3140 * 16)
+    assert result[1].words[0][1:] == (3140 * 16, 3180 * 16)
+    assert result[1].start == 3140 * 16
 
 
 def test_mai_returns_words_attached_to_the_previous_phrase() -> None:

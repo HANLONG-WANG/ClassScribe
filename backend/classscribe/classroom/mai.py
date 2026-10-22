@@ -425,6 +425,31 @@ def repair_word_times(phrase: MaiPhrase) -> list[tuple[str, int, int]]:
                 # keep the text order and collapse the word onto the predecessor's end.
                 start = previous_end
         words.append((token, start, max(start, end)))
+    return share_collapsed_times(words)
+
+
+def share_collapsed_times(words: list[tuple[str, int, int]]) -> list[tuple[str, int, int]]:
+    """Split a timed neighbour's span evenly with the words repair left without duration."""
+    index = 0
+    while index < len(words):
+        if words[index][1] < words[index][2]:
+            index += 1
+            continue
+        stop = index
+        while stop < len(words) and words[stop][1] >= words[stop][2]:
+            stop += 1
+        # The predecessor's span usually covers the collapsed words: MAI stretches it over the seam.
+        first, last = (index - 1, stop) if index else (index, stop + 1)
+        if last > len(words):
+            break
+        start, end, count = words[first][1], words[last - 1][2], last - first
+        for offset in range(count):
+            words[first + offset] = (
+                words[first + offset][0],
+                start + (end - start) * offset // count,
+                start + (end - start) * (offset + 1) // count,
+            )
+        index = stop
     return words
 
 
@@ -492,7 +517,7 @@ def split_timed_phrase(phrase: MaiPhrase) -> tuple[MaiPhrase, ...]:
         if (
             not token.strip()
             or start < previous_end
-            or start > end
+            or start >= end
             or (phrase.timed and (start < phrase.start or end > phrase.end))
         ):
             return fallback()
