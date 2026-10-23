@@ -29,4 +29,3 @@ azure-mai.env
 
 # Local agent/tool logs
 .playwright-cli/
-.serena/logs/
