@@ -146,8 +146,10 @@ def create_api_router(service: ClassScribeService) -> APIRouter:
 
     @router.get("/recordings/{recording_id}/media")
     def get_recording_media(recording_id: str) -> Response:
-        path, source_name = service.recording_file(recording_id)
-        return FileResponse(path, filename=source_name)
+        path, source_name = service.recording_playback_file(recording_id)
+        return FileResponse(
+            path, media_type="audio/wav", filename=source_name, content_disposition_type="inline"
+        )
 
     @router.post("/recordings/{recording_id}/clips", status_code=status.HTTP_201_CREATED)
     async def clip_recording(

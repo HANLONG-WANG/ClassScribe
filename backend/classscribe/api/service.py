@@ -315,6 +315,20 @@ class ClassScribeService:
             raise ClassScribeError(ErrorCode.PATH_OUTSIDE_ALLOWED_ROOT, "recording file is invalid")
         return path, source_name
 
+    def recording_playback_file(self, recording_id: str) -> tuple[Path, str]:
+        source, source_name = self.recording_file(recording_id)
+        # Browsers cannot play every accepted source container/codec. Keep the
+        # immutable source and cache a canonical PCM WAV for preview and seeking.
+        playback = self.paths.data_path("recordings", recording_id, "playback", "audio_master.wav")
+        if not playback.is_file():
+            FFmpegMediaPipeline().normalize(
+                source,
+                playback,
+                # Preview also serves long recordings imported for clipping.
+                max_duration_seconds=None,
+            )
+        return playback, f"{Path(source_name).stem}.wav"
+
     def create_job(self, value: JobCreate) -> dict[str, Any]:
         if self.pipeline is None and not self.allow_pending_jobs_without_pipeline:
             raise ClassScribeError(

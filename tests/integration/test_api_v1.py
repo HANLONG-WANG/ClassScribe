@@ -2416,3 +2416,67 @@ def test_online_upload_and_job_creation_follow_the_mai_safety_limit(
                     recording_id=prepared_id, provider="azure_mai", language=LanguageMode.JAPANESE
                 )
             )
+
+
+def test_recording_media_serves_cached_pcm_wav_for_streaming_flac(tmp_path: Path) -> None:
+    import subprocess
+    from uuid import uuid4
+
+    encoded = subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=220:sample_rate=44100:duration=0.25",
+            "-c:a",
+            "flac",
+            "-f",
+            "flac",
+            "pipe:1",
+        ],
+        check=True,
+        capture_output=True,
+        timeout=30,
+    ).stdout
+    service, _ = service_fixture(tmp_path)
+    token, csrf = "t" * 43, "c" * 43
+    app = create_app(api_token=token, csrf_token=csrf, service=service)
+    identifier = str(uuid4())
+
+    async def scenario() -> None:
+        uploaded = await request(
+            app,
+            "PUT",
+            f"/api/v1/recordings/{identifier}/upload",
+            headers={
+                **auth(token, csrf, write=True),
+                "Content-Type": "application/octet-stream",
+                "X-ClassScribe-Filename": "streamed.flac",
+            },
+            body=encoded,
+        )
+        assert uploaded.status == 200, uploaded.content
+        url = uploaded.json()["media_url"]
+        media = await request(app, "GET", url, headers=auth(token, csrf))
+        assert media.status == 200, media.content
+        assert media.headers["content-type"] == "audio/wav"
+        with wave.open(BytesIO(media.content)) as audio:
+            assert audio.getsampwidth() == 2
+            assert audio.getframerate() == 16000
+            assert audio.getnframes() == 4000
+        playback, name = service.recording_playback_file(identifier)
+        assert name == "streamed.wav"
+        modified = playback.stat().st_mtime_ns
+        partial = await request(
+            app, "GET", url, headers={**auth(token, csrf), "Range": "bytes=0-43"}
+        )
+        assert partial.status == 206
+        assert partial.content == media.content[:44]
+        assert playback.stat().st_mtime_ns == modified
+        source, _ = service.recording_file(identifier)
+        assert source.read_bytes() == encoded
+
+    asyncio.run(scenario())

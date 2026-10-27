@@ -254,11 +254,13 @@ class FFmpegMediaPipeline:
         *,
         mix_policy: ChannelMixPolicy = ChannelMixPolicy.EQUAL,
         best_channel: int | None = None,
-        max_duration_seconds: int = MAX_DURATION_SECONDS,
+        max_duration_seconds: int | None = MAX_DURATION_SECONDS,
     ) -> AudioMaster:
         canonical = self.validate_source(source)
         metadata = (
-            self.probe(canonical)
+            self.probe(canonical, allow_long=True)
+            if max_duration_seconds is None
+            else self.probe(canonical)
             if max_duration_seconds == MAX_DURATION_SECONDS
             else self.probe(canonical, max_duration_seconds=max_duration_seconds)
         )
