@@ -252,3 +252,34 @@ it("removes a waiting file without interrupting the current import", async () =>
     first.id,
   ]);
 });
+
+it("shows the server's specific upload validation error", async () => {
+  class UploadRequest {
+    upload = {};
+    status = 409;
+    responseText = JSON.stringify({
+      error: { code: "MEDIA_PROBE_FAILED", detail: "duration decoding failed" },
+    });
+    onload?: () => void;
+    onloadend?: () => void;
+    open() {}
+    setRequestHeader() {}
+    send() {
+      this.onload?.();
+      this.onloadend?.();
+    }
+    abort() {}
+  }
+  vi.stubGlobal("XMLHttpRequest", UploadRequest);
+  remote.mockRejectedValue(new Error("not uploaded"));
+  try {
+    addImports([new File(["audio"], "lesson.flac")], {});
+    await waitFor(() => {
+      expect(useBatchImports.getState().items[0]?.error).toBe(
+        "上传或媒体校验失败：duration decoding failed（MEDIA_PROBE_FAILED）",
+      );
+    });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

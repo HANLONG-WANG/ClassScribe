@@ -77,3 +77,40 @@ def test_every_supported_container_probes_and_normalizes(
     with wave.open(str(master.path), "rb") as recording:
         assert recording.getframerate() == SAMPLE_RATE
         assert recording.getnchannels() == 1
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="FFmpeg not installed")
+def test_streaming_flac_without_duration_is_probed_and_still_enforces_limit(tmp_path: Path) -> None:
+    from classscribe.errors import ClassScribeError, ErrorCode
+
+    # A pipe cannot seek back to fill in STREAMINFO's total sample count.
+    encoded = subprocess.run(
+        [
+            "ffmpeg",
+            "-v",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=220:sample_rate=44100:duration=2.25",
+            "-c:a",
+            "flac",
+            "-f",
+            "flac",
+            "pipe:1",
+        ],
+        check=True,
+        capture_output=True,
+        timeout=30,
+    ).stdout
+    source = tmp_path / "streamed.flac"
+    source.write_bytes(encoded)
+    assert int.from_bytes(encoded[18:26], "big") & ((1 << 36) - 1) == 0
+    pipeline = FFmpegMediaPipeline()
+    assert float(pipeline.probe(source).duration_seconds) == pytest.approx(2.25)
+    with pytest.raises(ClassScribeError) as failure:
+        pipeline.probe(source, max_duration_seconds=1)
+    assert failure.value.code == ErrorCode.AUDIO_TOO_LONG
+    assert float(
+        pipeline.probe(source, allow_long=True, max_duration_seconds=1).duration_seconds
+    ) == pytest.approx(2.25)

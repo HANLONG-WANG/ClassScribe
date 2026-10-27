@@ -136,10 +136,12 @@ function upload(item: ImportItem, signal: AbortSignal): Promise<Recording> {
         let message = `上传或媒体校验失败（${String(xhr.status)}），请检查文件后重试`;
         try {
           const payload = JSON.parse(xhr.responseText) as {
-            error?: { code?: string };
+            error?: { code?: string; detail?: string };
           };
           if (payload.error?.code === "AUDIO_TOO_LONG")
             message = `录音超过 ${String(transcriptionMaxMinutes(provider))} 分钟，请勾选试听和裁剪后重新导入，缩短选段再转写。`;
+          else if (payload.error?.detail)
+            message = `上传或媒体校验失败：${payload.error.detail}${payload.error.code ? `（${payload.error.code}）` : ""}`;
         } catch {
           /* Keep the status message when the server did not return JSON. */
         }

@@ -145,8 +145,12 @@ class FFmpegMediaPipeline:
             streams = payload["streams"]
             audio = next(item for item in streams if item.get("codec_type") == "audio")
             format_data = payload["format"]
-            duration_raw = audio.get("duration") or format_data["duration"]
-            duration = Decimal(str(duration_raw))
+            duration_raw = audio.get("duration") or format_data.get("duration")
+            duration = (
+                self._decoded_duration(source, None if allow_long else max_duration_seconds)
+                if duration_raw in (None, "N/A")
+                else Decimal(str(duration_raw))
+            )
             sample_rate = int(audio["sample_rate"])
             channels = int(audio["channels"])
             bit_rate_raw = format_data.get("bit_rate")
@@ -171,6 +175,42 @@ class FFmpegMediaPipeline:
                 ErrorCode.DECODE_LIMIT_EXCEEDED, "invalid audio stream dimensions"
             )
         return MediaMetadata(format_name, codec_name, duration, sample_rate, channels, bit_rate)
+
+    def _decoded_duration(self, source: Path, maximum: int | None) -> Decimal:
+        # Streaming encoders can leave the total sample count unknown. Decode
+        # without creating a PCM file, stopping once the duration limit is exceeded.
+        command = [
+            self.ffmpeg,
+            "-nostdin",
+            "-v",
+            "error",
+            "-xerror",
+            "-i",
+            str(source),
+            "-map",
+            "0:a:0",
+            "-af",
+            "asetpts=N/SR/TB",
+        ]
+        if maximum is not None:
+            command.extend(("-t", str(maximum + 1)))
+        command.extend(("-progress", "pipe:1", "-nostats", "-f", "null", "-"))
+        completed = self._execute(command, ErrorCode.MEDIA_PROBE_FAILED)
+        if completed.returncode:
+            raise ClassScribeError(
+                ErrorCode.MEDIA_PROBE_FAILED,
+                f"duration decoding failed: {completed.stderr.strip()[:500]}",
+            )
+        times = [
+            line.removeprefix("out_time_us=")
+            for line in completed.stdout.splitlines()
+            if line.startswith("out_time_us=")
+        ]
+        if not times or times[-1] == "N/A":
+            raise ClassScribeError(
+                ErrorCode.MEDIA_PROBE_FAILED, "decoded audio duration unavailable"
+            )
+        return Decimal(times[-1]) / 1_000_000
 
     def import_source(self, source: Path, destination_directory: Path) -> ImportedMedia:
         canonical = self.validate_source(source)
