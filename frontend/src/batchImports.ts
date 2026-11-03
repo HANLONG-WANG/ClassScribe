@@ -23,6 +23,8 @@ export interface ImportItem {
   progress: number;
   error?: string | undefined;
   jobId?: string;
+  // FIFO position among waiting items; the list itself shows newest batches first.
+  queueOrder?: number;
 }
 const storageKey = "classscribe-batch-imports-v1";
 // Imports queued before automatic exports and the fast/highest modes were removed.
@@ -163,12 +165,22 @@ function upload(item: ImportItem, signal: AbortSignal): Promise<Recording> {
   });
 }
 let activeImportId: string | null = null;
+let nextQueueOrder = 0;
+
+function nextWaiting(): ImportItem | undefined {
+  let first: ImportItem | undefined;
+  for (const item of useBatchImports.getState().items)
+    if (
+      item.status === "waiting" &&
+      (!first || (item.queueOrder ?? 0) < (first.queueOrder ?? 0))
+    )
+      first = item;
+  return first;
+}
 
 async function drain() {
   for (;;) {
-    const item = useBatchImports
-      .getState()
-      .items.find((entry) => entry.status === "waiting");
+    const item = nextWaiting();
     if (!item) return;
     activeImportId = item.id;
     controller = new AbortController();
@@ -249,13 +261,13 @@ export function submitPreparedImport(
     options: { ...item.options, prepare_only: false },
     ...(clip ? { clip } : {}),
     status: "waiting",
+    queueOrder: nextQueueOrder++,
   });
   start();
 }
 export function addImports(files: File[], options: ApiObject) {
   useBatchImports.setState(({ items }) => ({
     items: [
-      ...items,
       ...files.map((file): ImportItem => ({
         id: crypto.randomUUID(),
         file,
@@ -264,7 +276,9 @@ export function addImports(files: File[], options: ApiObject) {
         options: { ...options },
         status: "waiting",
         progress: 0,
+        queueOrder: nextQueueOrder++,
       })),
+      ...items,
     ],
   }));
   start();
@@ -278,7 +292,12 @@ export function retryImport(id: string, file?: File) {
     update(id, { error: "请选择与原记录同名、同大小的文件" });
     return;
   }
-  update(id, { status: "waiting", file: file ?? item.file, error: undefined });
+  update(id, {
+    status: "waiting",
+    file: file ?? item.file,
+    error: undefined,
+    queueOrder: nextQueueOrder++,
+  });
   start();
 }
 export function stopImports() {

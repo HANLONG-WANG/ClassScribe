@@ -112,6 +112,34 @@ it("submits files sequentially, continues after an error, and reuses the submiss
   );
 });
 
+it("lists newer batches first while uploading in submission order", async () => {
+  const order: string[] = [];
+  let release: (() => void) | undefined;
+  remote.mockImplementation(async (path: string, init?: RequestInit) => {
+    if (path.startsWith("/recordings/")) return { id: path.split("/").at(-1) };
+    const body = JSON.parse(init?.body as string) as { recording_id: string };
+    order.push(body.recording_id);
+    if (order.length === 1)
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    return { job_id: "job" };
+  });
+  addImports([new File(["a"], "a.wav"), new File(["b"], "b.wav")], {});
+  await waitFor(() => {
+    expect(release).toBeDefined();
+  });
+  addImports([new File(["c"], "c.wav")], {});
+  const items = useBatchImports.getState().items;
+  expect(items.map((item) => item.name)).toEqual(["c.wav", "a.wav", "b.wav"]);
+  release?.();
+  await waitFor(() => {
+    expect(order).toHaveLength(3);
+  });
+  const ids = Object.fromEntries(items.map((item) => [item.name, item.id]));
+  expect(order).toEqual([ids["a.wav"], ids["b.wav"], ids["c.wav"]]);
+});
+
 it("removes completed entries missing on the server and allows clearing retained history", async () => {
   useBatchImports.setState({
     items: [
