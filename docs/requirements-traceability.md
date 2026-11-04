@@ -77,7 +77,7 @@ python -m unittest discover -s tests -p 'test_*.py' -v
 | `PRD-PRIN-005` | `one_heavy_worker=true` 和 IBus 优先级成为配置不变量 | config schema/model tests | 阶段 5/11 实际调度与抢占 |
 | `PRD-PRIN-008` | 文档和配置明确阈值仅为 bootstrap | 配置完整解析及架构文档审查 | 阶段 12 本机 gold 校准 |
 
-阶段 1 还新增 `scripts/check_architecture.py`，在 CI 中验证仓库完整结构、所有 worker 的
+阶段 1 还新增 `scripts/check_architecture.py`，目前在本地验证仓库完整结构、所有 worker 的
 六项必需文件、共享协议依赖、协议版本字段，以及 core／桌面进程的禁止导入边界。
 
 ## 阶段 2 已落地证据

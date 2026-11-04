@@ -47,7 +47,7 @@ dependency-light health 不伪装模型推理能力。
 | hotkey portal companion | 通过 XDG Desktop Portal `GlobalShortcuts` 注册 Wayland 快捷键 | 不全局抓键，不加载音频或模型运行时 |
 | Web 前端 | 显示上传、模型选择、进度、波形、候选、可选校对和导出 | 不实现第二套质量、时间轴或模型选择逻辑 |
 
-`scripts/check_architecture.py` 在 CI 中以 AST 和清单检查这些静态边界。运行期权限、
+`scripts/check_architecture.py` 在本地以 AST 和清单检查这些静态边界。运行期权限、
 socket 身份验证和网络隔离在阶段 2、3 加固。
 
 ## 技术栈与依赖所有权
@@ -134,5 +134,5 @@ socket 后选路。安装、profile 应用/回滚和 core shutdown 都经过 sup
 → IBus／dictationd／portal → 模型管理／RPM／完整基准
 ```
 
-并行工作只能建立在已经冻结的上游接口上。CI 的结构检查确保基础目录和边界仍存在；
+并行工作只能建立在已经冻结的上游接口上。本地结构检查确保基础目录和边界仍存在；
 `docs/requirements-traceability.md` 记录每项产品要求的实际验证阶段。

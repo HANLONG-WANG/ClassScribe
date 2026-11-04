@@ -213,7 +213,7 @@
 - [ ] 建立 protocol/schema、protocol/python 和 contract_tests 的空骨架，为后续 MessagePack RPC 保留版本字段。
 - [ ] 写入 docs/architecture.md、timeline.md、model-registry.md、worker-protocol.md、ibus.md、benchmark.md、troubleshooting.md 的首版目录。
 - [ ] 将原蓝图的实现依赖顺序转换为阶段门：协议与时间轴先于数据库、音频、模型、WebUI 和 IBus；并行开发只能在依赖已经冻结后进行。
-- [ ] 为 core、worker、dictationd、IBus engine 定义不允许跨越的依赖规则，并用静态检查或 CI 脚本阻止核心环境导入具体模型库。
+- [ ] 为 core、worker、dictationd、IBus engine 定义不允许跨越的依赖规则，并用本地静态检查脚本阻止核心环境导入具体模型库。
 
 ### 阶段交付物
 
@@ -227,7 +227,7 @@
 - [ ] 90 分钟 sample↔ms 往返测试无累计漂移，所有区间满足 int64 约束。
 - [ ] 核心环境不依赖任何具体 Transformers/NeMo/vLLM/远程模型代码。
 - [ ] 配置示例可以完整解析，XDG 目录只在允许位置创建。
-- [ ] 仓库结构、进程职责和后续依赖顺序已经在 CI 中可验证。
+- [ ] 仓库结构、进程职责和后续依赖顺序已经通过本地检查可验证。
 
 ### 本阶段完整技术规范
 

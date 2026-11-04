@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail CI when the stage-1 repository or dependency boundaries drift."""
+"""Check the stage-1 repository structure and dependency boundaries locally."""
 
 from __future__ import annotations
 

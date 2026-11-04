@@ -32,6 +32,9 @@ ClassScribe **不承诺**任何录音条件下都达到零 CER/WER，也不承�
 项目按 [分阶段开发计划](docs/ClassScribe分阶段开发计划.md) 推进，每个阶段仅在其
 交付物、测试与退出条件全部满足后才记录为完成。
 
+本项目不使用 GitHub Actions 执行 CI。代码检查、测试和构建在本地运行，保留现有
+pre-commit 配置、Python 检查脚本和 `pnpm --dir frontend check` 命令。
+
 ## 当前发布状态
 
 工程实现由 `scripts/validate_release.py` 做 fail-closed 检查。当前源码许可证、真实模型／私有
